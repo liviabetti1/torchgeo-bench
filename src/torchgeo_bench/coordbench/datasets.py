@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
+# Integrate with coordbench (right now, this is my personal repo)
+COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "liviabetti/coordbench_extension") # REMOVE 
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
@@ -53,6 +55,82 @@ PDFM_NON_TASK = frozenset(
     }
 )
 
+SUSTAINBENCH_TASKS = {
+    "asset": "asset_index",
+    "water": "water_index",
+    "sanitation": "sanitation_index",
+    "child_mortality": "under5_mort",
+    "women_edu": "women_edu",
+    "women_bmi": "women_bmi",
+}
+
+CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = crude prevalence %)
+    "phys_health": "PHLTH",
+    "diabetes": "DIABETES",
+    "copd": "COPD",
+    "cancer": "CANCER",
+    "chd": "CHD",
+    "mental_health": "MHLTH",
+    "checkup": "CHECKUP",
+    "sleep_lt7": "SLEEP",
+    "asthma": "CASTHMA",
+    "obesity": "OBESITY",
+    "smoking": "CSMOKING",
+    "high_chol": "HIGHCHOL",
+}
+
+ERA5_ECMWF_LABELS = (
+    'd2m', 
+    't2m', 
+    'stl1', 
+    'stl2', 
+    'stl3', 
+    'stl4', 
+    'swvl1', 
+    'swvl2', 
+    'swvl3', 
+    'swvl4', 
+    'ssrd', 
+    'strd', 
+    'sde', 
+    'snowc', 
+    'u10', 
+    'v10', 
+    'sp', 
+    'tp', 
+    'skt'
+)
+
+ERA5_GCP_LABELS = (
+        '2m_dewpoint_temperature',
+       '2m_temperature',
+        'forecast_albedo', 
+        'lake_bottom_temperature',
+       'lake_ice_depth', 
+       'lake_ice_temperature', 
+       'lake_mix_layer_depth',
+       'lake_mix_layer_temperature', 
+       'lake_shape_factor',
+       'lake_total_layer_temperature', 
+       'leaf_area_index_high_vegetation',
+       'leaf_area_index_low_vegetation', 
+       'skin_reservoir_content',
+       'skin_temperature', 
+       'snow_albedo', 
+       'snow_density', 
+       'snow_depth',
+       'soil_temperature_level_1', 
+       'soil_temperature_level_2',
+       'soil_temperature_level_3', 
+       'soil_temperature_level_4',
+       'surface_pressure', 
+       'temperature_of_snow_layer',
+       'volumetric_soil_water_layer_1', 
+       'volumetric_soil_water_layer_2',
+       'volumetric_soil_water_layer_3', 
+       'volumetric_soil_water_layer_4'
+)
+
 
 @dataclass
 class CoordBenchmark:
@@ -64,7 +142,7 @@ class CoordBenchmark:
         lon: Longitudes, shape ``(N,)``.
         tasks: Mapping of task/column name -> label array, each shape ``(N,)``.
         task_type: ``"regression"`` (R^2) or ``"classification"`` (accuracy).
-        year: Optional per-point year for year-conditioned encoders.
+        posix_timestamp: Optional per-point POSIX timestamp for time-conditioned encoders (Used to be year: Optional per-point year for year-conditioned encoders.)
         test_mask: Optional boolean held-out test mask (official split); when
             ``None`` the probe uses k-fold cross-validation.
     """
@@ -74,7 +152,7 @@ class CoordBenchmark:
     lon: np.ndarray
     tasks: dict[str, np.ndarray] = field(default_factory=dict)
     task_type: str = "regression"
-    year: np.ndarray | None = None
+    posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None
 
 
@@ -85,6 +163,13 @@ def load_config(config: str) -> pd.DataFrame:
     path = hf_hub_download(COORDBENCH_REPO, f"data/{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
+def load_config_extended(config: str) -> pd.DataFrame:
+    """Read one CoordBench config's normalized parquet table from HuggingFace (specifically, the extended repo).
+    Remove this if/when these datasets are integrated with Coordbench."""
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(COORDBENCH_EXTENSION_REPO, f"data/{config}/data.parquet", repo_type="dataset")
+    return pd.read_parquet(path)
 
 def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
     lon_col = next(c for c in ("lon", "longitude", "Lon", "x") if c in df.columns)
@@ -428,12 +513,41 @@ def load_soilgrids() -> list[CoordBenchmark]:
         if p in df.columns
     ]
 
+def load_era5_ecmwf() -> list[CoordBenchmark]:
+    """"""
+    df = load_config_extended("era5_ecmwf")
+    return [
+        CoordBenchmark(
+            name="era5_ecmwf",
+            lat=df["lat"].to_numpy(np.float64),
+            lon=df["lon"].to_numpy(np.float64),
+            tasks={v: df[v].to_numpy(np.float64) for v in ERA5_ECMWF_LABELS if v in df.columns},
+            posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+        )
+    ]
+
+def load_era5_gcp() -> list[CoordBenchmark]:
+    """"""
+    df = load_config_extended("era5_gcp")
+    return [
+        CoordBenchmark(
+            name="era5_gcp",
+            lat=df["lat"].to_numpy(np.float64),
+            lon=df["lon"].to_numpy(np.float64),
+            tasks={v: df[v].to_numpy(np.float64) for v in ERA5_GCP_LABELS if v in df.columns},
+            posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+        )
+    ]
+
+
+
 
 def load_deepmind() -> list[CoordBenchmark]:
     """DeepMind/AlphaEarth geospatial eval suite — one benchmark per eval config.
 
     Classification vs regression is inferred (integer label + few classes ->
-    classification). Carries per-point year from the valid-time-start timestamp.
+    classification). Carries per-point POSIX timestamp (used to be year) from the 
+    valid-time-start timestamp.
     """
     out: list[CoordBenchmark] = []
     for stem in DEEPMIND_EVAL_CONFIGS:
@@ -445,12 +559,15 @@ def load_deepmind() -> list[CoordBenchmark]:
         label = df["label"].to_numpy()
         integral = np.all(np.isfinite(label)) and np.allclose(label, np.round(label))
         is_clf = bool(integral and np.unique(label).size <= 100)
-        # Missing source timestamps produce an all-null column; use year=None, not an all-NaN array.
-        year = None
+        # CoordBench always carries a `timestamp` column, all-null when the source has no
+        # per-point time; keep posix_timestamp None in that case rather than an all-NaN array.
+        # (used to be year)
+        posix_timestamp = None
         if ts_col is not None:
-            yr = pd.to_datetime(df[ts_col], unit="ms").dt.year
-            if yr.notna().any():
-                year = yr.to_numpy()
+            pts = pd.to_datetime(df[ts_col], unit="ms")
+
+            if pts.notna().any():
+                posix_timestamp = pts.to_numpy().astype("datetime64[s]").astype("int64")
         out.append(
             CoordBenchmark(
                 name=f"dm-{stem}",
@@ -458,7 +575,7 @@ def load_deepmind() -> list[CoordBenchmark]:
                 lon=df[lon_col].to_numpy(np.float64),
                 tasks={stem: label.astype(np.int64) if is_clf else label.astype(np.float64)},
                 task_type="classification" if is_clf else "regression",
-                year=year,
+                posix_timestamp=posix_timestamp,
             )
         )
     return out
@@ -479,8 +596,43 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "worldclim": load_worldclim,
     "soilgrids": load_soilgrids,
     "deepmind": load_deepmind,
+    "era5_ecmwf": load_era5_ecmwf,
+    "era5_gcp": load_era5_gcp,
 }
 
+
+# Benchmark names each family emits; lets a selection load only the needed family,
+# and lets callers enumerate the suite without a download.
+FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
+    "pdfm": ("pdfm-conus27",),
+    "air_temp": ("satclip-air-temp",),
+    "california_housing": ("california-housing",),
+    "satclip": (
+        "satclip-country",
+        "satclip-ecoregion",
+        "satclip-biome",
+        "satclip-population",
+        "satclip-elevation",
+    ),
+    "sustainbench": tuple(f"sustainbench-{k}" for k in SUSTAINBENCH_TASKS),
+    "better_together": (
+        "bt-cropharvest",
+        "bt-biomass",
+        "bt-landcover",
+        "bt-bioclim",
+        "bt-population",
+        "bt-distroad",
+    ),
+    "cdc_places": tuple(f"places-{k}" for k in CDC_PLACES_MEASURES),
+    "usavars": tuple(f"mosaiks-{label}" for label in USAVARS_LABELS),
+    "country": ("country",),
+    "ecoregions": ("ecoregions",),
+    "worldclim": ("worldclim-bio1", "worldclim-bio12"),
+    "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
+    "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
+    "era5_ecmwf": ("era5_ecmwf",),
+    "era5_gcp": ("era5_gcp",),
+}
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
