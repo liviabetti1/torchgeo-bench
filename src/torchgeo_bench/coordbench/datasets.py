@@ -172,6 +172,7 @@ class CoordBenchmark:
     lon: np.ndarray
     tasks: dict[str, np.ndarray] = field(default_factory=dict)
     task_type: str = "regression"
+    temporal_resolution: str | None = None
     posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None
 
