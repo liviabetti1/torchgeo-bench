@@ -536,13 +536,14 @@ def load_soilgrids() -> list[CoordBenchmark]:
 
 def load_era5_ecmwf() -> list[CoordBenchmark]:
     """"""
-    df = load_config_extended("era5_ecmwf")
+    df = load_config_extended("era5_ecmwf_2017_daily")
     return [
         CoordBenchmark(
             name="era5_ecmwf",
             lat=df["lat"].to_numpy(np.float64),
             lon=df["lon"].to_numpy(np.float64),
-            tasks={v: df[v].to_numpy(np.float64) for v in ERA5_ECMWF_LABELS if v in df.columns},
+            #tasks={v: df[v].to_numpy(np.float64) for v in ERA5_ECMWF_LABELS if v in df.columns},
+            tasks={v: df[v].to_numpy() for v in ERA5_ECMWF_LABELS if v in df.columns},
             posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
         )
     ]
