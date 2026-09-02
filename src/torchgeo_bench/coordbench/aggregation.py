@@ -118,11 +118,13 @@ def _aggregate_daily_by_period(dataset: CoordBenchmark, method: str) -> CoordBen
     # Timestamps must be aggregated so we can collapse to calendar weeks
     agg_method["timestamp"] = "mean"
 
-    weekly = (
-        df.groupby(["lat", "lon", pd.Grouper(key="timestamp", freq="W")])
-        .agg(agg_method)
-        .reset_index()
+    weekly = df.groupby(["lat", "lon", pd.Grouper(key="timestamp", freq="W")]).agg(
+        agg_method
     )
+    # The Grouper's bin edges land in an index level also named "timestamp",
+    # colliding with the mean-timestamp column produced by agg_method above.
+    weekly.index = weekly.index.set_names("week_start", level="timestamp")
+    weekly = weekly.reset_index()
 
     # Merge consecutive weeks into n-week periods
     n_weeks = int(method.split("_")[0])
@@ -142,6 +144,6 @@ def _aggregate_daily_by_period(dataset: CoordBenchmark, method: str) -> CoordBen
         lon=aggregated["lon"].to_numpy(np.float64),
         tasks={c: aggregated[c].to_numpy() for c in task_cols},
         task_type=dataset.task_type,
-        posix_timestamp=aggregated["timestamp"].astype("int64") // 10**9, # check that this is returning the right scale of timestamp
+        posix_timestamp=aggregated["timestamp"].astype("datetime64[s]").astype("int64").to_numpy(),
         test_mask=None,  # might want to add support for this at some point?
     )

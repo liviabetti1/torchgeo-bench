@@ -221,7 +221,7 @@ def _evaluate_benchmark(
     if not method_kinds:
         return []
 
-    features = encoder.encode(bench.lon, bench.lat, bench.year)
+    features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
     feature_dim = int(features.shape[1])
 
     rows: list[dict] = []

@@ -121,37 +121,6 @@ ERA5_ECMWF_LABELS = (
     'skt'
 )
 
-ERA5_GCP_LABELS = (
-        '2m_dewpoint_temperature',
-       '2m_temperature',
-        'forecast_albedo', 
-        'lake_bottom_temperature',
-       'lake_ice_depth', 
-       'lake_ice_temperature', 
-       'lake_mix_layer_depth',
-       'lake_mix_layer_temperature', 
-       'lake_shape_factor',
-       'lake_total_layer_temperature', 
-       'leaf_area_index_high_vegetation',
-       'leaf_area_index_low_vegetation', 
-       'skin_reservoir_content',
-       'skin_temperature', 
-       'snow_albedo', 
-       'snow_density', 
-       'snow_depth',
-       'soil_temperature_level_1', 
-       'soil_temperature_level_2',
-       'soil_temperature_level_3', 
-       'soil_temperature_level_4',
-       'surface_pressure', 
-       'temperature_of_snow_layer',
-       'volumetric_soil_water_layer_1', 
-       'volumetric_soil_water_layer_2',
-       'volumetric_soil_water_layer_3', 
-       'volumetric_soil_water_layer_4'
-)
-
-
 @dataclass
 class CoordBenchmark:
     """A single coordinate -> label benchmark.
@@ -548,19 +517,6 @@ def load_era5_ecmwf() -> list[CoordBenchmark]:
         )
     ]
 
-def load_era5_gcp() -> list[CoordBenchmark]:
-    """"""
-    df = load_config_extended("era5_gcp")
-    return [
-        CoordBenchmark(
-            name="era5_gcp",
-            lat=df["lat"].to_numpy(np.float64),
-            lon=df["lon"].to_numpy(np.float64),
-            tasks={v: df[v].to_numpy(np.float64) for v in ERA5_GCP_LABELS if v in df.columns},
-            posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
-        )
-    ]
-
 
 
 
@@ -619,7 +575,6 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "soilgrids": load_soilgrids,
     "deepmind": load_deepmind,
     "era5_ecmwf": load_era5_ecmwf,
-    "era5_gcp": load_era5_gcp,
 }
 
 
@@ -653,7 +608,6 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
     "era5_ecmwf": ("era5_ecmwf",),
-    "era5_gcp": ("era5_gcp",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {

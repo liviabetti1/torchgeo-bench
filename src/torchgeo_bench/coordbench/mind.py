@@ -11,6 +11,8 @@ Weights: https://huggingface.co/isaaccorley/MIND
 
 import math
 
+import numpy as np
+import pandas as pd
 import torch
 from torch import Tensor, nn
 
@@ -18,6 +20,14 @@ from torch import Tensor, nn
 _EE_A1, _EE_A2, _EE_A3, _EE_A4 = 1.340264, -0.081106, 0.000893, 0.003796
 _EE_SCALE = 66.50336
 _SQRT3 = math.sqrt(3.0)
+
+
+def posix_to_year(posix_timestamp: np.ndarray) -> np.ndarray:
+    """Convert POSIX timestamps (seconds) to year"""
+    ts = pd.to_datetime(np.asarray(posix_timestamp), unit="s")
+    year_start = pd.DatetimeIndex(ts.year.astype(str) + "-01-01")
+    year_end = pd.DatetimeIndex((ts.year + 1).astype(str) + "-01-01")
+    return ts.year.to_numpy(dtype=np.float64)
 
 
 def equal_earth_projection(latlon: Tensor) -> Tensor:
@@ -90,13 +100,14 @@ class ReSIRENLocationEncoder(nn.Module):
         return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
 
     def forward(
-        self, latlon: Tensor, year: Tensor | None = None, return_features: bool = False
+        self, latlon: Tensor, posix_timestamp: Tensor | None = None, return_features: bool = False
     ) -> Tensor:
         """Encode ``(lat, lon)`` degrees to the pooled trunk (``return_features``) or head output."""
         loc = equal_earth_projection(latlon)
         if self.use_year:
-            if year is None:
-                raise ValueError("year is required when use_year=True")
+            if posix_timestamp is None:
+                raise ValueError("posix_timestamp is required when use_year=True")
+            year = posix_to_year(posix_timestamp)
             loc = torch.cat([loc, self.year_feats(year)], dim=-1)
         h = self.first(loc)
         for blk in self.blocks:

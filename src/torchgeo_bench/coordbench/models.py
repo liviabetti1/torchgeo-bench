@@ -1,6 +1,6 @@
 """Coordinate-only encoders for the CoordBench location-encoder track.
 
-A :class:`LocationEncoder` maps points ``(lon, lat[, year])`` to a fixed-length
+A :class:`LocationEncoder` maps points ``(lon, lat[, posix_timestamp])`` to a fixed-length
 feature vector, one row per point; the probes and cross-validation live downstream.
 Add a model by subclassing :class:`LocationEncoder`, implementing :meth:`_encode`,
 and pointing a Hydra ``model`` config's ``_target_`` at it.
@@ -11,18 +11,19 @@ reference encoders (SatCLIP / GeoCLIP / Climplicit / SINR) are thin wrappers
 over the ``rshf`` package and require the ``coordbench`` extra
 (``pip install -e ".[coordbench]"``).
 """
-
+import os
 import logging
 from abc import ABC, abstractmethod
 
 import numpy as np
+import pandas as pd
 import torch
 
 logger = logging.getLogger(__name__)
 
 
 class LocationEncoder(ABC):
-    """Frozen coordinate encoder: ``(lon, lat[, year]) -> (N, D)`` features.
+    """Frozen coordinate encoder: ``(lon, lat[, posix_timestamp]) -> (N, D)`` features.
 
     Args:
         device: Torch device string for the forward pass.
@@ -37,26 +38,26 @@ class LocationEncoder(ABC):
         self.batch_size = int(batch_size)
 
     @abstractmethod
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         """Encode a single chunk of points; return ``(len(lon), D)`` float32.
 
         Args:
             lon: Longitudes, shape ``(B,)``.
             lat: Latitudes, shape ``(B,)``.
-            year: Optional per-point year, shape ``(B,)`` (``None`` if the
+            posix_timestamp: Optional per-point posix_timestamp, shape ``(B,)`` (``None`` if the
                 encoder is time-invariant).
         """
         raise NotImplementedError
 
     def encode(
-        self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None = None
+        self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None = None
     ) -> np.ndarray:
         """Encode all points, batching internally.
 
         Args:
             lon: Longitudes, shape ``(N,)``.
             lat: Latitudes, shape ``(N,)``.
-            year: Optional per-point year, shape ``(N,)``.
+            posix_timestamp: Optional per-point posix_timestamp, shape ``(N,)``.
 
         Returns:
             Feature matrix of shape ``(N, D)``, dtype float32.
@@ -67,8 +68,8 @@ class LocationEncoder(ABC):
         out: list[np.ndarray] = []
         for start in range(0, n, self.batch_size):
             end = min(start + self.batch_size, n)
-            yr = None if year is None else np.asarray(year)[start:end]
-            out.append(np.asarray(self._encode(lon[start:end], lat[start:end], yr), np.float32))
+            pts = None if posix_timestamp is None else np.asarray(posix_timestamp)[start:end]
+            out.append(np.asarray(self._encode(lon[start:end], lat[start:end], pts), np.float32))
         return np.concatenate(out, axis=0) if out else np.empty((0, 0), np.float32)
 
 
@@ -77,7 +78,7 @@ class SinCosLocationEncoder(LocationEncoder):
 
     name = "sincos"
 
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, _year: np.ndarray | None) -> np.ndarray:
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
         lat_r, lon_r = np.deg2rad(lat), np.deg2rad(lon)
         return np.stack(
             [np.sin(lat_r), np.cos(lat_r), np.sin(lon_r), np.cos(lon_r)], axis=1
@@ -125,14 +126,58 @@ class MINDLocationEncoder(LocationEncoder):
         self.default_year = default_year
 
     @torch.no_grad()
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         latlon = torch.stack([torch.as_tensor(lat), torch.as_tensor(lon)], dim=1).float()
-        yr = None
+        pts = None
         if self.model.use_year:
-            y = self.default_year if year is None else year
-            yr = torch.as_tensor(np.broadcast_to(y, (len(lat),)), dtype=torch.float32)
-            yr = yr.to(self.device)
-        emb = self.model(latlon.to(self.device), yr, return_features=(self.feature == "pooled"))
+            if posix_timestamp is None:
+                default_ts = pd.Timestamp(year=self.default_year, month=1, day=1, tz="UTC").timestamp()
+                posix_timestamp = np.full(len(lat), default_ts)
+            pts = torch.as_tensor(np.broadcast_to(posix_timestamp, (len(lat),)), dtype=torch.float32)
+            pts = pts.to(self.device)
+        emb = self.model(latlon.to(self.device), pts, return_features=(self.feature == "pooled"))
+        return emb.float().cpu().numpy()[:, : self.dim]
+
+
+class GTLocEncoder(LocationEncoder):
+    """GTLoc encoder: concatenated location + time features.
+
+    Args:
+        ckpt_path: Path to the checkpoint file (``.pt``). Falls back to the
+            ``GTLOC_CKPT`` environment variable when not given.
+        dim: Embedding dimension to keep from the concatenated
+            ``[location_features, time_features]`` output. Defaults to the
+            full concatenated width (``2 * embedding_dim``).
+    """
+
+    name = "gtloc"
+
+    def __init__(
+        self,
+        ckpt_path: str | None = None,
+        dim: int | None = None,
+        device: str = "cpu",
+        batch_size: int = 8192,
+    ) -> None:
+        super().__init__(device=device, batch_size=batch_size)
+        from torchgeo_bench.coordbench.gtloc import load_gtloc
+
+        ckpt_path = ckpt_path or os.environ.get("GTLOC_CKPT")
+        if not ckpt_path:
+            raise ValueError(
+                "GTLocEncoder requires a checkpoint: pass ckpt_path=..., set "
+                "model.ckpt_path=... on the CLI, or export GTLOC_CKPT=/path/to/ckpt.pt"
+            )
+        self.model = load_gtloc(ckpt_path, device=self.device)
+        self.dim = int(dim) if dim is not None else 2 * self.model.embedding_dim
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
+        if posix_timestamp is None:
+            raise ValueError("posix_timestamp is required for GTLocEncoder")
+        latlon = torch.stack([torch.as_tensor(lat), torch.as_tensor(lon)], dim=1).float()
+        posix_timestamp = torch.as_tensor(posix_timestamp).to(self.device)
+        emb = self.model(latlon.to(self.device), posix_timestamp)
         return emb.float().cpu().numpy()[:, : self.dim]
 
 
@@ -148,7 +193,7 @@ class _RSHFEncoder(LocationEncoder):
     dtype: torch.dtype = torch.float32
 
     @torch.no_grad()
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, _year: np.ndarray | None) -> np.ndarray:
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
         first, second = (lon, lat) if self.coord_order == "lonlat" else (lat, lon)
         x = torch.stack([torch.as_tensor(first), torch.as_tensor(second)], dim=1).to(
             self.device, self.dtype
@@ -211,7 +256,7 @@ class SINRLocationEncoder(_RSHFEncoder):
         self.model = SINR.from_pretrained(repo, config=conf).to(self.device).eval()
 
     @torch.no_grad()
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, _year: np.ndarray | None) -> np.ndarray:
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
         from rshf.sinr import preprocess_locs
 
         x = torch.stack([torch.as_tensor(lon), torch.as_tensor(lat)], dim=1).float().to(self.device)

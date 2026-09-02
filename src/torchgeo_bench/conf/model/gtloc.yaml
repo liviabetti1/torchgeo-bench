@@ -1,0 +1,4 @@
+_target_: torchgeo_bench.coordbench.models.GTLocEncoder
+ckpt_path: /home/libe2152/projects/gtloc/ckpts/gtloc.pt # EDIT THIS TO LOCAL GTLOC PATH
+name: gtloc
+dim: 1024
