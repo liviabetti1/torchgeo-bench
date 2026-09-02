@@ -184,7 +184,8 @@ def _evaluate_benchmark(
     if not method_kinds:
         return
 
-    features = None
+    features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
+    feature_dim = int(features.shape[1])
 
     for split in _resolve_splits(coord.split):
         test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)
