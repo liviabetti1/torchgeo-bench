@@ -12,6 +12,7 @@ import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
+import time
 
 import numpy as np
 import pandas as pd
@@ -134,9 +135,21 @@ def run_coordbench(cfg: CoordConfig) -> None:
         cfg = cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"device": device})})
     splits = _resolve_splits(cfg.evaluation.split)
 
-    output_path = resolve_output_path(
-        cfg.output.directory, cfg.output.file, "coordbench_results.csv"
-    )
+    coord = cfg.evaluation
+    seed = cfg.runtime.seed
+    folds = coord.folds
+    cell_deg = coord.cell_deg
+    knn_k = coord.knn_k
+    knn_device = coord.knn_device
+    methods = coord.methods
+    temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
+    aggregate_embeddings = coord.temporally_aggregate_embeddings
+    from_polygon = coord.from_polygon
+    spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
+    model_name = preset.name
+    model_target = preset.target
+
+    output_path = cfg.output.file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     encoder = _instantiate_encoder(preset, device)
@@ -146,14 +159,76 @@ def run_coordbench(cfg: CoordConfig) -> None:
     if completed:
         logger.info("Resume mode: %d existing coord results in %s", len(completed), output_path)
 
+    t0 = time.perf_counter()
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
     benchmarks = load_benchmarks(names)
-    logger.info("CoordBench: %d benchmarks selected", len(benchmarks))
+    logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
-    for bench in tqdm(benchmarks, desc="CoordBench"):
-        for row in _evaluate_benchmark(bench, encoder, cfg, preset, completed):
-            append_rows_atomic(output_path, [row])
-            completed.add(tuple(str(row[col]) for col in RESUME_KEY_COLS))
+    t0 = time.perf_counter()
+    if temporal_aggregation_methods:
+        all_benchmarks = _expand_temporal(
+            benchmarks,
+            temporal_aggregation_methods,
+            encoder=encoder if aggregate_embeddings else None,
+        )
+    else:
+        all_benchmarks = [(b, None) for b in benchmarks]
+
+    t1 = time.perf_counter()
+
+    if from_polygon:
+        all_benchmarks = _expand_spatial(
+            all_benchmarks,
+            spatial_aggregation_methods,
+            encoder=encoder
+        )
+    t2 = time.perf_counter()
+
+    logger.info(
+        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
+        len(all_benchmarks),
+        t1 - t0,
+        t2 - t1,
+    )
+
+    if bool(coord.skip_no_timestamp):
+        skipped = [b.name for b, emb in all_benchmarks if b.posix_timestamp is None and emb is None]
+        if skipped:
+            logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
+        all_benchmarks = [(b, emb) for b, emb in all_benchmarks if b.posix_timestamp is not None or emb is not None]
+
+    with Progress() as progress:
+        task_id = progress.add_task("CoordBench", total=len(all_benchmarks))
+        for bench, emb in all_benchmarks:
+            progress.update(task_id, description=f"CoordBench: {bench.name}")
+            bench_t0 = time.perf_counter()
+            rows, encode_s, probe_s = _evaluate_benchmark(
+                bench,
+                encoder,
+                methods=methods,
+                splits=splits,
+                folds=folds,
+                cell_deg=cell_deg,
+                knn_k=knn_k,
+                knn_device=knn_device,
+                seed=seed,
+                device=device,
+                model_name=model_name,
+                model_target=model_target,
+                completed=completed if cfg.output.resume else None,
+                precomputed_features=emb,
+            )
+            if rows:
+                append_rows_atomic(output_path, rows)
+            logger.info(
+                "CoordBench: %-40s total=%.1fs (encode=%.1fs probe=%.1fs) -> %d row(s)",
+                bench.name,
+                time.perf_counter() - bench_t0,
+                encode_s,
+                probe_s,
+                len(rows),
+            )
+            progress.advance(task_id)
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
 

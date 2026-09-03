@@ -4247,7 +4247,12 @@ requires-dist = [
     { name = "terratorch", marker = "extra == 'terratorch'", git = "https://github.com/torchgeo/terratorch.git?rev=main" },
     { name = "timm", specifier = ">=0.9" },
     { name = "torch", specifier = ">=2" },
+<<<<<<< HEAD
     { name = "torchgeo", specifier = ">=0.10,<0.11" },
+=======
+    { name = "torchgeo", specifier = ">=0.10" },
+    { name = "torchgeo-bench", extras = ["cleanlab"], marker = "extra == 'all'" },
+>>>>>>> 044c294 (added t-satclip implementation)
     { name = "torchgeo-bench", extras = ["coordbench"], marker = "extra == 'all'" },
     { name = "torchgeo-bench", extras = ["dev"], marker = "extra == 'all'" },
     { name = "torchgeo-bench", extras = ["docs"], marker = "extra == 'all'" },
