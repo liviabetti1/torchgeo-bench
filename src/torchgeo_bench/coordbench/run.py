@@ -177,6 +177,12 @@ def run_coordbench(cfg: DictConfig) -> None:
     benchmarks = load_benchmarks(coord.names)
     logger.info("CoordBench: %d benchmarks selected", len(benchmarks))
 
+    if bool(coord.get("skip_no_timestamp", False)):
+        skipped = [b.name for b in benchmarks if b.posix_timestamp is None]
+        if skipped:
+            logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
+        benchmarks = [b for b in benchmarks if b.posix_timestamp is not None]
+
     for bench in track(benchmarks, description="CoordBench"):
         rows = _evaluate_benchmark(
             bench,

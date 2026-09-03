@@ -162,12 +162,6 @@ class GTLocEncoder(LocationEncoder):
         super().__init__(device=device, batch_size=batch_size)
         from torchgeo_bench.coordbench.gtloc import load_gtloc
 
-        ckpt_path = ckpt_path or os.environ.get("GTLOC_CKPT")
-        if not ckpt_path:
-            raise ValueError(
-                "GTLocEncoder requires a checkpoint: pass ckpt_path=..., set "
-                "model.ckpt_path=... on the CLI, or export GTLOC_CKPT=/path/to/ckpt.pt"
-            )
         self.model = load_gtloc(ckpt_path, device=self.device)
         self.dim = int(dim) if dim is not None else 2 * self.model.embedding_dim
 
@@ -200,15 +194,19 @@ class _RSHFEncoder(LocationEncoder):
         )
         return self.model(x).float().cpu().numpy()
 
-
 class ClimplicitLocationEncoder(_RSHFEncoder):
-    """Climplicit climate-specialist encoder (CHELSA, ReSIREN) -> 1024-d.
+    """Climplicit climate-specialist encoder (CHELSA, ReSIREN) -> 256-d.
 
+    Conditioned on the per-point month derived from ``posix_timestamp``
+    (rather than the model's time-invariant 1024-d four-season embedding).
     Requires the ``coordbench`` extra (``rshf``).
+
+    Changed from original coordbench implementation!
     """
 
     name = "climplicit"
     coord_order = "lonlat"
+    dim = 256
 
     def __init__(
         self,
@@ -222,6 +220,18 @@ class ClimplicitLocationEncoder(_RSHFEncoder):
         self.model = (
             Climplicit.from_pretrained(repo, config={"return_chelsa": False}).to(self.device).eval()
         )
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
+        if posix_timestamp is None:
+            raise ValueError("posix_timestamp is required for ClimplicitLocationEncoder")
+        lonlat = torch.stack([torch.as_tensor(lon), torch.as_tensor(lat)], dim=1).float()
+
+        ts = pd.to_datetime(np.asarray(posix_timestamp), unit="s")
+        month = torch.as_tensor(ts.month.to_numpy().copy(), dtype=torch.float32)
+
+        emb = self.model(lonlat.to(self.device), month.to(self.device))
+        return emb.float().cpu().numpy()[:, : self.dim]
 
 
 class SINRLocationEncoder(_RSHFEncoder):
@@ -322,3 +332,45 @@ class SatCLIPLocationEncoder(_RSHFEncoder):
         from rshf.satclip import SatClip
 
         self.model = SatClip.from_pretrained(repo).double().to(self.device).eval()
+
+class TemporalSatCLIPEncoder(LocationEncoder):
+    """SpatioTemporal SatCLIP (t-SatCLIP) encoder.
+
+    Loads ``TemporalSatCLIPWrapper`` from the upstream ``temporal-satclip`` checkout
+    via :func:`torchgeo_bench.coordbench.t_satclip.load_t_satclip`.
+
+    Args:
+        ckpt_path: Path to the Lightning checkpoint (``.ckpt``).
+        repo_path: Path to the ``temporal-satclip`` repo root (contains ``satclip/``).
+        model_name: ``"tsatclip/linear"``, ``"tsatclip/doy"`` or ``"tsatclip/toroidal"``.
+        dim: Embedding dimension to keep. Defaults to the model's full output width.
+    """
+
+    name = "t-satclip"
+
+    def __init__(
+        self,
+        ckpt_path: str,
+        repo_path: str,
+        model_name: str = "tsatclip/doy",
+        dim: int | None = None,
+        device: str = "cpu",
+        batch_size: int = 8192,
+    ) -> None:
+        super().__init__(device=device, batch_size=batch_size)
+        from torchgeo_bench.coordbench.t_satclip import load_t_satclip
+
+        self.model = load_t_satclip(
+            ckpt_path, repo_path=repo_path, model_name=model_name, device=self.device
+        )
+        self.dim = int(dim) if dim is not None else self.model.embedding_dim
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
+        if posix_timestamp is None:
+            raise ValueError("posix_timestamp is required for TemporalSatCLIPEncoder")
+        x = torch.stack(
+            [torch.as_tensor(lat), torch.as_tensor(lon), torch.as_tensor(posix_timestamp)], dim=1
+        ).double().to(self.device)
+        emb = self.model(x)
+        return emb.float().cpu().numpy()[:, : self.dim]

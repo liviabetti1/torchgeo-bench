@@ -29,6 +29,7 @@ coord:
   cell_deg: 10.0           # spatial-block grid-cell size in degrees
   knn_k: 5
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
+  skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers
