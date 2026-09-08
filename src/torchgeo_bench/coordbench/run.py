@@ -30,11 +30,14 @@ from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
-    linear_probe_score,
-    spatial_fold_ids,
+    linear_probe_score
 )
+<<<<<<< HEAD
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.results import append_rows_atomic
+=======
+from torchgeo_bench.coordbench.splits import spatial_fold_ids
+>>>>>>> 645e398 (fixed era5 load)
 
 logger = logging.getLogger(__name__)
 
