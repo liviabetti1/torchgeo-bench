@@ -14,10 +14,15 @@ registered in :data:`FAMILY_LOADERS`; :func:`load_benchmarks` expands a selectio
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+
+from torchgeo_bench.coordbench.aggregation import (
+    TEMPORAL_AGGREGATION_METHODS,
+    temporal_aggregation_all,
+)
+from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 
 logger = logging.getLogger(__name__)
 
@@ -121,31 +126,6 @@ ERA5_ECMWF_LABELS = (
     'skt'
 )
 
-@dataclass
-class CoordBenchmark:
-    """A single coordinate -> label benchmark.
-
-    Args:
-        name: Unique benchmark identifier (e.g. ``"sustainbench-asset"``).
-        lat: Latitudes, shape ``(N,)``.
-        lon: Longitudes, shape ``(N,)``.
-        tasks: Mapping of task/column name -> label array, each shape ``(N,)``.
-        task_type: ``"regression"`` (R^2) or ``"classification"`` (accuracy).
-        posix_timestamp: Optional per-point POSIX timestamp for time-conditioned encoders (Used to be year: Optional per-point year for year-conditioned encoders.)
-        test_mask: Optional boolean held-out test mask (official split); when
-            ``None`` the probe uses k-fold cross-validation.
-    """
-
-    name: str
-    lat: np.ndarray
-    lon: np.ndarray
-    tasks: dict[str, np.ndarray] = field(default_factory=dict)
-    task_type: str = "regression"
-    temporal_resolution: str | None = None
-    posix_timestamp: np.ndarray | None = None
-    test_mask: np.ndarray | None = None
-
-
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
     from huggingface_hub import hf_hub_download
@@ -153,13 +133,18 @@ def load_config(config: str) -> pd.DataFrame:
     path = hf_hub_download(COORDBENCH_REPO, f"data/{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
-def load_config_extended(config: str) -> pd.DataFrame:
+def load_config_extended(config: str, columns: list[str] | None = None) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace (specifically, the extended repo).
-    Remove this if/when these datasets are integrated with Coordbench."""
+    Remove this if/when these datasets are integrated with Coordbench.
+
+    Args:
+        config: Config name (subdirectory under ``data/``).
+        columns: If given, only these columns are read from the parquet file.
+    """
     from huggingface_hub import hf_hub_download
 
     path = hf_hub_download(COORDBENCH_EXTENSION_REPO, f"data/{config}/data.parquet", repo_type="dataset")
-    return pd.read_parquet(path)
+    return pd.read_parquet(path, columns=columns)
 
 def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
     lon_col = next(c for c in ("lon", "longitude", "Lon", "x") if c in df.columns)
@@ -505,17 +490,29 @@ def load_soilgrids() -> list[CoordBenchmark]:
 
 def load_era5_ecmwf() -> list[CoordBenchmark]:
     """"""
-    df = load_config_extended("era5_ecmwf_2017_daily")
-    return [
-        CoordBenchmark(
-            name="era5_ecmwf",
-            lat=df["lat"].to_numpy(np.float64),
-            lon=df["lon"].to_numpy(np.float64),
-            #tasks={v: df[v].to_numpy(np.float64) for v in ERA5_ECMWF_LABELS if v in df.columns},
-            tasks={v: df[v].to_numpy() for v in ERA5_ECMWF_LABELS if v in df.columns},
-            posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
-        )
-    ]
+    from huggingface_hub import hf_hub_download
+    import pyarrow.parquet as pq
+
+    path = hf_hub_download(
+        COORDBENCH_EXTENSION_REPO, "data/era5_ecmwf_2017_daily/data.parquet", repo_type="dataset"
+    )
+    schema_cols = set(pq.ParquetFile(path).schema.names)
+    task_cols = [v for v in ERA5_ECMWF_LABELS if v in schema_cols]
+    df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
+
+    daily = CoordBenchmark(
+        name="era5_ecmwf",
+        lat=df["lat"].to_numpy(np.float32),
+        lon=df["lon"].to_numpy(np.float32),
+        tasks={v: df[v].to_numpy(np.float32) for v in task_cols},
+        # kept float64 for posiix since it will lose second-level precision in float32
+        posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+        temporal_resolution="daily",
+    )
+    del df
+    # Full daily resolution is too large for encode()/the probes
+    # only the temporally-aggregated benchmarks are returned
+    return temporal_aggregation_all(daily, TEMPORAL_AGGREGATION_METHODS["daily"])
 
 
 
@@ -607,7 +604,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "worldclim": ("worldclim-bio1", "worldclim-bio12"),
     "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
-    "era5_ecmwf": ("era5_ecmwf",),
+    "era5_ecmwf": tuple(f"era5_ecmwf-{m}" for m in TEMPORAL_AGGREGATION_METHODS["daily"]),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {

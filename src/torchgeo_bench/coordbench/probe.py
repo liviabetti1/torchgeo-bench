@@ -25,33 +25,6 @@ logger = logging.getLogger(__name__)
 RIDGE_ALPHAS = tuple(float(10.0**e) for e in np.arange(-4.0, 6.5, 0.5))
 
 
-def spatial_fold_ids(
-    lat: np.ndarray, lon: np.ndarray, folds: int = 5, cell_deg: float = 10.0, seed: int = 0
-) -> np.ndarray:
-    """Assign each point a fold by its lat/lon grid cell (blockCV-style holdout).
-
-    All points in a ``cell_deg`` block share a fold, so train and test sets are
-    spatially disjoint.
-
-    Args:
-        lat: Latitudes, shape ``(N,)``.
-        lon: Longitudes, shape ``(N,)``.
-        folds: Number of folds.
-        cell_deg: Grid-cell size in degrees.
-        seed: RNG seed for the cell -> fold assignment.
-
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
-    """
-    cell = np.floor(np.asarray(lat) / cell_deg).astype(np.int64) * 100003 + np.floor(
-        np.asarray(lon) / cell_deg
-    ).astype(np.int64)
-    uniq = np.unique(cell)
-    order = np.random.default_rng(seed).permutation(len(uniq))
-    fold_of = {int(c): int(order[i] % folds) for i, c in enumerate(uniq)}
-    return np.array([fold_of[int(c)] for c in cell], dtype=np.int64)
-
-
 def _valid_mask(features: np.ndarray, labels: np.ndarray, task_type: str) -> np.ndarray:
     """Rows with a finite label and no non-finite feature (drops nodata/NaN)."""
     if task_type == "regression":

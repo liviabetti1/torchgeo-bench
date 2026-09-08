@@ -9,7 +9,7 @@ granularities.
 import numpy as np
 import pandas as pd
 
-from torchgeo_bench.coordbench.datasets import CoordBenchmark
+from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 
 # Maps a pandas offset term (as produced by `to_offset(...).freqstr`)
 RESOLUTION_LABELS = {
@@ -71,6 +71,24 @@ def temporal_aggregation(dataset: CoordBenchmark, method: str) -> CoordBenchmark
     Returns:
         A new `CoordBenchmark` with observations aggregated over the requested period.
     """
+    return temporal_aggregation_all(dataset, [method])[0]
+
+
+def temporal_aggregation_all(dataset: CoordBenchmark, methods: list[str]) -> list[CoordBenchmark]:
+    """Aggregate a coordinate benchmark to several coarser temporal resolutions at once.
+
+    The daily -> calendar-week collapse is the expensive step and is identical
+    for every ``n_week`` method, so it's computed once here and reused for each
+    requested ``method`` instead of redone per call (as looping
+    :func:`temporal_aggregation` per method would do).
+
+    Args:
+        dataset: Daily-resolution coordinate benchmark to aggregate.
+        methods: Target aggregation periods, e.g. ``["1_week", "13_week"]``.
+
+    Returns:
+        One new `CoordBenchmark` per requested method, in the same order.
+    """
     if dataset.temporal_resolution is not None:
         assert dataset.temporal_resolution == "daily", (
             "Dataset must have daily temporal resolution for aggregation (right now)."
@@ -79,26 +97,24 @@ def temporal_aggregation(dataset: CoordBenchmark, method: str) -> CoordBenchmark
         assert _check_temporal_resolution(dataset) == "daily", (
             "Dataset must have daily temporal resolution for aggregation (right now)."
         )
+    for method in methods:
+        assert method in TEMPORAL_AGGREGATION_METHODS["daily"], (
+            f"Invalid aggregation method {method!r} for daily resolution."
+        )
 
-    assert method in TEMPORAL_AGGREGATION_METHODS["daily"], (
-        f"Invalid aggregation method {method!r} for daily resolution."
-    )
-
-    return _aggregate_daily_by_period(dataset, method)
+    weekly, agg_method = _collapse_to_weekly(dataset)
+    return [_merge_weeks(dataset, weekly, agg_method, method) for method in methods]
 
 
-def _aggregate_daily_by_period(dataset: CoordBenchmark, method: str) -> CoordBenchmark:
-    """Aggregate a daily-resolution dataset into fixed-length week periods.
+def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:
+    """Collapse a daily-resolution dataset to one row per (location, calendar week).
 
-    Observations are first collapsed to calendar weeks, then consecutive
-    weeks are merged into ``n``-week periods, where ``n`` is parsed from ``method``.
-
-    Args:
-        dataset: Daily-resolution coordinate benchmark to aggregate.
-        method: Aggregation period in the form ``"{n}_week"``.
+    This is the shared, ``method``-independent first step of every ``n_week``
+    aggregation.
 
     Returns:
-        A new `CoordBenchmark` with one row per (location, period).
+        The per-(lat, lon, week_start) table and the column -> aggregator mapping
+        used to build it (reused as-is for the second, per-``method`` merge step).
     """
     task_cols = list(dataset.tasks)
     df = pd.DataFrame({
@@ -124,9 +140,14 @@ def _aggregate_daily_by_period(dataset: CoordBenchmark, method: str) -> CoordBen
     # The Grouper's bin edges land in an index level also named "timestamp",
     # colliding with the mean-timestamp column produced by agg_method above.
     weekly.index = weekly.index.set_names("week_start", level="timestamp")
-    weekly = weekly.reset_index()
+    return weekly.reset_index(), agg_method
 
-    # Merge consecutive weeks into n-week periods
+
+def _merge_weeks(
+    dataset: CoordBenchmark, weekly: pd.DataFrame, agg_method: dict, method: str
+) -> CoordBenchmark:
+    """Merge consecutive calendar weeks into ``n``-week periods, ``n`` parsed from ``method``."""
+    task_cols = list(dataset.tasks)
     n_weeks = int(method.split("_")[0])
     week_start = weekly["timestamp"].min()
     week_number = ((weekly["timestamp"] - week_start).dt.days / 7).round().astype(int)
