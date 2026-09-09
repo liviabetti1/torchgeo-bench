@@ -27,6 +27,7 @@ from torchgeo_bench.coordbench.config import (
     resolve_coord_preset,
 )
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
+from torchgeo_bench.coordbench.embedding_aggregation import summer_embeddings, yearly_embeddings
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
@@ -41,7 +42,7 @@ from torchgeo_bench.coordbench.splits import spatial_fold_ids
 
 logger = logging.getLogger(__name__)
 
-RESUME_KEY_COLS = ("dataset", "task", "method", "model_name", "split")
+RESUME_KEY_COLS = ("dataset", "task", "method", "model_name", "split", "embedding_aggregation")
 
 
 @dataclass
@@ -65,6 +66,7 @@ class CoordResult:
     seed: int
     model_name: str
     model_target: str
+    embedding_aggregation: str  # "none" | "yearly:{year}:{freq}" | "summer:{year}:{freq}"
 
     def to_row(self) -> dict[str, Any]:
         """Convert to a flat dict suitable for CSV/DataFrame export."""
@@ -138,6 +140,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
         cfg = cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"device": device})})
     splits = _resolve_splits(cfg.evaluation.split)
 
+<<<<<<< HEAD
     coord = cfg.evaluation
     seed = cfg.runtime.seed
     folds = coord.folds
@@ -151,6 +154,21 @@ def run_coordbench(cfg: CoordConfig) -> None:
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
     model_target = preset.target
+=======
+    coord = cfg.coord
+    device = str(cfg.device)
+    seed = int(cfg.seed)
+    folds = int(coord.folds)
+    cell_deg = float(coord.cell_deg)
+    knn_k = int(coord.knn_k)
+    knn_device = str(coord.get("knn_device") or "cpu")
+    methods = list(coord.methods)
+    splits = _resolve_splits(str(coord.split))
+    aggregate_embeddings = bool(coord.aggregate_embeddings)
+    aggregate_embeddings_year = int(coord.aggregate_embeddings_year)
+    aggregate_embeddings_freq = str(coord.aggregate_embeddings_freq)
+    aggregate_embeddings_summer = bool(coord.aggregate_embeddings_summer)
+>>>>>>> 511ea8b (added embedding aggregation)
 
     output_path = cfg.output.file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -167,6 +185,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
     benchmarks = load_benchmarks(names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
+<<<<<<< HEAD
     t0 = time.perf_counter()
     if temporal_aggregation_methods:
         all_benchmarks = _expand_temporal(
@@ -196,10 +215,15 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
     if bool(coord.skip_no_timestamp):
         skipped = [b.name for b, emb in all_benchmarks if b.posix_timestamp is None and emb is None]
+=======
+    if bool(coord.get("skip_no_timestamp", False)) and not aggregate_embeddings:
+        skipped = [b.name for b in benchmarks if b.posix_timestamp is None]
+>>>>>>> 511ea8b (added embedding aggregation)
         if skipped:
             logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
         all_benchmarks = [(b, emb) for b, emb in all_benchmarks if b.posix_timestamp is not None or emb is not None]
 
+<<<<<<< HEAD
     with Progress() as progress:
         task_id = progress.add_task("CoordBench", total=len(all_benchmarks))
         for bench, emb in all_benchmarks:
@@ -232,6 +256,30 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 len(rows),
             )
             progress.advance(task_id)
+=======
+    for bench in track(benchmarks, description="CoordBench"):
+        rows = _evaluate_benchmark(
+            bench,
+            encoder,
+            methods=methods,
+            splits=splits,
+            folds=folds,
+            cell_deg=cell_deg,
+            knn_k=knn_k,
+            knn_device=knn_device,
+            seed=seed,
+            device=device,
+            model_name=model_name,
+            model_target=model_target,
+            completed=completed if cfg.resume else None,
+            aggregate_embeddings=aggregate_embeddings,
+            aggregate_embeddings_year=aggregate_embeddings_year,
+            aggregate_embeddings_freq=aggregate_embeddings_freq,
+            aggregate_embeddings_summer=aggregate_embeddings_summer,
+        )
+        if rows:
+            append_rows_atomic(output_path, rows)
+>>>>>>> 511ea8b (added embedding aggregation)
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
 
@@ -248,10 +296,30 @@ def test_sample_count(labels: np.ndarray, task_type: str, test_mask: np.ndarray 
 def _evaluate_benchmark(
     bench: CoordBenchmark,
     encoder: LocationEncoder,
+<<<<<<< HEAD
     cfg: CoordConfig,
     preset: ModelPreset,
     completed: set[tuple[str, ...]],
 ) -> Iterator[dict[str, Any]]:
+=======
+    *,
+    methods: Sequence[str],
+    splits: Sequence[str],
+    folds: int,
+    cell_deg: float,
+    knn_k: int,
+    knn_device: str,
+    seed: int,
+    device: str,
+    model_name: str,
+    model_target: str,
+    completed: set[tuple[str, ...]] | None,
+    aggregate_embeddings: bool,
+    aggregate_embeddings_year: int,
+    aggregate_embeddings_freq: str,
+    aggregate_embeddings_summer: bool = False,
+) -> list[dict]:
+>>>>>>> 511ea8b (added embedding aggregation)
     """Embed one benchmark once and probe every (task, method, split) combination."""
     coord = cfg.evaluation
     seed = cfg.runtime.seed
@@ -262,7 +330,18 @@ def _evaluate_benchmark(
     if not method_kinds:
         return
 
-    features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
+    if aggregate_embeddings:
+        latlon = np.stack([bench.lat, bench.lon], axis=1)
+        agg_fn = summer_embeddings if aggregate_embeddings_summer else yearly_embeddings
+        features = agg_fn(encoder, latlon, aggregate_embeddings_year, freq=aggregate_embeddings_freq)
+        agg_kind = "summer" if aggregate_embeddings_summer else "yearly"
+        embedding_aggregation = f"{agg_kind}:{aggregate_embeddings_year}:{aggregate_embeddings_freq}"
+    else:
+        features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
+        default_date = getattr(encoder, "default_date", None)
+        embedding_aggregation = (
+            f"none:default_date={default_date}" if bench.posix_timestamp is None and default_date else "none"
+        )
     feature_dim = int(features.shape[1])
 
     for split in _resolve_splits(coord.split):
@@ -270,8 +349,13 @@ def _evaluate_benchmark(
 
         for task, labels in bench.tasks.items():
             for method_label, kind in method_kinds:
+<<<<<<< HEAD
                 key = (bench.name, task, method_label, preset.name, split_label)
                 if key in completed:
+=======
+                key = (bench.name, task, method_label, model_name, split_label, embedding_aggregation)
+                if completed is not None and tuple(map(str, key)) in completed:
+>>>>>>> 511ea8b (added embedding aggregation)
                     continue
                 if features is None:
                     features = encoder.encode(bench.lon, bench.lat, bench.year)
@@ -281,6 +365,7 @@ def _evaluate_benchmark(
                         np.asarray(labels),
                         folds=folds,
                         seed=seed,
+<<<<<<< HEAD
                         k=knn_k,
                         device=coord.knn_device,
                         test_mask=test_mask,
@@ -320,5 +405,13 @@ def _evaluate_benchmark(
                     model_target=preset.target,
                 ).to_row()
         # An official test set is evaluated once, even when both CV modes were requested.
+=======
+                        model_name=model_name,
+                        model_target=model_target,
+                        embedding_aggregation=embedding_aggregation,
+                    ).to_row()
+                )
+        # A benchmark with an official split is split-invariant; don't re-run per CV mode.
+>>>>>>> 511ea8b (added embedding aggregation)
         if bench.test_mask is not None:
             break

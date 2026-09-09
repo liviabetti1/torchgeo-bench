@@ -71,7 +71,12 @@ optional-dependencies.all = [
   "torchgeo-bench[terratorch]",
 ]
 optional-dependencies.coordbench = [
+<<<<<<< HEAD
   "rshf>=0.2", # Required by SatCLIP, GeoCLIP, Climplicit, and SINR.
+=======
+  "rshf>=0.2", # pretrained location encoders: SatCLIP/GeoCLIP/Climplicit/SINR
+  "albumentations",
+>>>>>>> 511ea8b (added embedding aggregation)
 ]
 optional-dependencies.dev = [
   "evaluma>=0.3",        # Ranking backend for scripts/regen_leaderboard.py.
