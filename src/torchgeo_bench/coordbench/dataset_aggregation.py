@@ -88,6 +88,7 @@ def temporal_aggregation_all(dataset: CoordBenchmark, methods: list[str]) -> lis
         assert _check_temporal_resolution(dataset) == "daily", (
             "Dataset must have daily temporal resolution for aggregation (right now)."
         )
+
     for method in methods:
         assert method in TEMPORAL_AGGREGATION_METHODS["daily"], (
             f"Invalid aggregation method {method!r} for daily resolution."
@@ -98,7 +99,10 @@ def temporal_aggregation_all(dataset: CoordBenchmark, methods: list[str]) -> lis
 
 
 def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:
-    """Collapse a daily-resolution dataset to one row per (location, calendar week).
+    """Collapse a daily-resolution dataset to one row per (location, week).
+
+    Weeks are simple fixed 7-day bins counted from the dataset's earliest
+    timestamp (day 0-6 -> week 0, day 7-13 -> week 1, ...), not calendar weeks.
 
     Returns:
         The per-(lat, lon, week_start) table and the column -> aggregator mapping
@@ -111,6 +115,10 @@ def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:
         **{c: dataset.tasks[c] for c in task_cols},
     })
 
+    origin = df["timestamp"].min()
+    week_number = (df["timestamp"] - origin).dt.days // 7
+    df["week_start"] = origin + pd.to_timedelta(week_number * 7, unit="D")
+
     if dataset.task_type == "classification":
         # For classification, take the most frequent label in the period (mode)
         agg_method = {c: (lambda s: s.mode().iat[0]) for c in task_cols}
@@ -118,25 +126,23 @@ def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:
         # For regression, take the mean value in the period
         agg_method = {c: "mean" for c in task_cols}
 
-    # Timestamps must be aggregated so we can collapse to calendar weeks
+    # Timestamps must be aggregated so we can collapse to weekly bins
     agg_method["timestamp"] = "mean"
 
-    weekly = df.groupby(["lat", "lon", pd.Grouper(key="timestamp", freq="W")]).agg(
-        agg_method
-    )
+    weekly = df.groupby(["lat", "lon", "week_start"]).agg(agg_method)
 
-    weekly.index = weekly.index.set_names("week_start", level="timestamp")
     return weekly.reset_index(), agg_method
 
 
 def _merge_weeks(
     dataset: CoordBenchmark, weekly: pd.DataFrame, agg_method: dict, method: str
 ) -> CoordBenchmark:
-    """Merge consecutive calendar weeks into ``n``-week periods, ``n`` parsed from ``method``."""
+    """Merge consecutive weeks into ``n``-week periods, ``n`` parsed from ``method``."""
     task_cols = list(dataset.tasks)
     n_weeks = int(method.split("_")[0])
-    week_start = weekly["timestamp"].min()
-    week_number = ((weekly["timestamp"] - week_start).dt.days / 7).round().astype(int)
+    origin = weekly["week_start"].min()
+    week_number = (weekly["week_start"] - origin).dt.days // 7
+
     period = (week_number // n_weeks).rename("period")
 
     aggregated = (
@@ -144,6 +150,11 @@ def _merge_weeks(
         .agg(agg_method)
         .reset_index()
     )
+
+    # Drop the trailing period if it's cut short by the end of the data
+    last_day = pd.to_datetime(dataset.posix_timestamp, unit="s").max()
+    period_end = origin + pd.to_timedelta((aggregated["period"] + 1) * n_weeks * 7 - 1, unit="D")
+    aggregated = aggregated[period_end <= last_day]
 
     return CoordBenchmark(
         name=f"{dataset.name}-{method}",
