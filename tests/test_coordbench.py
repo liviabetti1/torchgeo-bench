@@ -294,8 +294,12 @@ def test_climplicit_encoder_month_conditioning(monkeypatch) -> None:
     assert np.isfinite(out).all()
     assert not np.allclose(out[0], out[1])  # same location, different month -> different embedding
 
-    with pytest.raises(ValueError):
-        enc.encode(lon, lat)  # posix_timestamp is required
+    # No posix_timestamp -> falls back to the encoder's default_date (Jan 1, 2021)
+    # rather than raising, matching the other temporal encoders (mind/gtloc/t_satclip).
+    assert enc.default_date == "2021-01-01"
+    default_out = enc.encode(lon, lat)
+    jan_only = enc.encode(lon, lat, np.array([jan, jan]))
+    assert np.allclose(default_out, jan_only)
 
 
 def test_family_index_matches_loaders() -> None:

@@ -22,6 +22,11 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+def _default_posix_timestamp(year: int, month: int, day: int) -> float:
+    """POSIX timestamp (UTC) for a fallback date used when a benchmark has no timestamps."""
+    return pd.Timestamp(year=year, month=month, day=day, tz="UTC").timestamp()
+
+
 class LocationEncoder(ABC):
     """Frozen coordinate encoder: ``(lon, lat[, posix_timestamp]) -> (N, D)`` features.
 
@@ -99,8 +104,9 @@ class MINDLocationEncoder(LocationEncoder):
         filename: Checkpoint file within the repo (``.safetensors`` or ``.pt``).
         dim: Embedding width to keep (Matryoshka prefix).
         feature: ``"pooled"`` (trunk) or ``"head"`` (projected output).
-        default_year: Year supplied to year-conditioned checkpoints when a
-            benchmark carries no per-point year.
+        default_year, default_month, default_day: Date supplied to
+            year-conditioned checkpoints when a benchmark carries no
+            per-point timestamp.
     """
 
     name = "mind"
@@ -111,7 +117,6 @@ class MINDLocationEncoder(LocationEncoder):
         filename: str = "mind.safetensors",
         dim: int = 64,
         feature: str = "pooled",
-        default_year: int = 2021,
         device: str = "cpu",
         batch_size: int = 8192,
     ) -> None:
@@ -123,19 +128,14 @@ class MINDLocationEncoder(LocationEncoder):
         self.model = load_mind(hf_hub_download(repo, filename), device=self.device)
         self.dim = int(dim)
         self.feature = feature
-        self.default_year = default_year
 
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         latlon = torch.stack([torch.as_tensor(lat), torch.as_tensor(lon)], dim=1).float()
-        pts = None
-        if self.model.use_year:
-            if posix_timestamp is None:
-                default_ts = pd.Timestamp(year=self.default_year, month=1, day=1, tz="UTC").timestamp()
-                posix_timestamp = np.full(len(lat), default_ts)
-            pts = torch.as_tensor(np.broadcast_to(posix_timestamp, (len(lat),)), dtype=torch.float32)
-            pts = pts.to(self.device)
-        emb = self.model(latlon.to(self.device), pts, return_features=(self.feature == "pooled"))
+
+        if posix_timestamp is not None:
+            raise ValueError("Time is not currently supported for MIND")
+        emb = self.model(latlon.to(self.device), None, return_features=(self.feature == "pooled"))
         return emb.float().cpu().numpy()[:, : self.dim]
 
 
@@ -148,6 +148,8 @@ class GTLocEncoder(LocationEncoder):
         dim: Embedding dimension to keep from the concatenated
             ``[location_features, time_features]`` output. Defaults to the
             full concatenated width (``2 * embedding_dim``).
+        default_year, default_month, default_day: Date supplied when a
+            benchmark carries no per-point timestamp (default: Jan 1st, 2021).
     """
 
     name = "gtloc"
@@ -156,6 +158,9 @@ class GTLocEncoder(LocationEncoder):
         self,
         ckpt_path: str | None = None,
         dim: int | None = None,
+        default_year: int = 2021,
+        default_month: int = 1,
+        default_day: int = 1,
         device: str = "cpu",
         batch_size: int = 8192,
     ) -> None:
@@ -164,11 +169,14 @@ class GTLocEncoder(LocationEncoder):
 
         self.model = load_gtloc(ckpt_path, device=self.device)
         self.dim = int(dim) if dim is not None else 2 * self.model.embedding_dim
+        self.default_year, self.default_month, self.default_day = default_year, default_month, default_day
+        self.default_date = f"{default_year:04d}-{default_month:02d}-{default_day:02d}"
 
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         if posix_timestamp is None:
-            raise ValueError("posix_timestamp is required for GTLocEncoder")
+            default_ts = _default_posix_timestamp(self.default_year, self.default_month, self.default_day)
+            posix_timestamp = np.full(len(lat), default_ts)
         latlon = torch.stack([torch.as_tensor(lat), torch.as_tensor(lon)], dim=1).float()
         posix_timestamp = torch.as_tensor(posix_timestamp).to(self.device)
         emb = self.model(latlon.to(self.device), posix_timestamp)
@@ -202,6 +210,11 @@ class ClimplicitLocationEncoder(_RSHFEncoder):
     Requires the ``coordbench`` extra (``rshf``).
 
     Changed from original coordbench implementation!
+
+    Args:
+        repo: HuggingFace repo id holding the weights.
+        default_year, default_month, default_day: Date supplied when a
+            benchmark carries no per-point timestamp (default: Jan 1st, 2021).
     """
 
     name = "climplicit"
@@ -211,6 +224,9 @@ class ClimplicitLocationEncoder(_RSHFEncoder):
     def __init__(
         self,
         repo: str = "Jobedo/climplicit",
+        default_year: int = 2021,
+        default_month: int = 1,
+        default_day: int = 1,
         device: str = "cpu",
         batch_size: int = 8192,
     ) -> None:
@@ -220,11 +236,14 @@ class ClimplicitLocationEncoder(_RSHFEncoder):
         self.model = (
             Climplicit.from_pretrained(repo, config={"return_chelsa": False}).to(self.device).eval()
         )
+        self.default_year, self.default_month, self.default_day = default_year, default_month, default_day
+        self.default_date = f"{default_year:04d}-{default_month:02d}-{default_day:02d}"
 
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         if posix_timestamp is None:
-            raise ValueError("posix_timestamp is required for ClimplicitLocationEncoder")
+            default_ts = _default_posix_timestamp(self.default_year, self.default_month, self.default_day)
+            posix_timestamp = np.full(len(lat), default_ts)
         lonlat = torch.stack([torch.as_tensor(lon), torch.as_tensor(lat)], dim=1).float()
 
         ts = pd.to_datetime(np.asarray(posix_timestamp), unit="s")
@@ -375,9 +394,7 @@ class TemporalSatCLIPEncoder(LocationEncoder):
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         if posix_timestamp is None:
-            default_ts = pd.Timestamp(
-                year=self.default_year, month=self.default_month, day=self.default_day, tz="UTC"
-            ).timestamp()
+            default_ts = _default_posix_timestamp(self.default_year, self.default_month, self.default_day)
             posix_timestamp = np.full(len(lat), default_ts)
         x = torch.stack(
             [torch.as_tensor(lat), torch.as_tensor(lon), torch.as_tensor(posix_timestamp)], dim=1
