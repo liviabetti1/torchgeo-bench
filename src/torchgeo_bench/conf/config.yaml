@@ -30,6 +30,11 @@ coord:
   knn_k: 5
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
   skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)
+  aggregate_embeddings: false   # if true, ignore bench.posix_timestamp and instead encode every point
+                                 # at each timestamp of aggregate_embeddings_year, mean-pooling to one embedding
+  aggregate_embeddings_year: 2021
+  aggregate_embeddings_freq: D  # pandas offset alias for the sampled timestamps, e.g. D (365/yr) | W (52/yr) | MS (12/yr)
+  aggregate_embeddings_summer: false  # if true, aggregate only over June-September instead of the full year
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers

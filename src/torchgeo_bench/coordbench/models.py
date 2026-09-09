@@ -344,6 +344,8 @@ class TemporalSatCLIPEncoder(LocationEncoder):
         repo_path: Path to the ``temporal-satclip`` repo root (contains ``satclip/``).
         model_name: ``"tsatclip/linear"``, ``"tsatclip/doy"`` or ``"tsatclip/toroidal"``.
         dim: Embedding dimension to keep. Defaults to the model's full output width.
+        default_year, default_month, default_day: Date supplied when a
+            benchmark carries no per-point timestamp (default: Aug 1st, 2021).
     """
 
     name = "t-satclip"
@@ -354,6 +356,9 @@ class TemporalSatCLIPEncoder(LocationEncoder):
         repo_path: str,
         model_name: str = "tsatclip/doy",
         dim: int | None = None,
+        default_year: int = 2019,
+        default_month: int = 1,
+        default_day: int = 1,
         device: str = "cpu",
         batch_size: int = 8192,
     ) -> None:
@@ -364,11 +369,16 @@ class TemporalSatCLIPEncoder(LocationEncoder):
             ckpt_path, repo_path=repo_path, model_name=model_name, device=self.device
         )
         self.dim = int(dim) if dim is not None else self.model.embedding_dim
+        self.default_year, self.default_month, self.default_day = default_year, default_month, default_day
+        self.default_date = f"{default_year:04d}-{default_month:02d}-{default_day:02d}"
 
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         if posix_timestamp is None:
-            raise ValueError("posix_timestamp is required for TemporalSatCLIPEncoder")
+            default_ts = pd.Timestamp(
+                year=self.default_year, month=self.default_month, day=self.default_day, tz="UTC"
+            ).timestamp()
+            posix_timestamp = np.full(len(lat), default_ts)
         x = torch.stack(
             [torch.as_tensor(lat), torch.as_tensor(lon), torch.as_tensor(posix_timestamp)], dim=1
         ).double().to(self.device)

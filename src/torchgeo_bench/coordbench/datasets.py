@@ -18,7 +18,7 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
-from torchgeo_bench.coordbench.aggregation import (
+from torchgeo_bench.coordbench.dataset_aggregation import (
     TEMPORAL_AGGREGATION_METHODS,
     temporal_aggregation_all,
 )
@@ -488,7 +488,7 @@ def load_soilgrids() -> list[CoordBenchmark]:
         if p in df.columns
     ]
 
-def load_era5_ecmwf() -> list[CoordBenchmark]:
+def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
     from huggingface_hub import hf_hub_download
     import pyarrow.parquet as pq
@@ -499,6 +499,9 @@ def load_era5_ecmwf() -> list[CoordBenchmark]:
     schema_cols = set(pq.ParquetFile(path).schema.names)
     task_cols = [v for v in ERA5_ECMWF_LABELS if v in schema_cols]
     df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
+    if subsample_locations:
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)  # 10k-location pool
+        df = df.merge(pool, on=["lat", "lon"])
 
     daily = CoordBenchmark(
         name="era5_ecmwf",

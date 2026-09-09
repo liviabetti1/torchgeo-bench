@@ -75,6 +75,7 @@ optional-dependencies.cleanlab = [
 ]
 optional-dependencies.coordbench = [
   "rshf>=0.2", # pretrained location encoders: SatCLIP/GeoCLIP/Climplicit/SINR
+  "albumentations",
 ]
 optional-dependencies.dev = [
   "mdformat>=0.7.22",

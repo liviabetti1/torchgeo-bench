@@ -30,9 +30,9 @@ from torchgeo_bench.coordbench.models import (
 )
 from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
-    linear_probe_score,
-    spatial_fold_ids,
+    linear_probe_score
 )
+from torchgeo_bench.coordbench.splits import spatial_fold_ids
 from torchgeo_bench.coordbench.run import CoordResult, run_coordbench
 
 __all__ = [

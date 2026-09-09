@@ -19,6 +19,7 @@ from rich.progress import track
 
 from torchgeo_bench.config import instantiate
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
+from torchgeo_bench.coordbench.embedding_aggregation import summer_embeddings, yearly_embeddings
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
@@ -28,7 +29,7 @@ from torchgeo_bench.coordbench.splits import spatial_fold_ids
 
 logger = logging.getLogger(__name__)
 
-RESUME_KEY_COLS = ("dataset", "task", "method", "model_name", "split")
+RESUME_KEY_COLS = ("dataset", "task", "method", "model_name", "split", "embedding_aggregation")
 
 
 @dataclass
@@ -52,6 +53,7 @@ class CoordResult:
     seed: int
     model_name: str
     model_target: str
+    embedding_aggregation: str  # "none" | "yearly:{year}:{freq}" | "summer:{year}:{freq}"
 
     def to_row(self) -> dict:
         """Convert to a flat dict suitable for CSV/DataFrame export."""
@@ -162,6 +164,10 @@ def run_coordbench(cfg: DictConfig) -> None:
     knn_device = str(coord.get("knn_device") or "cpu")
     methods = list(coord.methods)
     splits = _resolve_splits(str(coord.split))
+    aggregate_embeddings = bool(coord.aggregate_embeddings)
+    aggregate_embeddings_year = int(coord.aggregate_embeddings_year)
+    aggregate_embeddings_freq = str(coord.aggregate_embeddings_freq)
+    aggregate_embeddings_summer = bool(coord.aggregate_embeddings_summer)
 
     output_path = str(coord.output)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -177,7 +183,7 @@ def run_coordbench(cfg: DictConfig) -> None:
     benchmarks = load_benchmarks(coord.names)
     logger.info("CoordBench: %d benchmarks selected", len(benchmarks))
 
-    if bool(coord.get("skip_no_timestamp", False)):
+    if bool(coord.get("skip_no_timestamp", False)) and not aggregate_embeddings:
         skipped = [b.name for b in benchmarks if b.posix_timestamp is None]
         if skipped:
             logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
@@ -198,6 +204,10 @@ def run_coordbench(cfg: DictConfig) -> None:
             model_name=model_name,
             model_target=model_target,
             completed=completed if cfg.resume else None,
+            aggregate_embeddings=aggregate_embeddings,
+            aggregate_embeddings_year=aggregate_embeddings_year,
+            aggregate_embeddings_freq=aggregate_embeddings_freq,
+            aggregate_embeddings_summer=aggregate_embeddings_summer,
         )
         if rows:
             append_rows_atomic(output_path, rows)
@@ -220,6 +230,10 @@ def _evaluate_benchmark(
     model_name: str,
     model_target: str,
     completed: set[tuple[str, ...]] | None,
+    aggregate_embeddings: bool,
+    aggregate_embeddings_year: int,
+    aggregate_embeddings_freq: str,
+    aggregate_embeddings_summer: bool = False,
 ) -> list[dict]:
     """Embed one benchmark once and probe every (task, method, split) combination."""
     metric_name = "r2" if bench.task_type == "regression" else "accuracy"
@@ -227,7 +241,18 @@ def _evaluate_benchmark(
     if not method_kinds:
         return []
 
-    features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
+    if aggregate_embeddings:
+        latlon = np.stack([bench.lat, bench.lon], axis=1)
+        agg_fn = summer_embeddings if aggregate_embeddings_summer else yearly_embeddings
+        features = agg_fn(encoder, latlon, aggregate_embeddings_year, freq=aggregate_embeddings_freq)
+        agg_kind = "summer" if aggregate_embeddings_summer else "yearly"
+        embedding_aggregation = f"{agg_kind}:{aggregate_embeddings_year}:{aggregate_embeddings_freq}"
+    else:
+        features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
+        default_date = getattr(encoder, "default_date", None)
+        embedding_aggregation = (
+            f"none:default_date={default_date}" if bench.posix_timestamp is None and default_date else "none"
+        )
     feature_dim = int(features.shape[1])
 
     rows: list[dict] = []
@@ -246,7 +271,7 @@ def _evaluate_benchmark(
 
         for task, labels in bench.tasks.items():
             for method_label, kind in method_kinds:
-                key = (bench.name, task, method_label, model_name, split_label)
+                key = (bench.name, task, method_label, model_name, split_label, embedding_aggregation)
                 if completed is not None and tuple(map(str, key)) in completed:
                     continue
                 score, fold_scores = _score_one(
@@ -288,6 +313,7 @@ def _evaluate_benchmark(
                         seed=seed,
                         model_name=model_name,
                         model_target=model_target,
+                        embedding_aggregation=embedding_aggregation,
                     ).to_row()
                 )
         # A benchmark with an official split is split-invariant; don't re-run per CV mode.

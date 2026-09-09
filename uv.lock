@@ -4048,6 +4048,7 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "albumentations" },
     { name = "cleanlab" },
     { name = "imagehash" },
     { name = "linkify-it-py" },
@@ -4078,6 +4079,7 @@ cleanlab = [
     { name = "pillow" },
 ]
 coordbench = [
+    { name = "albumentations" },
     { name = "rshf" },
 ]
 dev = [
@@ -4116,6 +4118,7 @@ viz = [
 
 [package.metadata]
 requires-dist = [
+    { name = "albumentations", marker = "extra == 'coordbench'" },
     { name = "cleanlab", marker = "extra == 'cleanlab'", specifier = ">=2.7" },
     { name = "faissknn", extras = ["cpu"], marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = ">=0.4" },
     { name = "faissknn", extras = ["cuda"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.4" },

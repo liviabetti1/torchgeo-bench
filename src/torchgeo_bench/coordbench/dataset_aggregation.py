@@ -2,8 +2,7 @@
 
 Coordinate benchmarks with daily-resolution timestamps can be aggregated
 into coarser temporal periods (e.g. weekly or multi-week windows) so that
-time-conditioned encoders can be evaluated at different temporal
-granularities.
+encoders can be evaluated at different temporal granularities.
 """
 
 import numpy as np
@@ -11,12 +10,11 @@ import pandas as pd
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 
-# Maps a pandas offset term (as produced by `to_offset(...).freqstr`)
 RESOLUTION_LABELS = {
     "24h": "daily",
 }
 
-# Supported aggregation periods, based on source temporal resolution.
+# Supported aggregation periods
 TEMPORAL_AGGREGATION_METHODS = {
     "daily": ["1_week", "2_week", "4_week", "13_week"],
 }
@@ -26,14 +24,10 @@ def _check_temporal_resolution(dataset: CoordBenchmark) -> str:
     """Infer the temporal resolution of a dataset from its timestamps.
 
     Args:
-        dataset: Coordinate benchmark whose ``posix_timestamp`` field will be inspected.
+        dataset: Coordinate benchmark with ``posix_timestamp``
 
     Returns:
         The resolution label (e.g. ``"daily"``) from ``RESOLUTION_LABELS``.
-
-    Raises:
-        ValueError: If observations are not spaced at a single, consistent
-            interval per location.
     """
     df = pd.DataFrame({
         "lat": dataset.lat,
@@ -41,7 +35,7 @@ def _check_temporal_resolution(dataset: CoordBenchmark) -> str:
         "timestamp": pd.to_datetime(dataset.posix_timestamp, unit="s"),
     })
 
-    # Per-location gap between consecutive observations.
+    # Per-location gap between consecutive observations
     diffs = (
         df.sort_values("timestamp")
         .groupby(["lat", "lon"])["timestamp"]
@@ -77,10 +71,7 @@ def temporal_aggregation(dataset: CoordBenchmark, method: str) -> CoordBenchmark
 def temporal_aggregation_all(dataset: CoordBenchmark, methods: list[str]) -> list[CoordBenchmark]:
     """Aggregate a coordinate benchmark to several coarser temporal resolutions at once.
 
-    The daily -> calendar-week collapse is the expensive step and is identical
-    for every ``n_week`` method, so it's computed once here and reused for each
-    requested ``method`` instead of redone per call (as looping
-    :func:`temporal_aggregation` per method would do).
+    Compute daily -> calendar-week once here and resuse
 
     Args:
         dataset: Daily-resolution coordinate benchmark to aggregate.
@@ -109,12 +100,8 @@ def temporal_aggregation_all(dataset: CoordBenchmark, methods: list[str]) -> lis
 def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:
     """Collapse a daily-resolution dataset to one row per (location, calendar week).
 
-    This is the shared, ``method``-independent first step of every ``n_week``
-    aggregation.
-
     Returns:
         The per-(lat, lon, week_start) table and the column -> aggregator mapping
-        used to build it (reused as-is for the second, per-``method`` merge step).
     """
     task_cols = list(dataset.tasks)
     df = pd.DataFrame({
@@ -137,8 +124,7 @@ def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:
     weekly = df.groupby(["lat", "lon", pd.Grouper(key="timestamp", freq="W")]).agg(
         agg_method
     )
-    # The Grouper's bin edges land in an index level also named "timestamp",
-    # colliding with the mean-timestamp column produced by agg_method above.
+
     weekly.index = weekly.index.set_names("week_start", level="timestamp")
     return weekly.reset_index(), agg_method
 
