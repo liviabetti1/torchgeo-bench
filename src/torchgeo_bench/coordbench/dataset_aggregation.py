@@ -5,6 +5,8 @@ into coarser temporal periods (e.g. weekly or multi-week windows) so that
 encoders can be evaluated at different temporal granularities.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -16,7 +18,7 @@ RESOLUTION_LABELS = {
 
 # Supported aggregation periods
 TEMPORAL_AGGREGATION_METHODS = {
-    "daily": ["1_week", "2_week", "4_week", "13_week"],
+    "daily": ["1_week", "2_week", "4_week", "13_week", "52_week"],
 }
 
 
@@ -96,6 +98,35 @@ def temporal_aggregation_all(dataset: CoordBenchmark, methods: list[str]) -> lis
 
     weekly, agg_method = _collapse_to_weekly(dataset)
     return [_merge_weeks(dataset, weekly, agg_method, method) for method in methods]
+
+
+def load_temporal_aggregation_cache(
+    cache_dir: str, dataset_name: str, methods: list[str], task_cols: list[str]
+) -> list[CoordBenchmark] | None:
+    """Load cached per-method aggregation parquets, or ``None`` if any are missing."""
+    paths = [os.path.join(cache_dir, f"{dataset_name}-{m}.parquet") for m in methods]
+    if not all(os.path.exists(p) for p in paths):
+        return None
+    dfs = [pd.read_parquet(p) for p in paths]
+    return [
+        CoordBenchmark(
+            name=f"{dataset_name}-{m}",
+            lat=df["lat"].to_numpy(np.float32),
+            lon=df["lon"].to_numpy(np.float32),
+            tasks={c: df[c].to_numpy(np.float32) for c in task_cols},
+            posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+        )
+        for m, df in zip(methods, dfs)
+    ]
+
+
+def save_temporal_aggregation_cache(cache_dir: str, aggregated: list[CoordBenchmark]) -> None:
+    """Save aggregated benchmarks as one parquet each, named after ``benchmark.name``."""
+    os.makedirs(cache_dir, exist_ok=True)
+    for b in aggregated:
+        pd.DataFrame({"lat": b.lat, "lon": b.lon, "posix_timestamp": b.posix_timestamp, **b.tasks}).to_parquet(
+            os.path.join(cache_dir, f"{b.name}.parquet")
+        )
 
 
 def _collapse_to_weekly(dataset: CoordBenchmark) -> tuple[pd.DataFrame, dict]:

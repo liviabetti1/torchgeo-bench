@@ -26,8 +26,6 @@ def yearly_embeddings(
     lat, lon = latlon[:, 0], latlon[:, 1]
     ts = year_posix_timestamps(year, freq, months)
 
-    # loop one timestamp at a time (rather than tiling everything at once) so peak
-    # memory is O(n_locations, D) instead of O(n_locations * n_timestamps, D)
     total = None
     for t in track(ts, description="yearly_embeddings"):
         emb = encoder.encode(lon, lat, np.full(len(lat), t))
