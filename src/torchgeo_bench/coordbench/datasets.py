@@ -20,6 +20,8 @@ import pandas as pd
 
 from torchgeo_bench.coordbench.dataset_aggregation import (
     TEMPORAL_AGGREGATION_METHODS,
+    load_temporal_aggregation_cache,
+    save_temporal_aggregation_cache,
     temporal_aggregation_all,
 )
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
@@ -498,6 +500,14 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     )
     schema_cols = set(pq.ParquetFile(path).schema.names)
     task_cols = [v for v in ERA5_ECMWF_LABELS if v in schema_cols]
+    methods = TEMPORAL_AGGREGATION_METHODS["daily"]
+
+    # Temporal aggregation is slow, so cache the aggregated tables (in HF cache)
+    cache_dir = os.path.join(os.path.dirname(path), f"temporal_aggregation_subsample{subsample_locations}")
+    cached = load_temporal_aggregation_cache(cache_dir, "era5_ecmwf", methods, task_cols)
+    if cached is not None:
+        return cached
+
     df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
     if subsample_locations:
         pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)  # 10k-location pool
@@ -513,9 +523,10 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
         temporal_resolution="daily",
     )
     del df
-    # Full daily resolution is too large for encode()/the probes
-    # only the temporally-aggregated benchmarks are returned
-    return temporal_aggregation_all(daily, TEMPORAL_AGGREGATION_METHODS["daily"])
+    
+    aggregated = temporal_aggregation_all(daily, methods)
+    save_temporal_aggregation_cache(cache_dir, aggregated)
+    return aggregated
 
 
 
