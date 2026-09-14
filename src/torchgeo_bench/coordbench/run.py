@@ -9,15 +9,25 @@ to the resolved output path via the shared atomic writer, with resume support.
 
 import logging
 import os
+<<<<<<< HEAD
 from collections.abc import Iterator, Sequence
+=======
+import time
+from collections.abc import Sequence
+>>>>>>> 88edec7 (reorganized temporal aggregation)
 from dataclasses import dataclass
 from typing import Any
 import time
 
 import numpy as np
 import pandas as pd
+<<<<<<< HEAD
 import torch
 from tqdm.auto import tqdm
+=======
+from omegaconf import DictConfig, OmegaConf
+from rich.progress import Progress
+>>>>>>> 88edec7 (reorganized temporal aggregation)
 
 from torchgeo_bench.config.presets import ModelPreset, build_model
 from torchgeo_bench.config.schema import resolve_output_path
@@ -27,7 +37,7 @@ from torchgeo_bench.coordbench.config import (
     resolve_coord_preset,
 )
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
-from torchgeo_bench.coordbench.embedding_aggregation import summer_embeddings, yearly_embeddings
+from torchgeo_bench.coordbench.temporal_aggregation import TEMPORAL_AGGREGATION_METHODS, temporal_aggregation
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
@@ -131,7 +141,30 @@ def _evaluation_split(
     return None, None, "random"
 
 
+<<<<<<< HEAD
 def run_coordbench(cfg: CoordConfig) -> None:
+=======
+def _expand_temporal(
+    benchmarks: Sequence[CoordBenchmark],
+    methods: Sequence[str],
+    *,
+    encoder: LocationEncoder | None = None,
+) -> list[tuple[CoordBenchmark, np.ndarray | None]]:
+    """Replace each benchmark with one variant per temporal method applicable to its resolution.
+    """
+    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+    for bench in benchmarks:
+        resolution = bench.temporal_resolution or "none"
+        applicable_methods = [m for m in methods if m in TEMPORAL_AGGREGATION_METHODS.get(resolution, [])]
+        for method in applicable_methods:
+            windowed, emb = temporal_aggregation(bench, method, encoder=encoder)
+            windowed.name = f"{bench.name}-{method}"
+            expanded.append((windowed, emb))
+    return expanded
+
+
+def run_coordbench(cfg: DictConfig) -> None:
+>>>>>>> 88edec7 (reorganized temporal aggregation)
     """Run the CoordBench location-encoder benchmark for the configured model."""
     preset = resolve_coord_preset(cfg)
     device = str(resolve_device(cfg.runtime.device))
@@ -164,11 +197,15 @@ def run_coordbench(cfg: CoordConfig) -> None:
     knn_device = str(coord.get("knn_device") or "cpu")
     methods = list(coord.methods)
     splits = _resolve_splits(str(coord.split))
+    temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
     aggregate_embeddings = bool(coord.aggregate_embeddings)
+<<<<<<< HEAD
     aggregate_embeddings_year = int(coord.aggregate_embeddings_year)
     aggregate_embeddings_freq = str(coord.aggregate_embeddings_freq)
     aggregate_embeddings_summer = bool(coord.aggregate_embeddings_summer)
 >>>>>>> 511ea8b (added embedding aggregation)
+=======
+>>>>>>> 88edec7 (reorganized temporal aggregation)
 
     output_path = cfg.output.file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -181,11 +218,17 @@ def run_coordbench(cfg: CoordConfig) -> None:
         logger.info("Resume mode: %d existing coord results in %s", len(completed), output_path)
 
     t0 = time.perf_counter()
+<<<<<<< HEAD
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
     benchmarks = load_benchmarks(names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
 <<<<<<< HEAD
+=======
+    benchmarks = load_benchmarks(coord.names)
+    logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
+
+>>>>>>> 88edec7 (reorganized temporal aggregation)
     t0 = time.perf_counter()
     if temporal_aggregation_methods:
         all_benchmarks = _expand_temporal(
@@ -195,6 +238,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
         )
     else:
         all_benchmarks = [(b, None) for b in benchmarks]
+<<<<<<< HEAD
 
     t1 = time.perf_counter()
 
@@ -211,19 +255,31 @@ def run_coordbench(cfg: CoordConfig) -> None:
         len(all_benchmarks),
         t1 - t0,
         t2 - t1,
+=======
+    logger.info(
+        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs)",
+        len(all_benchmarks),
+        time.perf_counter() - t0,
+>>>>>>> 88edec7 (reorganized temporal aggregation)
     )
 
     if bool(coord.skip_no_timestamp):
         skipped = [b.name for b, emb in all_benchmarks if b.posix_timestamp is None and emb is None]
+<<<<<<< HEAD
 =======
     if bool(coord.get("skip_no_timestamp", False)) and not aggregate_embeddings:
         skipped = [b.name for b in benchmarks if b.posix_timestamp is None]
 >>>>>>> 511ea8b (added embedding aggregation)
+=======
+>>>>>>> 88edec7 (reorganized temporal aggregation)
         if skipped:
             logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
         all_benchmarks = [(b, emb) for b, emb in all_benchmarks if b.posix_timestamp is not None or emb is not None]
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 88edec7 (reorganized temporal aggregation)
     with Progress() as progress:
         task_id = progress.add_task("CoordBench", total=len(all_benchmarks))
         for bench, emb in all_benchmarks:
@@ -242,7 +298,11 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 device=device,
                 model_name=model_name,
                 model_target=model_target,
+<<<<<<< HEAD
                 completed=completed if cfg.output.resume else None,
+=======
+                completed=completed if cfg.resume else None,
+>>>>>>> 88edec7 (reorganized temporal aggregation)
                 precomputed_features=emb,
             )
             if rows:
@@ -256,6 +316,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 len(rows),
             )
             progress.advance(task_id)
+<<<<<<< HEAD
 =======
     for bench in track(benchmarks, description="CoordBench"):
         rows = _evaluate_benchmark(
@@ -280,6 +341,8 @@ def run_coordbench(cfg: CoordConfig) -> None:
         if rows:
             append_rows_atomic(output_path, rows)
 >>>>>>> 511ea8b (added embedding aggregation)
+=======
+>>>>>>> 88edec7 (reorganized temporal aggregation)
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
 
@@ -314,6 +377,7 @@ def _evaluate_benchmark(
     model_name: str,
     model_target: str,
     completed: set[tuple[str, ...]] | None,
+<<<<<<< HEAD
     aggregate_embeddings: bool,
     aggregate_embeddings_year: int,
     aggregate_embeddings_freq: str,
@@ -325,27 +389,54 @@ def _evaluate_benchmark(
     seed = cfg.runtime.seed
     folds = coord.folds
     knn_k = coord.knn_k
+=======
+    precomputed_features: np.ndarray | None = None,
+) -> tuple[list[dict], float, float]:
+    """Embed one benchmark once and probe every (task, method, split) combination.
+
+    Returns ``(rows, encode_seconds, probe_seconds)`` so the caller can log where
+    time went for this benchmark.
+    """
+>>>>>>> 88edec7 (reorganized temporal aggregation)
     metric_name = "r2" if bench.task_type == "regression" else "accuracy"
     method_kinds = _methods_for(bench.task_type, coord.methods, knn_k)
     if not method_kinds:
+<<<<<<< HEAD
         return
+=======
+        return [], 0.0, 0.0
+>>>>>>> 88edec7 (reorganized temporal aggregation)
 
-    if aggregate_embeddings:
-        latlon = np.stack([bench.lat, bench.lon], axis=1)
-        agg_fn = summer_embeddings if aggregate_embeddings_summer else yearly_embeddings
-        features = agg_fn(encoder, latlon, aggregate_embeddings_year, freq=aggregate_embeddings_freq)
-        agg_kind = "summer" if aggregate_embeddings_summer else "yearly"
-        embedding_aggregation = f"{agg_kind}:{aggregate_embeddings_year}:{aggregate_embeddings_freq}"
+    t0 = time.perf_counter()
+    if precomputed_features is not None:
+        features = precomputed_features
+        embedding_aggregation = "embedding_mean"
     else:
         features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
-        default_date = getattr(encoder, "default_date", None)
-        embedding_aggregation = (
-            f"none:default_date={default_date}" if bench.posix_timestamp is None and default_date else "none"
-        )
+        embedding_aggregation = ""
+    encode_s = time.perf_counter() - t0
+
     feature_dim = int(features.shape[1])
 
+<<<<<<< HEAD
     for split in _resolve_splits(coord.split):
         test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)
+=======
+    probe_s = 0.0
+    rows: list[dict] = []
+    for split in splits:
+        # Official held-out split wins when present; else the requested CV mode.
+        if bench.test_mask is not None:
+            test_mask, fold_assign, split_label = bench.test_mask, None, "official"
+        elif split == "spatial":
+            test_mask, fold_assign, split_label = (
+                None,
+                spatial_fold_ids(bench.lat, bench.lon, folds, cell_deg, seed),
+                "spatial",
+            )
+        else:
+            test_mask, fold_assign, split_label = None, None, "random"
+>>>>>>> 88edec7 (reorganized temporal aggregation)
 
         for task, labels in bench.tasks.items():
             for method_label, kind in method_kinds:
@@ -357,6 +448,7 @@ def _evaluate_benchmark(
                 if completed is not None and tuple(map(str, key)) in completed:
 >>>>>>> 511ea8b (added embedding aggregation)
                     continue
+<<<<<<< HEAD
                 if features is None:
                     features = encoder.encode(bench.lon, bench.lat, bench.year)
                 if kind == "knn":
@@ -364,6 +456,46 @@ def _evaluate_benchmark(
                         features,
                         np.asarray(labels),
                         folds=folds,
+=======
+                probe_t0 = time.perf_counter()
+                score, fold_scores = _score_one(
+                    kind,
+                    features,
+                    np.asarray(labels),
+                    bench.task_type,
+                    folds=folds,
+                    seed=seed,
+                    device=device,
+                    knn_device=knn_device,
+                    knn_k=knn_k,
+                    test_mask=test_mask,
+                    fold_assign=fold_assign,
+                )
+                probe_s += time.perf_counter() - probe_t0
+                std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
+                if test_mask is not None:
+                    n_test = int(np.asarray(test_mask, dtype=bool).sum())
+                elif bench.task_type == "regression":
+                    n_test = int(np.isfinite(np.asarray(labels, dtype=np.float64)).sum())
+                else:
+                    n_test = int(len(labels))
+                rows.append(
+                    CoordResult(
+                        dataset=bench.name,
+                        task=task,
+                        task_type=bench.task_type,
+                        method=method_label,
+                        split=split_label,
+                        metric_name=metric_name,
+                        metric_value=score,
+                        ci_lower=score - std,
+                        ci_upper=score + std,
+                        n_folds=1 if split_label == "official" else folds,
+                        cell_deg=cell_deg,
+                        feature_dim=feature_dim,
+                        n_samples=len(labels),
+                        n_test=n_test,
+>>>>>>> 88edec7 (reorganized temporal aggregation)
                         seed=seed,
 <<<<<<< HEAD
                         k=knn_k,
@@ -415,3 +547,7 @@ def _evaluate_benchmark(
 >>>>>>> 511ea8b (added embedding aggregation)
         if bench.test_mask is not None:
             break
+<<<<<<< HEAD
+=======
+    return rows, encode_s, probe_s
+>>>>>>> 88edec7 (reorganized temporal aggregation)

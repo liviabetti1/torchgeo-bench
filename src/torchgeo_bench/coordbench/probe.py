@@ -104,6 +104,30 @@ def ridge_scores(
     return [float((pred.argmax(1) == class_indices).float().mean()) for pred in predictions]
 
 
+def _ridge_solve_score(
+    gram: torch.Tensor,
+    xty: torch.Tensor,
+    x_te: torch.Tensor,
+    targets: torch.Tensor,
+    class_idx: torch.Tensor | None,
+    test_idx: torch.Tensor,
+    alpha: float,
+    task_type: str,
+    eye: torch.Tensor,
+) -> float:
+    """Solve + score one alpha given a fold's precomputed Gram matrix (cheap: O(D^3)).
+    Added implementation by Livia -- needs checking, but to speed up computation"""
+    weight = torch.linalg.solve(gram + alpha * eye, xty)
+    pred = x_te @ weight
+    if task_type == "regression":
+        y_te = targets[test_idx]
+        ss_res = ((y_te - pred) ** 2).sum()
+        ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
+        return float(1.0 - ss_res / ss_tot)
+    assert class_idx is not None
+    return float((pred.argmax(1) == class_idx[test_idx]).float().mean())
+
+
 def _cv_alpha_scores(
     data: RidgeData,
     fold_ids: list[torch.Tensor],
@@ -111,7 +135,12 @@ def _cv_alpha_scores(
     *,
     standardize: bool,
 ) -> tuple[float, list[float]]:
-    """Pick the alpha with the best mean CV score; return it plus its per-fold scores."""
+    """Pick the alpha with the best mean CV score; return it plus its per-fold scores.
+
+    The O(N*D^2) Gram matrix (``x_tr.T @ x_tr``) doesn't depend on alpha, so it's
+    built once per fold and reused across the whole alpha grid instead of being
+    recomputed per (fold, alpha) pair — the dominant cost otherwise.
+    """
     nf = len(fold_ids)
     scores_by_alpha: list[list[float]] = [[] for _ in alphas]
     for f, test_idx in enumerate(fold_ids):

@@ -30,11 +30,14 @@ coord:
   knn_k: 5
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
   skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)
-  aggregate_embeddings: false   # if true, ignore bench.posix_timestamp and instead encode every point
-                                 # at each timestamp of aggregate_embeddings_year, mean-pooling to one embedding
-  aggregate_embeddings_year: 2021
-  aggregate_embeddings_freq: D  # pandas offset alias for the sampled timestamps, e.g. D (365/yr) | W (52/yr) | MS (12/yr)
-  aggregate_embeddings_summer: false  # if true, aggregate only over June-September instead of the full year
+  temporal_aggregation_methods: []  # replace each benchmark with one variant per applicable method (see
+                                     # TEMPORAL_AGGREGATION_METHODS in temporal_aggregation.py):
+                                     #   daily-resolution benchmarks (e.g. era5_ecmwf): 1_week, 2_week, 4_week,
+                                     #     13_week, 52_week (windowed label mean/mode + timestamp)
+                                     #   no-timestamp benchmarks (e.g. elevation): annual, summer,
+                                     #     default_date_winter, default_date_summer, concat_four_seasons
+                                     #     (labels unchanged; only the embedding varies by synthetic date)
+  aggregate_embeddings: true
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers
