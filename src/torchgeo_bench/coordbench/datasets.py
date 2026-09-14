@@ -18,12 +18,6 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
-from torchgeo_bench.coordbench.dataset_aggregation import (
-    TEMPORAL_AGGREGATION_METHODS,
-    load_temporal_aggregation_cache,
-    save_temporal_aggregation_cache,
-    temporal_aggregation_all,
-)
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 
 logger = logging.getLogger(__name__)
@@ -500,17 +494,10 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     )
     schema_cols = set(pq.ParquetFile(path).schema.names)
     task_cols = [v for v in ERA5_ECMWF_LABELS if v in schema_cols]
-    methods = TEMPORAL_AGGREGATION_METHODS["daily"]
-
-    # Temporal aggregation is slow, so cache the aggregated tables (in HF cache)
-    cache_dir = os.path.join(os.path.dirname(path), f"temporal_aggregation_subsample{subsample_locations}")
-    cached = load_temporal_aggregation_cache(cache_dir, "era5_ecmwf", methods, task_cols)
-    if cached is not None:
-        return cached
 
     df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
     if subsample_locations:
-        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)  # 10k-location pool
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
         df = df.merge(pool, on=["lat", "lon"])
 
     daily = CoordBenchmark(
@@ -518,15 +505,12 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
         lat=df["lat"].to_numpy(np.float32),
         lon=df["lon"].to_numpy(np.float32),
         tasks={v: df[v].to_numpy(np.float32) for v in task_cols},
-        # kept float64 for posiix since it will lose second-level precision in float32
+        # kept float64 for posix since it will lose second-level precision in float32
         posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
         temporal_resolution="daily",
+        year=2017
     )
-    del df
-    
-    aggregated = temporal_aggregation_all(daily, methods)
-    save_temporal_aggregation_cache(cache_dir, aggregated)
-    return aggregated
+    return [daily]
 
 
 
@@ -618,7 +602,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "worldclim": ("worldclim-bio1", "worldclim-bio12"),
     "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
-    "era5_ecmwf": tuple(f"era5_ecmwf-{m}" for m in TEMPORAL_AGGREGATION_METHODS["daily"]),
+    "era5_ecmwf": ("era5_ecmwf",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {

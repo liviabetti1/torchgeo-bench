@@ -77,6 +77,30 @@ def _ridge_eval(
     return float((pred.argmax(1) == class_idx[test_idx]).float().mean())
 
 
+def _ridge_solve_score(
+    gram: torch.Tensor,
+    xty: torch.Tensor,
+    x_te: torch.Tensor,
+    targets: torch.Tensor,
+    class_idx: torch.Tensor | None,
+    test_idx: torch.Tensor,
+    alpha: float,
+    task_type: str,
+    eye: torch.Tensor,
+) -> float:
+    """Solve + score one alpha given a fold's precomputed Gram matrix (cheap: O(D^3)).
+    Added implementation by Livia -- needs checking, but to speed up computation"""
+    weight = torch.linalg.solve(gram + alpha * eye, xty)
+    pred = x_te @ weight
+    if task_type == "regression":
+        y_te = targets[test_idx]
+        ss_res = ((y_te - pred) ** 2).sum()
+        ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
+        return float(1.0 - ss_res / ss_tot)
+    assert class_idx is not None
+    return float((pred.argmax(1) == class_idx[test_idx]).float().mean())
+
+
 def _cv_alpha_scores(
     feats: torch.Tensor,
     targets: torch.Tensor,
@@ -87,23 +111,33 @@ def _cv_alpha_scores(
     dev: torch.device,
     standardize: bool,
 ) -> tuple[float, list[float]]:
-    """Pick the alpha with the best mean CV score; return it plus its per-fold scores."""
+    """Pick the alpha with the best mean CV score; return it plus its per-fold scores.
+
+    The O(N*D^2) Gram matrix (``x_tr.T @ x_tr``) doesn't depend on alpha, so it's
+    built once per fold and reused across the whole alpha grid instead of being
+    recomputed per (fold, alpha) pair — the dominant cost otherwise.
+    """
     nf = len(fold_ids)
+    prepped = []
+    for f in range(nf):
+        train_idx = torch.cat([fold_ids[j] for j in range(nf) if j != f])
+        test_idx = fold_ids[f]
+        x_tr, x_te = feats[train_idx], feats[test_idx]
+        if standardize:
+            mean, std = x_tr.mean(0, keepdim=True), x_tr.std(0, keepdim=True).clamp_min(1e-6)
+            x_tr, x_te = (x_tr - mean) / std, (x_te - mean) / std
+        x_tr = torch.cat([x_tr, torch.ones(x_tr.shape[0], 1, device=dev)], dim=1).double()
+        x_te = torch.cat([x_te, torch.ones(x_te.shape[0], 1, device=dev)], dim=1).double()
+        gram = x_tr.T @ x_tr
+        xty = x_tr.T @ targets[train_idx].double()
+        eye = torch.eye(gram.shape[0], device=dev, dtype=torch.float64)
+        prepped.append((gram, xty, x_te, eye, test_idx))
+
     best_alpha, best_mean, best_scores = alphas[0], -1e30, []
     for a in alphas:
         scores = [
-            _ridge_eval(
-                feats,
-                targets,
-                class_idx,
-                torch.cat([fold_ids[j] for j in range(nf) if j != f]),
-                fold_ids[f],
-                a,
-                task_type,
-                dev,
-                standardize,
-            )
-            for f in range(nf)
+            _ridge_solve_score(gram, xty, x_te, targets, class_idx, test_idx, a, task_type, eye)
+            for gram, xty, x_te, eye, test_idx in prepped
         ]
         mean_score = float(np.mean(scores))
         if mean_score > best_mean:

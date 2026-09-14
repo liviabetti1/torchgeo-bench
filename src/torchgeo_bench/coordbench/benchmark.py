@@ -31,5 +31,6 @@ class CoordBenchmark:
     tasks: dict[str, np.ndarray] = field(default_factory=dict)
     task_type: str = "regression"
     temporal_resolution: str | None = None
+    year: int | None = None
     posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None
