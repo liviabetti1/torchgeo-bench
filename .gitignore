@@ -166,5 +166,5 @@ Desktop.ini
 
 # tracked benchmark results
 !coordbench-results.csv
-!scripts/
+!results/
 !*.lock
