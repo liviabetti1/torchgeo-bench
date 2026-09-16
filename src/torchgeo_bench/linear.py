@@ -1,12 +1,13 @@
 """Logistic regression (single-label and multi-label) with PyTorch optimizers."""
 
 import logging
-from contextlib import suppress
 from typing import Self
 
 import numpy as np
 import torch
 from torch import Tensor
+
+from torchgeo_bench.devices import resolve_device
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +18,16 @@ class LogisticRegression:
     Supports both single-label (softmax cross-entropy) and multi-label
     (sigmoid BCE) classification via the ``multi_label`` flag.
 
+    ``device=None`` uses CPU; ``"auto"`` selects current CUDA when available, otherwise CPU.
+    Explicit CUDA requests raise ``ValueError`` when unavailable or out of range.
+
     Objective::
 
         loss = (1/n) * CrossEntropy + (1/n) * 0.5/C * ||W||^2
 
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 -- Public constructor options.
         self,
         C: float = 1.0,
         max_iter: int = 1000,
@@ -31,11 +35,12 @@ class LogisticRegression:
         batch_size: int = 1024,
         solver: str = "lbfgs",
         tol: float = 1e-4,
-        patience: int = 1,  # only used by Adam path now
+        patience: int = 1,  # Adam only.
         random_state: int | None = None,
         device: str | torch.device | None = None,
+        *,
         verbose: bool = False,
-        use_tf32: bool = True,  # enable TF32 on CUDA for speed
+        use_tf32: bool = True,  # Faster CUDA matrix multiplication.
         multi_label: bool = False,
     ) -> None:
         if C <= 0:
@@ -51,11 +56,7 @@ class LogisticRegression:
         self.tol = float(tol)
         self.patience = int(patience)
         self.random_state = random_state
-        requested_device = torch.device(device) if device is not None else torch.device("cpu")
-        if requested_device.type == "cuda" and not torch.cuda.is_available():
-            logger.warning("CUDA requested but not available; falling back to CPU.")
-            requested_device = torch.device("cpu")
-        self.device = requested_device
+        self.device = resolve_device("cpu" if device is None else device)
         self.verbose = verbose
         self.use_tf32 = use_tf32
         self.multi_label = multi_label
@@ -67,12 +68,9 @@ class LogisticRegression:
 
         if self.random_state is not None:
             torch.manual_seed(self.random_state)
-            np.random.seed(self.random_state)
 
-        # CUDA matmul speedup (TF32) if available & allowed
         if self.device.type == "cuda" and self.use_tf32:
-            with suppress(Exception):
-                torch.set_float32_matmul_precision("high")
+            torch.set_float32_matmul_precision("high")
 
     def _build_model(self, n_features: int, n_classes: int) -> None:
         model = torch.nn.Linear(n_features, n_classes, bias=True)
@@ -96,20 +94,7 @@ class LogisticRegression:
             TypeError: If X or y is not a torch.Tensor.
             ValueError: If shapes are invalid or data is empty.
         """
-        if not torch.is_tensor(X):
-            raise TypeError("X must be a torch.Tensor")
-        if not torch.is_tensor(y):
-            raise TypeError("y must be a torch.Tensor")
-        if X.ndim != 2:
-            raise ValueError(f"X must be 2D (n_samples, n_features); got shape {tuple(X.shape)}")
-        if self.multi_label:
-            if y.ndim != 2:
-                raise ValueError(
-                    f"Multi-label: y must be 2D (n_samples, n_classes); got {tuple(y.shape)}"
-                )
-        else:
-            if y.ndim != 1:
-                raise ValueError(f"y must be 1D (n_samples,); got shape {tuple(y.shape)}")
+        self.validate_training_shapes(X, y)
 
         X_tensor = X.to(self.device, dtype=torch.float32, non_blocking=True).contiguous()
 
@@ -140,80 +125,116 @@ class LogisticRegression:
         else:
             criterion = torch.nn.CrossEntropyLoss(reduction="mean")
 
-        # Regularization factor matches sklearn scaling exactly.
-        # BCE mean divides by (n_samples * n_classes), so scale reg to match.
+        # BCE averages over samples and labels; match sklearn's weight-penalty scaling.
         if self.multi_label:
             reg = 0.5 * (1.0 / self.C) / float(n_samples * n_classes)
         else:
             reg = 0.5 * (1.0 / self.C) / float(n_samples)
 
         if self.solver == "lbfgs":
-            optimizer = torch.optim.LBFGS(
-                model.parameters(),
-                lr=self.lr,
-                max_iter=self.max_iter,  # let LBFGS run all iterations internally
-                history_size=10,
-                line_search_fn="strong_wolfe",  # usually better steps
-                tolerance_grad=1e-7,
-                tolerance_change=self.tol
-                * 0.1,  # small but positive; mirrors early-stop-ish behavior
-            )
-
-            def closure() -> Tensor:
-                optimizer.zero_grad(set_to_none=True)
-                logits = model(X_tensor)
-                loss = criterion(logits, y_tensor)
-                W = model.weight
-                loss = loss + reg * W.mul(W).sum()
-                loss.backward()
-                return loss
-
-            optimizer.step(closure)
-            first_param = next(iter(model.parameters()))
-            state = optimizer.state[first_param]
-            self.n_iter_ = int(state.get("n_iter", self.max_iter))
-
-        else:  # Adam (mini-batch) -- keep everything on device, no DataLoader
-            optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=0.0)
-            best_loss = float("inf")
-            epochs_since_improve = 0
-
-            batch_size = min(self.batch_size, n_samples)
-            for epoch in range(self.max_iter):
-                perm = torch.randperm(n_samples, device=self.device)
-                epoch_loss_sum = 0.0
-
-                for start in range(0, n_samples, batch_size):
-                    idx = perm[start : start + batch_size]
-                    xb = X_tensor.index_select(0, idx)
-                    yb = y_tensor.index_select(0, idx)
-
-                    optimizer.zero_grad(set_to_none=True)
-                    logits = model(xb)
-                    loss = criterion(logits, yb)
-                    W = model.weight
-                    loss = loss + reg * W.mul(W).sum()
-                    loss.backward()
-                    optimizer.step()
-                    epoch_loss_sum += loss.detach().item() * int(xb.shape[0])
-
-                epoch_loss = epoch_loss_sum / float(n_samples)
-
-                if epoch_loss + self.tol < best_loss:
-                    best_loss = epoch_loss
-                    epochs_since_improve = 0
-                else:
-                    epochs_since_improve += 1
-
-                if epochs_since_improve >= self.patience:
-                    self.n_iter_ = epoch + 1
-                    break
-            else:
-                self.n_iter_ = self.max_iter
+            self.fit_lbfgs(model, X_tensor, y_tensor, criterion, reg)
+        else:
+            self.fit_adam(model, X_tensor, y_tensor, criterion, reg)
 
         model.eval()
         self._fitted = True
         return self
+
+    def validate_training_shapes(self, X: Tensor, y: Tensor) -> None:
+        """Check tensor types and dimensions before moving data to the device."""
+        if not torch.is_tensor(X):
+            raise TypeError("X must be a torch.Tensor")
+        if not torch.is_tensor(y):
+            raise TypeError("y must be a torch.Tensor")
+        if X.ndim != 2:
+            raise ValueError(f"X must be 2D (n_samples, n_features); got shape {tuple(X.shape)}")
+        if self.multi_label:
+            if y.ndim != 2:
+                raise ValueError(
+                    f"Multi-label: y must be 2D (n_samples, n_classes); got {tuple(y.shape)}"
+                )
+        elif y.ndim != 1:
+            raise ValueError(f"y must be 1D (n_samples,); got shape {tuple(y.shape)}")
+
+    def fit_lbfgs(
+        self,
+        model: torch.nn.Linear,
+        X: Tensor,
+        y: Tensor,
+        criterion: torch.nn.Module,
+        reg: float,
+    ) -> None:
+        """Optimize the full-batch objective with LBFGS."""
+        optimizer = torch.optim.LBFGS(
+            model.parameters(),
+            lr=self.lr,
+            max_iter=self.max_iter,
+            history_size=10,
+            line_search_fn="strong_wolfe",
+            tolerance_grad=1e-7,
+            tolerance_change=self.tol * 0.1,
+        )
+
+        def closure() -> Tensor:
+            optimizer.zero_grad(set_to_none=True)
+            logits = model(X)
+            loss = criterion(logits, y)
+            W = model.weight
+            loss = loss + reg * W.mul(W).sum()
+            loss.backward()
+            return loss
+
+        optimizer.step(closure)
+        first_param = next(iter(model.parameters()))
+        state = optimizer.state[first_param]
+        self.n_iter_ = int(state.get("n_iter", self.max_iter))
+
+    def fit_adam(
+        self,
+        model: torch.nn.Linear,
+        X: Tensor,
+        y: Tensor,
+        criterion: torch.nn.Module,
+        reg: float,
+    ) -> None:
+        """Optimize minibatches with Adam and stop when the loss plateaus."""
+        n_samples = len(X)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=0.0)
+        best_loss = float("inf")
+        epochs_since_improve = 0
+
+        batch_size = min(self.batch_size, n_samples)
+        for epoch in range(self.max_iter):
+            perm = torch.randperm(n_samples, device=self.device)
+            epoch_loss_sum = 0.0
+
+            for start in range(0, n_samples, batch_size):
+                idx = perm[start : start + batch_size]
+                xb = X.index_select(0, idx)
+                yb = y.index_select(0, idx)
+
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(xb)
+                loss = criterion(logits, yb)
+                W = model.weight
+                loss = loss + reg * W.mul(W).sum()
+                loss.backward()
+                optimizer.step()
+                epoch_loss_sum += loss.detach().item() * int(xb.shape[0])
+
+            epoch_loss = epoch_loss_sum / float(n_samples)
+
+            if epoch_loss + self.tol < best_loss:
+                best_loss = epoch_loss
+                epochs_since_improve = 0
+            else:
+                epochs_since_improve += 1
+
+            if epochs_since_improve >= self.patience:
+                self.n_iter_ = epoch + 1
+                break
+        else:
+            self.n_iter_ = self.max_iter
 
     @property
     def coef_(self) -> np.ndarray:
@@ -273,7 +294,7 @@ class LogisticRegression:
         return probs
 
     def decision_function(self, X: Tensor) -> np.ndarray:
-        """Compute raw logits (decision function values).
+        """Compute unnormalized class scores.
 
         Args:
             X: Feature matrix of shape ``(n_samples, n_features)``.

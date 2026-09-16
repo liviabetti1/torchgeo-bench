@@ -1,13 +1,12 @@
 """Benchmark dataset registry for torchgeo-bench.
 
-Individual dataset classes load lazily (via module ``__getattr__``, mirroring
-:mod:`torchgeo_bench`) so that ``import torchgeo_bench.datasets`` — and
-therefore CLI startup — stays fast.
+Dataset classes load only when requested, keeping imports and CLI startup fast.
 
 Public API
 ----------
 .. autofunction:: get_datasets
 .. autofunction:: get_bench_dataset_class
+.. autofunction:: get_dataset_task
 .. autofunction:: list_datasets
 .. autoclass:: BandSpec
 .. autoclass:: BenchDataset
@@ -18,29 +17,26 @@ from importlib import import_module
 from .base import BandSpec, BenchDataset
 from .loading import (
     get_bench_dataset_class,
+    get_dataset_task,
     get_datasets,
     list_datasets,
 )
 
 __all__ = [
-    # Core types
+    "BENV2",
+    "FLAIR2",
+    "PASTIS",
+    "RESISC45",
     "BandSpec",
     "BenchDataset",
-    # Loading API
-    "get_bench_dataset_class",
-    "get_datasets",
-    "list_datasets",
-    # Individual dataset classes
-    "BENV2",
     "BurnScars",
     "CaFFe",
     "CloudSEN12",
     "DynamicEarthNet",
     "EuroSAT",
     "EuroSATSpatial",
-    "FLAIR2",
-    "Forestnet",
     "FieldsOfTheWorld",
+    "Forestnet",
     "KuroSiwo",
     "MBigEarthNet",
     "MBrickKiln",
@@ -48,15 +44,16 @@ __all__ = [
     "MForestnet",
     "MPv4ger",
     "MSo2Sat",
-    "PASTIS",
-    "RESISC45",
     "So2Sat",
     "SpaceNet2",
     "SpaceNet7",
     "TreeSatAI",
+    "get_bench_dataset_class",
+    "get_dataset_task",
+    "get_datasets",
+    "list_datasets",
 ]
 
-# Class name -> defining submodule, resolved on first attribute access.
 _LAZY_CLASSES: dict[str, str] = {
     "BENV2": "benv2",
     "BurnScars": "burn_scars",
@@ -87,7 +84,7 @@ _LAZY_CLASSES: dict[str, str] = {
 def __getattr__(name: str) -> object:
     if name in _LAZY_CLASSES:
         cls = getattr(import_module(f".{_LAZY_CLASSES[name]}", __name__), name)
-        globals()[name] = cls  # cache so subsequent lookups skip __getattr__
+        globals()[name] = cls
         return cls
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

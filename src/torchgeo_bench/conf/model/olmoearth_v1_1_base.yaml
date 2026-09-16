@@ -1,26 +1,19 @@
-# OlmoEarth-v1.1-Base (AI2 geospatial foundation model)
-# Feature dimension: 768
-# v1.1 improves accuracy with ~114M params (up from 89M in v1).
-# Multi-modal: auto-routes S2/SAR/Landsat/NAIP bands to the correct modality.
-
-_target_: torchgeo_bench.models.OlmoEarthBenchModel
-model_size: base
-version: v1_1
-patch_size: 8
-input_res: null
-time_steps: 1
-std_multiplier: 2.0
-normalize: false
-image_size: null  # OlmoEarth is resolution-flexible; evaluate at native size
-min_image_size: 64
 name: olmoearth_v1_1_base
-eval:
-  segmentation:
-    # Isotropic OlmoEarth v1.1 base (12 encoder blocks, 768ch; 28x28 token grid
-    # at 224px input). No spatial pyramid: pick 4 blocks spread across depth,
-    # deepest first. Uses the encoder path (not decoder/target_encoder).
-    layers:
-      - "encoder_model.encoder.blocks.11"
-      - "encoder_model.encoder.blocks.8"
-      - "encoder_model.encoder.blocks.5"
-      - "encoder_model.encoder.blocks.2"
+target: torchgeo_bench.models.OlmoEarthBenchModel
+kwargs:
+  model_size: base
+  version: v1_1
+  patch_size: 8
+  input_res: null
+  time_steps: 1
+  std_multiplier: 2.0
+  normalize: false
+  min_image_size: 64
+input:
+  image_size: null
+segmentation:
+  layers:
+    - encoder_model.encoder.blocks.11
+    - encoder_model.encoder.blocks.8
+    - encoder_model.encoder.blocks.5
+    - encoder_model.encoder.blocks.2

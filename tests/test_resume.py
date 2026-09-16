@@ -1,41 +1,149 @@
-"""Regression tests for resume-mode config fingerprinting."""
+"""Regression tests for resume hashing and metric completeness."""
 
-from torchgeo_bench.config import compose_config
-from torchgeo_bench.resume import _resume_config_hash
+from pathlib import Path
 
+import pandas as pd
+import pytest
 
-def _cfg(overrides):
-    return compose_config(["model=rcf", "dataset.names=[m-eurosat]", *overrides])
-
-
-def test_config_hash_ignores_profile_toggle():
-    """Turning on eval.profile must not change the fingerprint.
-
-    Profile is an additive, independently-gated follow-up pass (its own
-    skip_profile resume key already tracks completion). If it changed the
-    fingerprint, a follow-up `eval.profile.enabled=true resume=true` run --
-    the documented way to backfill profile rows on already-evaluated models
-    -- would see every existing knn/linear row as "a different config" and
-    rerun (and duplicate) them instead of just adding the missing profile
-    rows.
-    """
-    without_profile = _cfg([])
-    with_profile = _cfg(["eval.profile.enabled=true", "eval.profile.cpu_throughput.enabled=true"])
-
-    assert _resume_config_hash(without_profile) == _resume_config_hash(with_profile)
+from tests.support.runner import _resume_row
+from torchgeo_bench.config.presets import merge_settings, resolve_run_config
+from torchgeo_bench.config.run import RunConfig
+from torchgeo_bench.datasets import get_bench_dataset_class
+from torchgeo_bench.resume import (
+    ResumeState,
+    load_completed,
+    plan_dataset_run,
+    resume_config_hash,
+)
 
 
-def test_config_hash_ignores_intrinsic_dim_toggle():
-    """Turning on eval.intrinsic_dim must not change the fingerprint, for the same reason."""
-    without_id = _cfg([])
-    with_id = _cfg(["eval.intrinsic_dim.enabled=true"])
-
-    assert _resume_config_hash(without_id) == _resume_config_hash(with_id)
+def _cfg(**sections) -> RunConfig:
+    return RunConfig.model_validate(
+        merge_settings({"model": {"name": "rcf"}, "datasets": ["m-eurosat"]}, sections)
+    )
 
 
-def test_config_hash_changes_with_normalization():
-    """Sanity check: the fingerprint must still change for settings that affect the row."""
-    zscore = _cfg(["dataset.normalization=bandspec_zscore"])
-    minmax = _cfg(["dataset.normalization=minmax"])
+def _hash(config: RunConfig, dataset: str = "m-eurosat") -> str:
+    resolved, preset = resolve_run_config(config, dataset)
+    return resume_config_hash(resolved, preset)
 
-    assert _resume_config_hash(zscore) != _resume_config_hash(minmax)
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"profile": {"enabled": True, "cpu_throughput": {"enabled": True}}},
+        {"intrinsic_dim": {"enabled": True}},
+        {"datasets": ["m-forestnet"]},
+        {"output": {"resume": True}},
+    ],
+    ids=["profile-pass", "intrinsic-dim-pass", "dataset-selection", "resume-toggle"],
+)
+def test_config_hash_ignores_run_selection_and_additive_passes(overrides: dict) -> None:
+    assert _hash(_cfg()) == _hash(_cfg(**overrides))
+
+
+def test_config_hash_ignores_output_paths_and_method_selection() -> None:
+    assert _hash(_cfg()) == _hash(
+        _cfg(
+            classification={"methods": ["linear"]},
+            output={"directory": "other-results", "file": "custom.csv", "resume": True},
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"runtime": {"seed": 1}},
+        {"runtime": {"device": "cpu"}},
+        {"runtime": {"batch_size": 8}},
+        {"runtime": {"workers": 0}},
+        {"input": {"bands": "all"}},
+        {"input": {"normalization": "minmax"}},
+        {"classification": {"knn_k": 7}},
+        {"classification": {"knn_device": "cpu"}},
+        {"classification": {"linear": {"c_log10_start": -5.0}}},
+        {"classification": {"linear": {"refit_train_val": False}}},
+        {"classification": {"calibration": {"n_bins_linear": 10}}},
+        {"classification": {"bootstrap_samples": 100}},
+        {"segmentation": {"head": "linear"}},
+        {"segmentation": {"learning_rate": 0.01}},
+        {"model": {"name": "rcf", "kwargs": {"mode": "empirical"}}},
+    ],
+)
+def test_config_hash_changes_with_result_affecting_settings(overrides: dict) -> None:
+    assert _hash(_cfg()) != _hash(_cfg(**overrides))
+
+
+def test_config_hash_includes_resolved_model_target_and_kwargs() -> None:
+    custom = _cfg(model={"name": "custom", "target": "example.Model", "kwargs": {"width": 4}})
+    wider = _cfg(model={"name": "custom", "target": "example.Model", "kwargs": {"width": 8}})
+    other_target = _cfg(model={"name": "custom", "target": "example.Other", "kwargs": {"width": 4}})
+
+    assert _hash(custom) != _hash(wider)
+    assert _hash(custom) != _hash(other_target)
+
+
+def test_config_hash_reflects_dataset_resolved_preset_overrides() -> None:
+    config = _cfg(model={"name": "torchgeo/scalemae_large_fmow"})
+    assert _hash(config, "m-eurosat") != _hash(config, "forestnet")
+
+
+def test_resume_keys_require_the_requested_metric(tmp_path: Path) -> None:
+    path = tmp_path / "results.csv"
+    pd.DataFrame(
+        [{"dataset": "m-eurosat", "method": "intrinsic_dim", "metric_name": "id_twonn_train"}]
+    ).to_csv(path, index=False)
+    columns = ("dataset", "method")
+    key = ("m-eurosat", "intrinsic_dim")
+    completed, metrics = load_completed(str(path), columns)
+    assert completed == {key}
+    assert metrics["id_twonn_train"] == {key}
+    assert metrics.get("id_mle_train", set()) == set()
+
+
+@pytest.mark.parametrize("cpu_enabled", [False, True])
+def test_profile_resume_requires_every_enabled_metric(tmp_path: Path, *, cpu_enabled: bool) -> None:
+    config, _ = resolve_run_config(
+        _cfg(
+            output={"resume": True},
+            profile={"enabled": True, "cpu_throughput": {"enabled": cpu_enabled}},
+        ),
+        "m-eurosat",
+    )
+    expected = {"throughput_samples_per_sec", "latency_ms_per_batch_p50", "params_m"}
+    if cpu_enabled:
+        expected |= {"throughput_samples_per_sec_cpu", "latency_ms_per_batch_p50_cpu"}
+    path = tmp_path / "profile.csv"
+    metadata = _resume_row(config, method="profile", metric_name="params_m")
+    rows = [_resume_row(config, method="profile", metric_name=name) for name in sorted(expected)]
+    pd.DataFrame(rows).to_csv(path, index=False)
+    completed = ResumeState(*load_completed(str(path)))
+    dataset = get_bench_dataset_class("m-eurosat")
+    assert plan_dataset_run(config, dataset, metadata, completed).skip_profile
+    for name in expected:
+        partial = ResumeState(
+            completed.completed_runs,
+            {
+                metric: keys
+                for metric, keys in completed.completed_metrics.items()
+                if metric != name
+            },
+        )
+        assert not plan_dataset_run(config, dataset, metadata, partial).skip_profile
+
+
+def test_load_completed_canonicalizes_csv_numbers_and_legacy_columns(tmp_path: Path) -> None:
+    path = tmp_path / "results.csv"
+    path.write_text(
+        "dataset,image_size,metric_name\n"
+        "m-eurosat,224.0,accuracy\n"
+        "m-eurosat,224,accuracy\n"
+        "m-forestnet,,micro_mAP\n"
+    )
+    completed, metrics = load_completed(str(path), ("dataset", "image_size", "config_hash"))
+    assert completed == {("m-eurosat", "224", ""), ("m-forestnet", "", "")}
+    assert metrics == {
+        "accuracy": {("m-eurosat", "224", "")},
+        "micro_mAP": {("m-forestnet", "", "")},
+    }

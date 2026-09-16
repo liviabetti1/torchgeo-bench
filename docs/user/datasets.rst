@@ -5,7 +5,7 @@ Datasets
 V2 — plus wrappers around torchgeo's standalone EuroSAT and NWPU-RESISC45
 datasets.  All datasets share the
 :class:`~torchgeo_bench.datasets.BenchDataset` interface and are
-auto-registered on import so they can be selected by their CLI name.
+registered by name so they can be selected without importing every loader.
 
 Filesystem layout
 -----------------
@@ -23,14 +23,14 @@ variables like ``GEOBENCH_ROOT``; if you keep data elsewhere, symlink
      - Default destination
      - Source
    * - ``geobench_v1``
-     - ``data/classification_v1.0/``
-     - Hugging Face ``recursix/geo-bench-1.0``
+     - ``data/classification_v1.0_wds/<name>/``
+     - Hugging Face ``calebrob6/geobenchv1-webdataset``
    * - ``geobench_v2``
      - ``data/geobenchv2/<name>/``
      - Hugging Face ``aialliance/<name>``
    * - ``eurosat``
      - ``data/eurosat/``
-     - torchgeo's ``EuroSAT`` downloader
+     - torchgeo's ``EuroSAT`` and ``EuroSATSpatial`` downloaders
    * - ``resisc45``
      - ``data/resisc45/``
      - torchgeo's ``RESISC45`` downloader
@@ -38,17 +38,20 @@ variables like ``GEOBENCH_ROOT``; if you keep data elsewhere, symlink
 Downloading
 -----------
 
-The bundled :doc:`/api/cli` provides one subcommand per family:
+The :doc:`/api/cli` accepts one or more dataset names. Collection aliases remain available for downloading a whole GeoBench family or a selected subset:
 
 .. code-block:: console
 
-   $ torchgeo-bench download geobench_v1                              # full V1 bundle
+   $ torchgeo-bench download m-eurosat burn_scars resisc45            # selected datasets
+   $ torchgeo-bench download geobench_v1                              # all six V1 datasets
    $ torchgeo-bench download geobench_v1 --datasets m-eurosat         # V1 subset
    $ torchgeo-bench download geobench_v2                              # default V2 set
    $ torchgeo-bench download geobench_v2 --datasets benv2,burn_scars  # V2 subset
    $ torchgeo-bench download eurosat                                  # torchgeo EuroSAT
    $ torchgeo-bench download resisc45                                 # torchgeo RESISC45
    $ torchgeo-bench download geobench_v2 --output-dir /scratch/data   # custom root
+
+Do not mix collection aliases and individual names in one invocation. ``--datasets`` applies only to a collection alias. ``--output-dir`` changes the download destination, not the runner's fixed ``data/`` location; link the downloaded root to ``data/`` before loading it from another working directory.
 
 The default V2 download set is: ``benv2``, ``burn_scars``, ``caffe``,
 ``cloudsen12``, ``dynamic_earthnet``, ``flair2``, ``forestnet``,
@@ -60,13 +63,36 @@ GeoBench V1 — classification
 
 V1 datasets use the ``m-`` prefix on the command line.
 
-The first time a V1 dataset is requested without a local copy under
-``data/classification_v1.0`` or ``data/classification_v1.0_wds``, the
-loader auto-downloads the requested dataset from the public mirror
-``isaaccorley/geobenchv1-webdataset`` on the Hugging Face Hub.  Set
-``GEOBENCH_V1_NO_HF_DOWNLOAD=1`` to disable the auto-download and force a
-local-only path (``torchgeo-bench download geobench_v1`` still works for
-the legacy per-sample HDF5 layout).
+Download V1 data before running a benchmark. ``torchgeo-bench download geobench_v1`` downloads all six classification datasets; ``--datasets`` selects a subset.
+
+Downloads use the pickle-free ``calebrob6/geobenchv1-webdataset`` mirror at a pinned revision. They write JSON-metadata tar shards under ``data/classification_v1.0_wds/<name>/`` and verify each downloaded archive against the SHA-256 list bundled with the package. These are archive-level integrity checks, not per-sample metadata approvals.
+
+V1 metadata format
+^^^^^^^^^^^^^^^^^^
+
+V1 readers use JSON metadata only. Tar shards pair ``<sample_id>.bands.npz`` with ``<sample_id>.meta.json``; image arrays are loaded with ``allow_pickle=False``. Custom HDF5 samples under ``data/classification_v1.0/<name>/`` must store a UTF-8 JSON string in the ``metadata_json`` attribute. The JSON object must contain a numeric ``label`` (or a numeric list for multilabel data) and a non-empty ``bands_order`` list of source-band names.
+
+.. code-block:: json
+
+   {
+     "label": 2,
+     "bands_order": ["04 - Red", "03 - Green", "02 - Blue"],
+     "04 - Red": {
+       "transform": [10, 0, 500000, 0, -10, 5200000],
+       "crs": "EPSG:32631"
+     }
+   }
+
+Per-band ``transform`` and ``crs`` entries are optional. Geographic extraction accepts six affine coefficients ``[a, b, c, d, e, f]`` (or the nine-element affine matrix) and a CRS string; use ``null`` when georeferencing is unavailable. Python objects such as affine/CRS classes and NumPy label arrays must be exported as JSON numbers, lists, and strings by the data producer.
+
+.. warning::
+
+   Existing pickle-based V1 caches are not converted or unpickled. Replace them with ``torchgeo-bench download geobench_v1`` (or ``--datasets m-eurosat`` for a subset). If an archive checksum fails, remove the named corrupt archive and retry the download. Custom datasets must supply JSON metadata.
+
+Geography extraction reads the JSON metadata directly from the default shards or custom HDF5 files. ``experiments/scripts/repack_geobench_v1.py`` repacks custom JSON-metadata HDF5 files into JSON-based shards; it does not read or convert pickle metadata.
+
+Supported V1 datasets
+^^^^^^^^^^^^^^^^^^^^^
 
 .. list-table::
    :header-rows: 1
@@ -131,10 +157,9 @@ CLI name           #cls   bands multilabel   sensor                             
 ================== ====== ===== ============ ====================================== =====================================
 
 V2 datasets are stored as a single ``.tortilla`` file each, hosted under
-``aialliance/<name>`` on the Hugging Face Hub.  ``_V2Dataset.get_dataset``
-passes ``download=True`` to the upstream class, so a missing tortilla is
-fetched on first use — no separate ``torchgeo-bench download`` step
-required for the sweep.
+``aialliance/<name>`` on the Hugging Face Hub. Download the selected datasets
+before running a benchmark, for example with
+``torchgeo-bench download geobench_v2 --datasets benv2,burn_scars``.
 
 .. note::
 
@@ -196,14 +221,14 @@ than being silently omitted.
 Selecting datasets
 ------------------
 
-Pass a single dataset, a comma-separated list, or ``all`` to evaluate every
-registered dataset:
+Repeat ``--dataset`` for multiple selections, or use ``--dataset all`` to
+evaluate every registered dataset. YAML accepts ``datasets: [m-eurosat, caffe]``:
 
 .. code-block:: console
 
-   $ torchgeo-bench run dataset.names=[m-eurosat]
-   $ torchgeo-bench run dataset.names=[burn_scars,pastis,flair2]
-   $ torchgeo-bench run dataset.names=all
+   $ torchgeo-bench run --model rcf --dataset m-eurosat
+   $ torchgeo-bench run --model timm/resnet18 --dataset burn_scars --dataset pastis --dataset flair2
+   $ torchgeo-bench run --model timm/resnet18 --dataset all
 
 Bands selection
 ---------------
@@ -211,22 +236,22 @@ Bands selection
 Each dataset declares an ordered list of :class:`~torchgeo_bench.datasets.BandSpec`
 objects.  Three modes are supported:
 
-* ``dataset.bands=rgb`` *(default)* — only the bands listed in
+* ``--bands rgb`` *(default)* — only the bands listed in
   :attr:`~torchgeo_bench.datasets.BenchDataset.rgb_bands`.
-* ``dataset.bands=all`` — every band the dataset exposes.
-* ``dataset.bands=[red,green,blue,nir]`` — an explicit subset.
+* ``--bands all`` — every band the dataset exposes.
+* ``--bands red,green,blue,nir`` — an explicit subset.
 
 The runner derives ``num_channels`` from the loaded tensor and constructs
 the matching ``list[BandSpec]`` so the model wrapper can size its input
 layer and per-channel normalization correctly.  The selected ``bands``
 value is recorded in the results CSV so multiple runs writing to the same
-file (and ``resume=true``) keep RGB and multispectral results
+file (and ``--resume``) keep RGB and multispectral results
 distinguishable.
 
 .. code-block:: console
 
    $ # All 13 Sentinel-2 bands on EuroSAT with a pretrained timm ResNet-18
-   $ torchgeo-bench run model=timm/resnet18 dataset.names=[m-eurosat] dataset.bands=all
+   $ torchgeo-bench run --model timm/resnet18 --dataset m-eurosat --bands all
 
 Multi-modality (V2)
 -------------------
@@ -236,7 +261,7 @@ S1, ``pastis`` = S2 + S1, ``kuro_siwo`` = SAR + DEM).  Their wrappers
 set ``band_order_strategy = "by_sensor"`` and the V2 base class groups
 ``BandSpec`` entries by sensor before passing them to the upstream
 ``geobench_v2`` loader.  End users do not need to do anything special —
-set ``dataset.bands=all`` (or an explicit subset) and the right
+set ``--bands all`` (or an explicit subset) and the right
 per-modality tensors are concatenated into a single ``image`` key.
 
 Model compatibility
@@ -257,14 +282,14 @@ Model compatibility
 Data partitions (V1 only)
 -------------------------
 
-V1 datasets honour the ``dataset.partition`` argument (which selects one
+V1 datasets honour the ``--partition`` argument (which selects one
 of the partition JSON files distributed with each dataset).  V2 datasets
 ignore it.
 
 .. code-block:: console
 
    $ # Train on 1% of the V1 training split, write to a separate CSV
-   $ torchgeo-bench run dataset.partition=0.01x_train output=results/1pct.csv
+   $ torchgeo-bench run --model rcf --dataset m-eurosat --partition 0.01x_train --output results/1pct.csv
 
 Common partition values: ``default``, ``0.01x_train``, ``0.02x_train``,
 ``0.05x_train``, ``0.10x_train``, ``0.20x_train``, ``0.50x_train``,

@@ -1,74 +1,173 @@
 """Unit tests for dataset download helpers."""
 
+import hashlib
+import io
+import json
+import tarfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 import pytest
 
+from torchgeo_bench.datasets import _v1_webdataset as v1
+from torchgeo_bench.datasets import geobench_v1, get_bench_dataset_class, list_datasets
+from torchgeo_bench.datasets.geobench_v1 import _V1Dataset
 from torchgeo_bench.datasets.geobench_v2 import list_v2_datasets
 from torchgeo_bench.download import (
     DEFAULT_V2_DATASETS,
+    download_datasets,
     download_eurosat,
     download_geobench_v1,
     download_geobench_v2,
+    download_geobench_v2_dataset,
     download_resisc45,
 )
 
 
-def test_download_geobench_v1_creates_output_and_decompresses(tmp_path: Path) -> None:
-    out = tmp_path / "data"
+@pytest.fixture
+def v1_download(monkeypatch: pytest.MonkeyPatch) -> Iterator[mock.MagicMock]:
+    bands = ("04 - Red", "03 - Green", "02 - Blue")
+    arrays = io.BytesIO()
+    np.savez(arrays, **{name: np.ones((2, 2), dtype=np.float32) for name in bands})
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, value in (
+            ("sample.bands.npz", arrays.getvalue()),
+            ("sample.meta.json", json.dumps({"label": 0, "bands_order": bands}).encode()),
+        ):
+            member = tarfile.TarInfo(name)
+            member.size = len(value)
+            archive.addfile(member, io.BytesIO(value))
+    payload = buffer.getvalue()
+    checksums = {
+        f"{name}/shard_00000.tar": hashlib.sha256(payload).hexdigest()
+        for name in ("m-eurosat", "m-forestnet")
+    }
+    monkeypatch.setattr(v1, "_shard_checksums", lambda: checksums)
 
-    def _fake_snapshot_download(*, repo_id: str, repo_type: str, local_dir: Path) -> None:
-        del repo_id, repo_type
-        nested = local_dir / "classification_v1.0"
-        nested.mkdir(parents=True, exist_ok=True)
-        (nested / "archive.zip").write_bytes(b"placeholder")
+    def download(*, local_dir: Path, allow_patterns: list[str], **kwargs: object) -> None:
+        for pattern in allow_patterns:
+            directory = local_dir / pattern.removesuffix("/*")
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "shard_00000.tar"
+            if not path.exists():
+                path.write_bytes(payload)
+            (directory / "default_partition.json").write_text(
+                json.dumps({split: ["sample"] for split in ("train", "valid", "test")})
+            )
 
-    with (
-        mock.patch(
-            "torchgeo_bench.download.snapshot_download", side_effect=_fake_snapshot_download
-        ),
-        mock.patch("torchgeo_bench.download._decompress_zip_with_progress") as decompress_mock,
-    ):
-        download_geobench_v1(out)
-
-    assert out.exists()
-    decompress_mock.assert_called_once()
+    with mock.patch.object(v1, "snapshot_download", side_effect=download) as download_mock:
+        yield download_mock
 
 
-def test_download_geobench_v1_subset_uses_sharded_mirror(tmp_path: Path) -> None:
-    out = tmp_path / "data"
-    with mock.patch("torchgeo_bench.download.snapshot_download") as download_mock:
-        download_geobench_v1(out, datasets=["m-eurosat", "m-forestnet"])
-
-    download_mock.assert_called_once_with(
-        repo_id="isaaccorley/geobenchv1-webdataset",
+@pytest.mark.parametrize("names", [None, ["m-eurosat"], ["m-forestnet", "m-eurosat", "m-eurosat"]])
+def test_download_geobench_v1_uses_verified_json_shards(
+    tmp_path: Path, v1_download: mock.MagicMock, names: list[str] | None
+) -> None:
+    download_geobench_v1(tmp_path, datasets=names)
+    selected = ["m-eurosat", "m-forestnet"] if names is None else list(dict.fromkeys(names))
+    v1_download.assert_called_once_with(
+        repo_id="calebrob6/geobenchv1-webdataset",
         repo_type="dataset",
-        local_dir=out / "classification_v1.0_wds",
-        allow_patterns=["m-eurosat/*", "m-forestnet/*"],
+        revision="18c293d3a963c73e8e055a2fef6fca9e029c6e95",
+        local_dir=tmp_path / "classification_v1.0_wds",
+        allow_patterns=[f"{name}/*" for name in selected],
+        cache_dir=None,
     )
+    assert not (tmp_path / "classification_v1.0").exists()
+    for name in selected:
+        sample = v1.GeoBenchv1Sharded(tmp_path / "classification_v1.0_wds", name, "train")[0]
+        assert sample["image"].shape == (3, 2, 2)
+        assert sample["label"].item() == 0
 
 
-def test_download_geobench_v1_rejects_empty_subset(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="at least one GeoBench V1"):
-        download_geobench_v1(tmp_path, datasets=[])
+def test_v1_download_rejects_corrupt_cached_archives(
+    tmp_path: Path, v1_download: mock.MagicMock
+) -> None:
+    download_geobench_v1(tmp_path, datasets=["m-eurosat"])
+    archive = tmp_path / "classification_v1.0_wds/m-eurosat/shard_00000.tar"
+    archive.write_bytes(b"corrupt cached download")
+    with pytest.raises(ValueError, match="archive checksum mismatch"):
+        download_geobench_v1(tmp_path, datasets=["m-eurosat"])
 
 
-def test_download_geobench_v2_subset(tmp_path: Path) -> None:
+def test_v1_download_requires_every_expected_archive(
+    tmp_path: Path, v1_download: mock.MagicMock
+) -> None:
+    v1_download.side_effect = None
+    with pytest.raises(FileNotFoundError, match=r"shard_00000\.tar"):
+        download_geobench_v1(tmp_path, datasets=["m-eurosat"])
+
+
+@pytest.mark.parametrize("names", [[], ["unknown"], ["../m-eurosat"]])
+def test_v1_download_rejects_invalid_names(
+    tmp_path: Path, v1_download: mock.MagicMock, names: list[str]
+) -> None:
+    with pytest.raises(ValueError, match=r"datasets must contain|Unknown GeoBench V1"):
+        download_geobench_v1(tmp_path, datasets=names)
+    v1_download.assert_not_called()
+
+
+def test_v1_requires_explicit_download_before_loading(
+    tmp_path: Path, v1_download: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "classification_v1.0_wds"
+    monkeypatch.setattr(geobench_v1, "V1_ROOT", tmp_path / "hdf5")
+    monkeypatch.setattr(geobench_v1, "V1_SHARDED_ROOT", root)
+    bench = get_bench_dataset_class("m-eurosat")()
+    with pytest.raises(FileNotFoundError, match="download m-eurosat"):
+        bench.get_dataset("train", bands=tuple(bench.rgb_bands))
+    v1_download.assert_not_called()
+
+    download_geobench_v1(tmp_path, datasets=["m-eurosat"])
+    for split in ("train", "val", "test"):
+        dataset = bench.get_dataset(split, bands=tuple(bench.rgb_bands))
+        assert dataset[0]["image"].shape == (3, 2, 2)
+    v1_download.assert_called_once()
+    assert v1_download.call_args.kwargs["local_dir"] == root
+    assert v1_download.call_args.kwargs["allow_patterns"] == ["m-eurosat/*"]
+
+
+def test_v1_archive_checksums_cover_the_published_suite() -> None:
+    checksums = v1._shard_checksums()
+    datasets = {
+        name for name in list_datasets() if issubclass(get_bench_dataset_class(name), _V1Dataset)
+    }
+    assert len(checksums) == 89
+    assert {name.split("/", 1)[0] for name in checksums} == datasets
+    assert all(name.endswith(".tar") and len(value) == 64 for name, value in checksums.items())
+
+
+def test_named_v1_downloads_use_the_verified_json_backend(
+    tmp_path: Path, v1_download: mock.MagicMock
+) -> None:
+    from torchgeo_bench.cli import main
+
+    arguments = ["download", "m-eurosat", "--output-dir", str(tmp_path)]
+    main(arguments)
+    assert v1_download.call_args.kwargs["repo_id"] == v1.V1_HF_REPO_ID
+    assert v1_download.call_args.kwargs["revision"] == v1.V1_HF_REVISION
+    assert v1_download.call_args.kwargs["allow_patterns"] == ["m-eurosat/*"]
+
+    path = tmp_path / "classification_v1.0_wds/m-eurosat/shard_00000.tar"
+    path.write_bytes(b"corrupt cached download")
+    with pytest.raises(SystemExit, match="archive checksum mismatch"):
+        main(arguments)
+
+
+@pytest.mark.parametrize("names", [None, ["burn_scars"], ["burn_scars", "burn_scars"]])
+def test_download_geobench_v2_selects_each_dataset_once(
+    tmp_path: Path, names: list[str] | None
+) -> None:
     out = tmp_path / "data"
     with mock.patch("torchgeo_bench.download.download_geobench_v2_dataset") as dl_mock:
-        download_geobench_v2(out, datasets=["burn_scars"])
+        download_geobench_v2(out, datasets=names)
 
-    assert (out / "geobenchv2").exists()
-    dl_mock.assert_called_once_with("burn_scars", out / "geobenchv2")
-
-
-def test_download_geobench_v2_defaults_to_registry_list(tmp_path: Path) -> None:
-    out = tmp_path / "data"
-    with mock.patch("torchgeo_bench.download.download_geobench_v2_dataset") as dl_mock:
-        download_geobench_v2(out, datasets=None)
-
-    assert dl_mock.call_count == len(DEFAULT_V2_DATASETS)
+    expected = list_v2_datasets() if names is None else ["burn_scars"]
+    assert (out / "geobenchv2").is_dir()
+    assert dl_mock.call_args_list == [mock.call(name, out / "geobenchv2") for name in expected]
     assert tuple(list_v2_datasets()) == DEFAULT_V2_DATASETS
 
 
@@ -82,36 +181,80 @@ def test_download_geobench_v2_rejects_unknown_dataset(tmp_path: Path) -> None:
         download_geobench_v2(tmp_path, datasets=["not-a-dataset"])
 
 
-def test_download_geobench_v2_deduplicates_names(tmp_path: Path) -> None:
-    with mock.patch("torchgeo_bench.download.download_geobench_v2_dataset") as dl_mock:
-        download_geobench_v2(tmp_path, datasets=["burn_scars", "burn_scars"])
-
-    dl_mock.assert_called_once_with("burn_scars", tmp_path / "geobenchv2")
+def test_download_geobench_v2_uses_dataset_specific_huggingface_root(tmp_path: Path) -> None:
+    with mock.patch("torchgeo_bench.download.snapshot_download") as snapshot:
+        download_geobench_v2_dataset("burn_scars", tmp_path)
+    assert (tmp_path / "burn_scars").is_dir()
+    snapshot.assert_called_once_with(
+        repo_id="aialliance/burn_scars",
+        repo_type="dataset",
+        local_dir=tmp_path / "burn_scars",
+    )
 
 
 def test_download_eurosat_creates_target_and_downloads_splits(tmp_path: Path) -> None:
     out = tmp_path / "data"
-    with mock.patch("torchgeo_bench.download.EuroSAT") as eurosat_mock:
+    with (
+        mock.patch("torchgeo_bench.download.EuroSAT") as eurosat_mock,
+        mock.patch("torchgeo_bench.download.EuroSATSpatial") as spatial_mock,
+    ):
         download_eurosat(out)
 
     assert (out / "eurosat").exists()
-    called_splits = [kwargs["split"] for _, kwargs in eurosat_mock.call_args_list]
-    assert called_splits == ["train", "val", "test"]
+    for dataset in (eurosat_mock, spatial_mock):
+        assert dataset.call_args_list == [
+            mock.call(root=str(out / "eurosat"), split=split, download=True)
+            for split in ("train", "val", "test")
+        ]
 
 
-def test_download_resisc45_creates_target_and_downloads_splits(tmp_path: Path) -> None:
+def test_download_resisc45_verifies_checksums_for_every_split(tmp_path: Path) -> None:
     out = tmp_path / "data"
     with mock.patch("torchgeo_bench.download.RESISC45") as resisc_mock:
         download_resisc45(out)
 
     assert (out / "resisc45").exists()
-    called_splits = [kwargs["split"] for _, kwargs in resisc_mock.call_args_list]
-    assert called_splits == ["train", "val", "test"]
+    assert resisc_mock.call_args_list == [
+        mock.call(root=str(out / "resisc45"), split=split, download=True, checksum=True)
+        for split in ("train", "val", "test")
+    ]
 
 
-def test_download_resisc45_verifies_the_archive_checksum(tmp_path: Path) -> None:
-    """The archive comes from a pinned HF revision; a truncated zip must fail loudly."""
-    with mock.patch("torchgeo_bench.download.RESISC45") as resisc_mock:
-        download_resisc45(tmp_path)
+def test_download_datasets_dispatches_only_selected_names(tmp_path: Path) -> None:
+    with (
+        mock.patch("torchgeo_bench.download.download_geobench_v1") as v1,
+        mock.patch("torchgeo_bench.download.download_geobench_v2") as v2,
+        mock.patch("torchgeo_bench.download.download_eurosat") as eurosat,
+        mock.patch("torchgeo_bench.download.download_resisc45") as resisc45,
+    ):
+        download_datasets(["m-eurosat", "burn_scars", "eurosat"], tmp_path)
 
-    assert all(kwargs["checksum"] for _, kwargs in resisc_mock.call_args_list)
+    v1.assert_called_once_with(tmp_path, datasets=["m-eurosat"])
+    v2.assert_called_once_with(tmp_path, datasets=["burn_scars"])
+    eurosat.assert_called_once_with(tmp_path)
+    resisc45.assert_not_called()
+
+
+@pytest.mark.parametrize("names", [[], ["m-eurosat", "not-a-dataset"], ["eurosat", "unknown"]])
+def test_download_datasets_validates_every_name_before_dispatch(
+    tmp_path: Path, names: list[str]
+) -> None:
+    with (
+        mock.patch("torchgeo_bench.download.download_geobench_v1") as v1,
+        mock.patch("torchgeo_bench.download.download_geobench_v2") as v2,
+        mock.patch("torchgeo_bench.download.download_eurosat") as eurosat,
+        mock.patch("torchgeo_bench.download.download_resisc45") as resisc45,
+        pytest.raises(ValueError, match=r"Unknown dataset|at least one"),
+    ):
+        download_datasets(names, tmp_path)
+
+    for download in (v1, v2, eurosat, resisc45):
+        download.assert_not_called()
+    assert not list(tmp_path.iterdir())
+
+
+def test_download_datasets_deduplicates_names(tmp_path: Path) -> None:
+    with mock.patch("torchgeo_bench.download.download_eurosat") as eurosat:
+        download_datasets(["eurosat", "eurosat"], tmp_path)
+
+    eurosat.assert_called_once_with(tmp_path)

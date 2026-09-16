@@ -1,50 +1,46 @@
-"""Per-sample compute cost (GFLOPs) split into backbone / head / probe.
+"""Per-sample compute cost (GFLOPs) for backbones and classification/segmentation heads.
 
-Measures one model config across two fixed band configurations and, where
-the model declares segmentation layers, across the segmentation head types.
-Everything is measured on a **synthetic** tensor: ``_count_gflops`` slices
-``sample[:1]``, so no dataset is involved and no data is downloaded.  Band
-specs come off the dataset *class attributes* of ``cloudsen12``.
+Measure RGB and Sentinel-2 inputs plus supported segmentation heads for one model config.
+Inputs are synthetic. Band metadata defaults to the ``cloudsen12`` dataset class.
+No data is loaded or downloaded.
 
-The pipeline **imports** the real eval wiring (``build_seg_probe_and_solver``,
-``measure_profile``, ``_count_gflops``) rather than reimplementing it, so the
-graph that gets measured is the graph the eval runs.
-
-One invocation handles one model config, matching ``seg_corruption_pipeline``;
-``slurm/eval_flops.sbatch`` loops the model set.
+Use the benchmark's probe builders and profiling helpers so measurements match evaluation.
 """
 
 import logging
 import os
 import warnings
+from collections.abc import Iterator
 from datetime import UTC
+from typing import Any
 
+import pandas as pd
 import torch
-from omegaconf import DictConfig, OmegaConf
+from filelock import FileLock
 from torch import nn
 
-from torchgeo_bench.config import instantiate
+from torchgeo_bench.bands import BandCompatibilityError
+from torchgeo_bench.config.flops import FlopsConfig, FlopsSegmentationConfig
+from torchgeo_bench.config.presets import NORMALIZATIONS, ModelPreset, build_model
+from torchgeo_bench.config.schema import SegmentationConfig
 from torchgeo_bench.datasets import get_bench_dataset_class
+from torchgeo_bench.datasets.base import BandSpec
+from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.model_profile import (
+    ProfileTiming,
     _count_gflops,
     _count_params,
-    lenient_grad_hooks,
     measure_profile,
 )
 from torchgeo_bench.results import append_rows_atomic
-from torchgeo_bench.segmentation_task import build_seg_probe_and_solver
+from torchgeo_bench.segmentation_probe import SegmentationProbe
 
 warnings.filterwarnings("ignore", message="Dataset has no geotransform", category=UserWarning)
 
 logger = logging.getLogger(__name__)
 
-# TerraMind carries the band configuration in the *model config*, not just in
-# the tensor shape: TerraTorchTerraMindBench takes both `bands` and `modality`,
-# and the modality selects which pretrained tokenizer (and which band table and
-# normalization statistics) the input is mapped through.  The `_rgb` and
-# S2L2A configs are therefore one model at two points on the band axis, not two
-# models — they are emitted under the merged name with `band_config` telling
-# them apart.  Each config is only ever measured at its matching band config.
+# TerraMind's modality selects its tokenizer, band table, and normalization.
+# Group RGB/S2L2A configs by model name; band_config distinguishes their measurements.
 _MODALITY_FOR_BAND_CONFIG = {"rgb": "RGB", "s2": "S2L2A"}
 _TERRAMIND_MERGED_NAME = {
     "tt_terramind_v1_base": "tt_terramind_v1_base",
@@ -58,100 +54,27 @@ def _load_completed(path: str) -> frozenset[tuple]:
     """Return the ``(name, band_config, task, head_type)`` keys already in *path*."""
     if not os.path.exists(path):
         return frozenset()
-    try:
-        import pandas as pd
-
+    with FileLock(f"{path}.lock"):
         df = pd.read_csv(path)
-        return frozenset(
-            zip(
-                df["name"],
-                df["band_config"],
-                df["task"],
-                df["head_type"].fillna(""),
-                strict=False,
-            )
-        )
-    except Exception:
-        # A malformed/partial CSV must not abort the sweep; re-measuring is
-        # cheap and append_rows_atomic heals schema drift.
-        logger.warning("Could not read %s for resume; measuring everything.", path)
-        return frozenset()
+    return frozenset(
+        zip(df["name"], df["band_config"], df["task"], df["head_type"].fillna(""), strict=True)
+    )
 
 
-def _is_terramind(cfg_model: DictConfig) -> bool:
-    return "TerraMind" in str(cfg_model._target_)
-
-
-# A band incompatibility is identified by message, not by exception type alone.
-# `isinstance(exc, ValueError)` is far too wide: omegaconf's
-# InterpolationKeyError, ValidationError, UnsupportedValueType and
-# ConfigValueError are *all* ValueError subclasses, so a broken model config —
-# a `${seed}` interpolation with no `seed` key, say — would be logged as
-# "incompatible with this band config" and silently dropped from the CSV.
-_BAND_INCOMPAT_MARKERS: tuple[str, ...] = (
-    # torchgeo_bench.models._band_mapping
-    "missing required model band",
-    "none of the target bands",
-    # TerraMind's modality/band-config disagreement, raised in _build_model
-    "does not match band config",
-    # third-party stems that validate channel count themselves (torchgeo's
-    # fixed-channel checkpoints, timm patch-embed).  Deliberately *not*
-    # included: "images has N channels but src_bands has M entries" from
-    # map_to_model_bands, which means the caller passed a tensor disagreeing
-    # with its own BandSpecs — a pipeline bug that must stay loud.  It cannot
-    # fire here anyway, since n_channels is len(band_specs) by construction.
-    "input channels",
-    "num_chans",
-    "in_chans",
-)
-
-
-def _is_band_incompatibility(exc: BaseException) -> BaseException | None:
-    """Return the band-incompatibility cause in *exc*'s chain, or None.
-
-    Model constructors may wrap the band-mismatch ``ValueError``, so the
-    exception chain is walked.  Only genuine band/shape mismatches match;
-    anything else (a missing checkpoint, an exhausted disk quota, a malformed
-    config) is a real failure and must propagate rather than be recorded as a
-    skip.
-    """
-    seen: set[int] = set()
-    cause: BaseException | None = exc
-    # `__cause__ or __context__` can cycle when an exception is raised while
-    # handling itself, so visited frames are tracked rather than trusted to
-    # terminate.
-    while cause is not None and id(cause) not in seen:
-        seen.add(id(cause))
-        if isinstance(cause, ValueError):
-            message = str(cause).lower()
-            if any(marker in message for marker in _BAND_INCOMPAT_MARKERS):
-                return cause
-        cause = cause.__cause__ or cause.__context__
-    return None
+def _is_terramind(preset: ModelPreset) -> bool:
+    return "TerraMind" in preset.target
 
 
 def _build_model(
-    cfg_model: DictConfig,
-    band_specs: list,
+    preset: ModelPreset,
+    band_specs: list[BandSpec],
     normalization: str,
     band_config: str,
 ) -> nn.Module | None:
-    """Instantiate the model for *band_config*, or None if incompatible.
-
-    Model/band incompatibilities are expected and numerous: several configs
-    are RGB-only (a 3-channel pretrained stem) and several are
-    multispectral-only (``tgeo_resnet50_s2all_moco`` has a 13-channel stem).
-    Those raise ``ValueError`` and are skipped with a warning, mirroring
-    ``seg_corruption_pipeline``.
-    """
-    if _is_terramind(cfg_model):
-        # Each TerraMind config declares its own modality and is only ever
-        # measured at the matching band config (enforced by the caller), so
-        # the declared modality is used as-is rather than overridden.  Assert
-        # the agreement here too: pairing S2RGB with 12 channels is the one
-        # failure mode that yields a plausible-looking wrong number instead of
-        # an exception.
-        declared = str(cfg_model.get("modality", "S2L2A"))
+    """Instantiate the model, skipping only explicitly incompatible band selections."""
+    if _is_terramind(preset):
+        # A modality/channel mismatch can silently select the wrong band table.
+        declared = str(preset.kwargs.get("modality", "S2L2A"))
         expected = _MODALITY_FOR_BAND_CONFIG[band_config]
         if declared != expected:
             raise ValueError(
@@ -160,16 +83,13 @@ def _build_model(
                 f"Measuring this pair would map through the wrong band table."
             )
     try:
-        return instantiate(cfg_model, bands=band_specs, normalization=normalization)
-    except Exception as exc:
-        cause = _is_band_incompatibility(exc)
-        if cause is None:
-            raise
+        return build_model(preset, bands=band_specs, normalization=normalization)
+    except BandCompatibilityError as exc:  # allow-except: Skip explicitly unsupported bands.
         logger.warning(
             "Skipping %s/%s: model is incompatible with this band config: %s",
-            cfg_model.get("name", cfg_model._target_),
+            preset.name,
             band_config,
-            cause,
+            exc,
         )
         return None
 
@@ -179,24 +99,21 @@ def _measure_backbone(
     n_channels: int,
     image_size: int,
     device: torch.device,
-    batch_size: int,
-    n_warmup: int,
-    n_measure: int,
+    timing: ProfileTiming,
 ) -> tuple[dict[str, float | None], int]:
-    """Run ``measure_profile`` on a synthetic batch, halving on CUDA OOM.
+    """Profile a synthetic batch, halving its size after CUDA runs out of memory.
 
-    Returns the metrics dict and the batch size actually used, so a cell that
-    fell back to a smaller batch stays interpretable (GFLOPs is per-sample
-    either way; throughput/memory/energy are not).
+    Returns the metrics and actual batch size.
+    GFLOPs is per sample; throughput and memory depend on batch size.
     """
+    batch_size = timing.batch_size
     while True:
         try:
             x = torch.randn(batch_size, n_channels, image_size, image_size, device=device)
-            with lenient_grad_hooks():
-                return measure_profile(
-                    model, x, device, n_warmup=n_warmup, n_measure=n_measure
-                ), batch_size
-        except torch.cuda.OutOfMemoryError:
+            return measure_profile(
+                model, x, device, n_warmup=timing.n_warmup, n_measure=timing.n_measure
+            ), batch_size
+        except torch.cuda.OutOfMemoryError:  # allow-except: Retry with a smaller timing batch.
             if batch_size <= 1:
                 raise
             batch_size //= 2
@@ -206,20 +123,17 @@ def _measure_backbone(
 
 def _probe_gflops(
     model: nn.Module,
-    n_channels: int,
-    image_size: int,
+    input_shape: tuple[int, int, int],
     device: torch.device,
     head: str,
     n_classes: int,
 ) -> tuple[float, float, int]:
-    """Build the linear/mlp probe the way ``linear.py`` does and count it.
+    """Measure a linear or MLP probe using the backbone's output width.
 
-    ``feature_dim`` is *not* configured anywhere — ``linear.py`` infers it
-    from ``X.shape[1]`` of the extracted features.  So the width has to come
-    from a real forward pass, and the probe can only be constructed after it.
+    Infer ``feature_dim`` from an actual forward pass, as ``linear.py`` does from ``X.shape[1]``.
     """
     with torch.inference_mode():
-        feats = model(torch.randn(1, n_channels, image_size, image_size, device=device))
+        feats = model(torch.randn(1, *input_shape, device=device))
     feature_dim = int(feats.shape[1])
 
     if head == "mlp":
@@ -229,8 +143,10 @@ def _probe_gflops(
             nn.SiLU(inplace=True),
             nn.Linear(feature_dim, n_classes, bias=True),
         )
-    else:
+    elif head == "linear":
         probe = nn.Linear(feature_dim, n_classes, bias=True)
+    else:
+        raise ValueError(f"Unknown probe head {head!r}; expected 'linear' or 'mlp'.")
     probe.to(device).eval()
 
     gflops = _count_gflops(probe, torch.randn(2, feature_dim, device=device))
@@ -238,17 +154,10 @@ def _probe_gflops(
 
 
 def _n_tokens(model: nn.Module, image_size: int) -> int | None:
-    """Return the number of *patch* tokens, or None for CNN backbones.
+    """Return the patch-token count, or ``None`` for CNN backbones.
 
-    ``forward_patch_features`` returns an already-pooled ``(B, D)`` vector, so
-    the token count cannot be read off the model's output.  It is instead
-    derived from the patch-embedding grid, which is what actually drives
-    attention cost: ``n_tokens ~ (image_size / patch)^2``.
-
-    Prefix tokens (CLS + registers) are deliberately *excluded* — they are
-    read via ``num_prefix_tokens`` where a module exposes one, so
-    register-token ViTs (DINOv3 reports 5) report the same patch-grid size as
-    a plain ViT at equal patch size.
+    ``forward_patch_features`` returns pooled ``(B, D)`` embeddings, not token counts.
+    Use the patch grid, ``n_tokens ~ (image_size / patch)^2``, excluding CLS and register tokens.
     """
     patch: tuple[int, int] | None = None
     for module in model.modules():
@@ -262,24 +171,20 @@ def _n_tokens(model: nn.Module, image_size: int) -> int | None:
 
     if patch is None or patch[0] <= 0 or patch[1] <= 0:
         return None
-    # Derived from the size actually measured, not the model's configured
-    # `grid_size`: the two disagree whenever a backbone is run off its native
-    # resolution, and it is the measured grid that drove the FLOPs.
+    # Use measured image_size, not grid_size: non-native resolutions change the attention cost.
     return (image_size // patch[0]) * (image_size // patch[1])
 
 
 def _seg_head_gflops(
-    probe: nn.Module,
+    probe: SegmentationProbe,
     n_channels: int,
     image_size: int,
     device: torch.device,
 ) -> float:
-    """Count the segmentation head alone, mirroring ``SegmentationProbe.forward``.
+    """Count only the segmentation head on features from the real backbone.
 
-    Counting the probe end-to-end would be wrong: ``forward`` wraps the frozen
-    backbone in ``no_grad`` + ``autocast``, which perturbs counts.  So the
-    backbone is run once to populate ``_features``, then only
-    ``head(features, H, W)`` is counted.
+    Run the backbone once to capture its feature shapes.
+    Count ``head(features, H, W)`` separately to exclude backbone operations.
     """
     x = torch.randn(1, n_channels, image_size, image_size, device=device)
     probe._features.clear()
@@ -297,13 +202,7 @@ def _seg_head_gflops(
             return self.head(feats, *self.size)
 
     wrapper = _HeadOnly(probe.head, (image_size, image_size)).to(device).eval()
-    # _count_gflops slices sample[:1]; a list of feature maps is already
-    # batch-1 here, so hand it straight through.
-    from torch.utils.flop_counter import FlopCounterMode
-
-    with lenient_grad_hooks(), FlopCounterMode(display=False) as counter, torch.inference_mode():
-        wrapper(features)
-    return float(counter.get_total_flops()) / 1e9
+    return _count_gflops(wrapper, features)
 
 
 def _flops_row(
@@ -315,7 +214,7 @@ def _flops_row(
     head_type: str = "",
     **values: object,
 ) -> dict:
-    """One compute_cost.csv row; metric slots default to None and are filled per task."""
+    """Build a compute_cost.csv row, leaving unmeasured metrics as None."""
     row = {
         **base_meta,
         "task": task,
@@ -335,61 +234,192 @@ def _flops_row(
         "peak_gpu_mem_gb": None,
         "reserved_gpu_mem_gb": None,
         "timing_batch_size": None,
-        "lenient_grad_hooks": True,
+        "lenient_grad_hooks": False,
         "measured_at": _now(),
     }
     row.update(values)
     return row
 
 
-def main(cfg: DictConfig) -> None:
+def classification_row(
+    cfg: FlopsConfig, model: nn.Module, base_meta: dict[str, Any], device: torch.device
+) -> dict | None:
+    """Measure classification cost, skipping incompatible input bands."""
+    model_name = base_meta["name"]
+    band_config = base_meta["band_config"]
+    n_channels = base_meta["n_channels"]
+    image_size = base_meta["image_size"]
+    try:
+        metrics, used_batch = _measure_backbone(
+            model,
+            n_channels,
+            image_size,
+            device,
+            ProfileTiming(
+                batch_size=cfg.timing.batch_size,
+                n_warmup=cfg.timing.n_warmup,
+                n_measure=cfg.timing.n_measure,
+            ),
+        )
+        gflops_backbone = metrics["gflops"]
+        gflops_probe, params_probe_m, feature_dim = _probe_gflops(
+            model,
+            (n_channels, image_size, image_size),
+            device,
+            cfg.classification.head,
+            cfg.classification.num_classes,
+        )
+    except BandCompatibilityError as exc:  # allow-except: Skip explicitly unsupported bands.
+        logger.warning(
+            "Skipping %s/%s classification: model is incompatible with this "
+            "band config at forward time: %s",
+            model_name,
+            band_config,
+            exc,
+        )
+        return None
+    row = _flops_row(
+        base_meta,
+        model,
+        image_size,
+        task="classification",
+        gflops_backbone=gflops_backbone,
+        gflops_probe=gflops_probe,
+        gflops_total=(None if gflops_backbone is None else gflops_backbone + gflops_probe),
+        params_backbone_m=metrics["params_m"],
+        params_probe_m=params_probe_m,
+        feature_dim=feature_dim,
+        throughput_samples_per_sec=metrics["throughput_samples_per_sec"],
+        latency_ms_per_batch_p50=metrics["latency_ms_per_batch_p50"],
+        peak_gpu_mem_gb=metrics["peak_gpu_mem_gb"],
+        reserved_gpu_mem_gb=metrics["reserved_gpu_mem_gb"],
+        timing_batch_size=used_batch,
+    )
+    logger.info(
+        "%s/%s classification: backbone=%s GF probe=%.6f GF (D=%d)",
+        model_name,
+        band_config,
+        f"{gflops_backbone:.4f}" if gflops_backbone is not None else "None",
+        gflops_probe,
+        feature_dim,
+    )
+
+    return row
+
+
+def _build_seg_probe(
+    model: nn.Module, num_classes: int, settings: SegmentationConfig
+) -> SegmentationProbe:
+    """Use the benchmark probe without allocating an unused training solver."""
+    return SegmentationProbe(
+        backbone=model,
+        layer_names=list(settings.layers),
+        num_classes=num_classes,
+        head_type=settings.head,
+        freeze_backbone=True,
+        temporal_pool=settings.temporal_pool,
+    )
+
+
+def segmentation_rows(
+    options: FlopsSegmentationConfig,
+    model: nn.Module,
+    base_meta: dict,
+    device: torch.device,
+    completed: frozenset[tuple],
+) -> Iterator[dict]:
+    """Yield each completed segmentation measurement before starting the next head."""
+    model_name = base_meta["name"]
+    band_config = base_meta["band_config"]
+    if band_config not in options.band_configs or not options.probe.layers:
+        if band_config in options.band_configs and not options.probe.layers:
+            logger.info(
+                "No segmentation.probe.layers for %s — skipping segmentation cells", model_name
+            )
+        return
+
+    for head_type in options.heads:
+        seg_key = (model_name, band_config, "segmentation", head_type)
+        if seg_key in completed:
+            logger.info("Skip (%s, %s, %s) — already done", model_name, band_config, head_type)
+            continue
+        settings = options.probe.model_copy(update={"head": head_type})
+        yield _segmentation_row(
+            model, settings, {**base_meta, "num_classes": options.num_classes}, device
+        )
+
+
+def _segmentation_row(
+    model: nn.Module, settings: SegmentationConfig, base_meta: dict[str, Any], device: torch.device
+) -> dict[str, Any]:
+    """Measure one head, releasing captured features and hooks before the next cell."""
+    probe = _build_seg_probe(model, base_meta["num_classes"], settings)
+    probe.to(device).eval()
+    n_channels, image_size = base_meta["n_channels"], base_meta["image_size"]
+    try:
+        gflops_head = _seg_head_gflops(probe, n_channels, image_size, device)
+        row = _flops_row(
+            base_meta,
+            model,
+            image_size,
+            task="segmentation",
+            head_type=settings.head,
+            gflops_head=gflops_head,
+            params_backbone_m=_count_params(model),
+            params_head_m=_count_params(probe.head),
+            feature_dim=sum(probe.channels_list),
+        )
+        logger.info(
+            "%s/%s segmentation head=%s: head=%.4f GF (taps=%s)",
+            base_meta["name"],
+            base_meta["band_config"],
+            settings.head,
+            gflops_head,
+            probe.channels_list,
+        )
+        return row
+    finally:
+        for hook in probe.hooks:
+            hook.remove()
+        probe._features.clear()
+        del probe
+        _free(device)
+
+
+def main(config: FlopsConfig) -> None:
     """Measure per-sample compute cost for one model config."""
-    output_path = str(cfg.output)
+    cfg, preset = config.resolve()
+    device = resolve_device(cfg.runtime.device)
+    output_path = cfg.output.file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    device = torch.device(str(cfg.device))
-    image_size = int(cfg.image_size)
-    normalization = str(cfg.normalization)
-    model_target = str(cfg.model._target_)
-    config_name = str(cfg.model.get("name", model_target.split(".")[-1]))
-    # TerraMind's _rgb / non-_rgb configs are the same model at two points on
-    # the band axis, so they report under one merged name.
-    model_name = _TERRAMIND_MERGED_NAME.get(config_name, config_name)
+    torch.manual_seed(cfg.runtime.seed)
+    image_size = cfg.input.image_size
+    normalization = NORMALIZATIONS[cfg.input.normalization]
+    model_target = preset.target
+    model_name = _TERRAMIND_MERGED_NAME.get(preset.name, preset.name)
 
-    ds_cls = get_bench_dataset_class(str(cfg.band_source))
-    bench = ds_cls()
+    bench = get_bench_dataset_class(cfg.input.band_source)()
     band_specs_for = {
         "rgb": bench.select_band_specs(bench.rgb_bands),
         "s2": bench.select_band_specs(None),
     }
 
-    completed = _load_completed(output_path) if bool(cfg.resume) else frozenset()
+    completed = _load_completed(output_path) if cfg.output.resume else frozenset()
 
-    # Merge the model's eval block over the base eval config (models only
-    # override `layers` / `head_type`). Struct mode comes off first: model
-    # configs carry eval keys this pipeline ignores (e.g. `c_range`), which
-    # would otherwise raise ConfigKeyError on merge.
-    seg_eval_cfg = OmegaConf.create(OmegaConf.to_container(cfg.eval, resolve=True))
-    OmegaConf.set_struct(seg_eval_cfg, False)
-    if "eval" in cfg.model and cfg.model.eval is not None:
-        seg_eval_cfg = OmegaConf.merge(seg_eval_cfg, cfg.model.eval)
-    seg_layers = list(seg_eval_cfg.segmentation.get("layers", []))
-
-    rows: list[dict] = []
+    n_written = 0
     n_skipped = 0
 
-    for band_config in list(cfg.band_configs):
-        # A TerraMind config only ever measures the band config its declared
-        # modality matches; the sibling `_rgb` / S2L2A config covers the other.
-        if _is_terramind(cfg.model):
-            declared = str(cfg.model.get("modality", "S2L2A"))
+    for band_config in cfg.input.band_configs:
+        if _is_terramind(preset):
+            declared = str(preset.kwargs.get("modality", "S2L2A"))
             if declared != _MODALITY_FOR_BAND_CONFIG[band_config]:
                 continue
 
         band_specs = band_specs_for[band_config]
         n_channels = len(band_specs)
 
-        model = _build_model(cfg.model, band_specs, normalization, band_config)
+        model = _build_model(preset, band_specs, normalization, band_config)
         if model is None:
             n_skipped += 1
             continue
@@ -401,150 +431,32 @@ def main(cfg: DictConfig) -> None:
             "band_config": band_config,
             "n_channels": n_channels,
             "image_size": image_size,
-            "num_classes": int(cfg.probe_num_classes),
+            "num_classes": cfg.classification.num_classes,
         }
 
-        # --- classification cell ------------------------------------------
         cls_key = (model_name, band_config, "classification", "")
         if cls_key in completed:
             logger.info("Skip (%s, %s, classification) — already done", model_name, band_config)
         else:
-            try:
-                metrics, used_batch = _measure_backbone(
-                    model,
-                    n_channels,
-                    image_size,
-                    device,
-                    int(cfg.timing_batch_size),
-                    int(cfg.n_warmup),
-                    int(cfg.n_measure),
-                )
-                gflops_backbone = metrics["gflops"]
-                gflops_probe, params_probe_m, feature_dim = _probe_gflops(
-                    model,
-                    n_channels,
-                    image_size,
-                    device,
-                    str(cfg.probe_head),
-                    int(cfg.probe_num_classes),
-                )
-            except Exception as exc:
-                # Several wrappers only discover a band mismatch on the first
-                # forward pass (their band mapping runs inside
-                # `_forward_patch_features`). Same skip one stage later; must
-                # not abort — the other band config is usually fine.
-                cause = _is_band_incompatibility(exc)
-                if cause is None:
-                    raise
-                logger.warning(
-                    "Skipping %s/%s classification: model is incompatible with this "
-                    "band config at forward time: %s",
-                    model_name,
-                    band_config,
-                    cause,
-                )
+            row = classification_row(cfg, model, base_meta, device)
+            if row is None:
                 n_skipped += 1
                 del model
                 _free(device)
                 continue
-            rows.append(
-                _flops_row(
-                    base_meta,
-                    model,
-                    image_size,
-                    task="classification",
-                    gflops_backbone=gflops_backbone,
-                    gflops_probe=gflops_probe,
-                    gflops_total=(
-                        None if gflops_backbone is None else gflops_backbone + gflops_probe
-                    ),
-                    params_backbone_m=metrics["params_m"],
-                    params_probe_m=params_probe_m,
-                    feature_dim=feature_dim,
-                    throughput_samples_per_sec=metrics["throughput_samples_per_sec"],
-                    latency_ms_per_batch_p50=metrics["latency_ms_per_batch_p50"],
-                    peak_gpu_mem_gb=metrics["peak_gpu_mem_gb"],
-                    reserved_gpu_mem_gb=metrics["reserved_gpu_mem_gb"],
-                    timing_batch_size=used_batch,
-                )
-            )
-            logger.info(
-                "%s/%s classification: backbone=%s GF probe=%.6f GF (D=%d)",
-                model_name,
-                band_config,
-                f"{gflops_backbone:.4f}" if gflops_backbone is not None else "None",
-                gflops_probe,
-                feature_dim,
-            )
+            append_rows_atomic(output_path, [row])
+            n_written += 1
 
-        # --- segmentation cells -------------------------------------------
-        seg_band_configs = set(cfg.seg_band_configs)
-        if band_config not in seg_band_configs or not seg_layers:
-            if band_config in seg_band_configs and not seg_layers:
-                logger.info(
-                    "No eval.segmentation.layers for %s — skipping segmentation cells", model_name
-                )
-            del model
-            _free(device)
-            continue
-
-        for head_type in list(cfg.seg_head_types):
-            seg_key = (model_name, band_config, "segmentation", head_type)
-            if seg_key in completed:
-                logger.info("Skip (%s, %s, %s) — already done", model_name, band_config, head_type)
-                continue
-            head_cfg = OmegaConf.merge(
-                seg_eval_cfg,
-                OmegaConf.create({"segmentation": {"head_type": head_type}}),
-            )
-            try:
-                # build_seg_probe_and_solver runs _dry_run_channels(), a real
-                # forward pass, so the model must already be on-device.
-                probe, _solver = build_seg_probe_and_solver(
-                    model, int(cfg.seg_num_classes), head_cfg, device, 1e-3
-                )
-            except (ValueError, RuntimeError) as exc:
-                logger.warning(
-                    "Skipping %s/%s seg head=%s: %s", model_name, band_config, head_type, exc
-                )
-                n_skipped += 1
-                continue
-            probe.to(device).eval()
-
-            gflops_head = _seg_head_gflops(probe, n_channels, image_size, device)
-            rows.append(
-                _flops_row(
-                    base_meta,
-                    model,
-                    image_size,
-                    task="segmentation",
-                    head_type=head_type,
-                    num_classes=int(cfg.seg_num_classes),
-                    gflops_head=gflops_head,
-                    params_backbone_m=_count_params(model),
-                    params_head_m=_count_params(probe.head),
-                    feature_dim=sum(probe.channels_list),
-                )
-            )
-            logger.info(
-                "%s/%s segmentation head=%s: head=%.4f GF (taps=%s)",
-                model_name,
-                band_config,
-                head_type,
-                gflops_head,
-                probe.channels_list,
-            )
-            del probe
-            _free(device)
+        for row in segmentation_rows(cfg.segmentation, model, base_meta, device, completed):
+            append_rows_atomic(output_path, [row])
+            n_written += 1
 
         del model
         _free(device)
 
-    if rows:
-        append_rows_atomic(output_path, rows)
     logger.info(
         "Wrote %d rows for %s (%d cells skipped) → %s",
-        len(rows),
+        n_written,
         model_name,
         n_skipped,
         output_path,

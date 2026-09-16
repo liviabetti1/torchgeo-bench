@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the representative segmentation benchmark matrix across all GPUs."""
+"""Compare segmentation models, datasets, heads, and input bands across GPUs."""
 
 import argparse
 import csv
@@ -9,6 +9,7 @@ import logging
 import random
 import signal
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -21,7 +22,10 @@ from _seg_sweep_common import (
     run_exclusively,
     torchgeo_bench_cli,
     write_json_atomic,
+    write_run_config,
 )
+
+from torchgeo_bench.config.run import RunConfig
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +83,7 @@ MODELS = [
     ),
 ]
 
-# These inputs violate the pretrained wrapper's normalization contract,
-# independent of probe head or batch size.
+# These models cannot handle the selected input bands; changing heads or batch sizes cannot help.
 UNSUPPORTED_INPUTS = {
     ("torchgeo/scalemae_large_fmow", "caffe", "rgb"),
     ("torchgeo/scalemae_large_fmow", "caffe", "all"),
@@ -90,7 +93,7 @@ UNSUPPORTED_INPUTS = {
 
 
 def build_jobs() -> list[Job]:
-    """Return every supported combination in the representative matrix."""
+    """Create every supported model, dataset, head, and band combination."""
     jobs: list[Job] = []
     for model in MODELS:
         for dataset in DATASETS:
@@ -103,7 +106,7 @@ def build_jobs() -> list[Job]:
 
 
 def _source_hash(root: Path) -> str:
-    """Fingerprint benchmark code and packaged configuration."""
+    """Identify the exact source files used for this sweep."""
     hasher = hashlib.sha256()
     paths = sorted((root / "src/torchgeo_bench").rglob("*.py"))
     paths.extend(sorted((root / "src/torchgeo_bench/conf").rglob("*.yaml")))
@@ -114,7 +117,7 @@ def _source_hash(root: Path) -> str:
 
 
 def sweep_metadata(root: Path, image_size: int, seed: int) -> dict[str, object]:
-    """Return the result-affecting configuration fingerprint."""
+    """Record the source and settings used to decide whether results can be resumed."""
     return {
         "schema_version": 2,
         "source_hash": _source_hash(root),
@@ -144,7 +147,7 @@ class SweepConfig(RunnerConfig):
 
 
 class SweepRunner(BaseGpuRunner):
-    """Dynamically schedule independent benchmark jobs across GPUs."""
+    """Run segmentation comparisons on the selected GPUs."""
 
     config: SweepConfig
     subprocess_env = BaseGpuRunner.subprocess_env | {"TOKENIZERS_PARALLELISM": "false"}
@@ -159,7 +162,7 @@ class SweepRunner(BaseGpuRunner):
     def _normalized_size(value: str) -> str:
         try:
             return str(int(float(value)))
-        except ValueError:
+        except ValueError:  # allow-except: preserve non-numeric size labels in resume keys
             return value
 
     def _completed_keys(self) -> set[tuple[str, str, str, str, str]]:
@@ -219,24 +222,45 @@ class SweepRunner(BaseGpuRunner):
         divisor = 2 ** (attempt - 1)
         loader_batch = max(1, job.model.loader_batch_size // divisor)
         probe_batch = job.model.probe_batch_size
+        config_path = self.config.state_dir / "configs" / f"{job.job_id}.yaml"
+        write_run_config(
+            config_path,
+            RunConfig.model_validate(
+                {
+                    "model": {"name": job.model.config},
+                    "datasets": [job.dataset],
+                    "segmentation": {
+                        "head": job.head,
+                        "epochs": EPOCHS,
+                        "batch_size": probe_batch,
+                        "cache_features": True,
+                        "cache_dtype": "float16",
+                    },
+                }
+            ),
+        )
         return [
-            str(self.config.cli),
+            sys.executable,
+            "-m",
+            "torchgeo_bench",
             "run",
-            f"model={job.model.config}",
-            f"dataset.names=[{job.dataset}]",
-            f"dataset.bands={job.bands}",
-            f"dataset.image_size={self.config.image_size}",
-            f"dataset.batch_size={loader_batch}",
-            f"dataset.num_workers={self.config.num_workers}",
-            f"seed={self.config.seed}",
-            f"device=cuda:{gpu}",
-            f"eval.segmentation.head_type={job.head}",
-            f"eval.segmentation.epochs={EPOCHS}",
-            f"eval.segmentation.batch_size={probe_batch}",
-            "eval.segmentation.cache_features=true",
-            "eval.segmentation.cache_dtype=float16",
-            f"output={self.config.output}",
-            "resume=true",
+            "--config",
+            str(config_path),
+            "--bands",
+            job.bands,
+            "--image-size",
+            str(self.config.image_size),
+            "--batch-size",
+            str(loader_batch),
+            "--workers",
+            str(self.config.num_workers),
+            "--seed",
+            str(self.config.seed),
+            "--device",
+            f"cuda:{gpu}",
+            "--output",
+            str(self.config.output),
+            "--resume",
         ]
 
     def run(self) -> None:
@@ -270,7 +294,7 @@ class SweepRunner(BaseGpuRunner):
 
 
 def ensure_datasets(config: SweepConfig, *, download_missing: bool) -> None:
-    """Download GeoBench V2 datasets whose canonical directories are absent."""
+    """Download missing GeoBench V2 datasets into the expected folders."""
     data_root = config.root / "data/geobenchv2"
     missing = [name for name in DATASETS if not (data_root / name).is_dir()]
     if not missing:

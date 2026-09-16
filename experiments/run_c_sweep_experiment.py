@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""C-sweep analysis for linear probing.
+"""Compare linear-probe accuracy across values of C.
 
-Extracts features once per (model, dataset), then sweeps the L2
-regularization strength ``C`` of :class:`torchgeo_bench.linear.LogisticRegression`
-and records train/val/test accuracy for each ``C`` value.
+Larger C means less weight regularization.
+
+Extract features once per model/dataset pair and reuse them for every fit.
 
 Usage:
     python experiments/run_c_sweep_experiment.py
@@ -22,10 +22,13 @@ from _runner import add_devices_argument, default_output
 from sklearn.metrics import accuracy_score
 from tqdm import tqdm
 
+from torchgeo_bench.config.presets import build_model, resolve_run_config
+from torchgeo_bench.config.run import RunConfig
+from torchgeo_bench.config.schema import ModelConfig, RuntimeConfig
 from torchgeo_bench.datasets import get_bench_dataset_class, get_datasets
 from torchgeo_bench.datasets.base import BandSpec
 from torchgeo_bench.linear import LogisticRegression
-from torchgeo_bench.utils import extract_features
+from torchgeo_bench.utils import FeatureSplit, FeatureSplits, extract_features
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,72 +40,39 @@ IMAGE_SIZE = 224
 DATASETS = ["m-bigearthnet", "m-brick-kiln", "m-eurosat", "m-forestnet", "m-pv4ger", "m-so2sat"]
 
 MODEL_CONFIGS = {
-    "resnet18": {
-        "_target_": "torchgeo_bench.models.timm.TimmPatchBenchModel",
-        "model_name": "resnet18",
-        "pretrained": True,
-        "global_pool": "avg",
-        "name": "resnet18",
-    },
-    "resnet50": {
-        "_target_": "torchgeo_bench.models.timm.TimmPatchBenchModel",
-        "model_name": "resnet50",
-        "pretrained": True,
-        "global_pool": "avg",
-        "name": "resnet50",
-    },
-    "convnext_large_dinov3": {
-        "_target_": "torchgeo_bench.models.timm.TimmPatchBenchModel",
-        "model_name": "convnext_large.dinov3_lvd1689m",
-        "pretrained": True,
-        "global_pool": "avg",
-        "name": "convnext_large_dinov3",
-    },
-    "dinov3": {
-        "_target_": "torchgeo_bench.models.timm.TimmPatchBenchModel",
-        "model_name": "vit_large_patch16_dinov3.lvd1689m",
-        "pretrained": True,
-        "global_pool": "avg",
-        "use_cls_token": False,
-        "name": "vit_large_patch16_dinov3",
-    },
-    "dinov3sat": {
-        "_target_": "torchgeo_bench.models.timm.TimmPatchBenchModel",
-        "model_name": "vit_large_patch16_dinov3.sat493m",
-        "pretrained": True,
-        "global_pool": "avg",
-        "use_cls_token": False,
-        "name": "vit_large_patch16_dinov3sat",
-    },
+    "resnet18": ModelConfig(name="timm/resnet18"),
+    "resnet50": ModelConfig(name="timm/resnet50"),
+    "convnext_large_dinov3": ModelConfig(name="timm/convnext_large_dinov3"),
+    "dinov3": ModelConfig(name="timm/vit/vit_large_patch16_dinov3", kwargs={"auto_resize": False}),
+    "dinov3sat": ModelConfig(
+        name="timm/vit/vit_large_patch16_dinov3sat", kwargs={"auto_resize": False}
+    ),
 }
 
 C_VALUES = np.sort(np.unique(np.append(np.logspace(-7, 2, 40), 1.0)))
 
 
-def instantiate_model(model_cfg: dict, bands: list[BandSpec]) -> torch.nn.Module:
-    """Instantiate a model from its ``MODEL_CONFIGS`` entry."""
-    target = model_cfg["_target_"]
-    module_name, class_name = target.rsplit(".", 1)
-    module = __import__(module_name, fromlist=[class_name])
-    cls = getattr(module, class_name)
-
-    kwargs = {k: v for k, v in model_cfg.items() if k not in ("_target_", "name")}
-    kwargs["bands"] = bands
-    return cls(**kwargs)
+def instantiate_model(
+    model_cfg: ModelConfig, bands: list[BandSpec], dataset_name: str
+) -> torch.nn.Module:
+    """Create a model with the requested configuration and input bands."""
+    _, preset = resolve_run_config(
+        RunConfig(model=model_cfg, datasets=[dataset_name], runtime=RuntimeConfig(seed=SEED)),
+        dataset_name,
+    )
+    return build_model(preset, bands=bands, normalization="bandspec_zscore")
 
 
 def run_c_sweep(
     model_name: str,
     dataset_name: str,
-    x_train: np.ndarray,
-    y_train: np.ndarray,
-    x_val: np.ndarray,
-    y_val: np.ndarray,
-    x_test: np.ndarray,
-    y_test: np.ndarray,
+    splits: FeatureSplits[np.ndarray],
     device: torch.device,
 ) -> list[dict]:
-    """Train ``LogisticRegression`` for each ``C`` and return per-C metrics."""
+    """Return train, validation, and test accuracy for each C value."""
+    x_train, y_train = splits.train.features, splits.train.labels
+    x_val, y_val = splits.val.features, splits.val.labels
+    x_test, y_test = splits.test.features, splits.test.labels
     rows = []
     x_train_t = torch.from_numpy(x_train)
     y_train_t = torch.from_numpy(y_train).long()
@@ -133,9 +103,9 @@ def run_c_sweep(
                 "val_acc": float(accuracy_score(y_val, val_preds)),
                 "test_acc": float(accuracy_score(y_test, test_preds)),
                 "feature_dim": int(x_train.shape[1]),
-                "n_train": int(len(x_train)),
-                "n_val": int(len(x_val)),
-                "n_test": int(len(x_test)),
+                "n_train": len(x_train),
+                "n_val": len(x_val),
+                "n_test": len(x_test),
             }
         )
 
@@ -143,7 +113,7 @@ def run_c_sweep(
 
 
 def run_dataset_sweep(dataset_name: str, device: torch.device, all_rows: list[dict]) -> list[dict]:
-    """Run the C sweep for one dataset, appending rows in-place to ``all_rows``."""
+    """Evaluate unfinished models for one dataset and append their results to ``all_rows``."""
     bench_cls = get_bench_dataset_class(dataset_name)
     if bench_cls.multilabel:
         logger.warning(
@@ -180,13 +150,13 @@ def run_dataset_sweep(dataset_name: str, device: torch.device, all_rows: list[di
 
         logger.info("=== %s/%s ===", dataset_name, model_name)
         logger.info("  Loading model %s...", model_name)
-        model = instantiate_model(model_cfg, bands)
+        model = instantiate_model(model_cfg, bands, dataset_name)
         model.to(device).eval()
 
         logger.info("  Extracting features...")
-        x_train, y_train = extract_features(model, train_loader, device, verbose=False)
-        x_val, y_val = extract_features(model, val_loader, device, verbose=False)
-        x_test, y_test = extract_features(model, test_loader, device, verbose=False)
+        x_train, y_train = extract_features(model, train_loader, device, description=None)
+        x_val, y_val = extract_features(model, val_loader, device, description=None)
+        x_test, y_test = extract_features(model, test_loader, device, description=None)
         logger.info(
             "  Features: train=%s, val=%s, test=%s",
             x_train.shape,
@@ -200,12 +170,11 @@ def run_dataset_sweep(dataset_name: str, device: torch.device, all_rows: list[di
         rows = run_c_sweep(
             model_name,
             dataset_name,
-            x_train,
-            y_train,
-            x_val,
-            y_val,
-            x_test,
-            y_test,
+            FeatureSplits(
+                FeatureSplit(x_train, y_train),
+                FeatureSplit(x_val, y_val),
+                FeatureSplit(x_test, y_test),
+            ),
             device,
         )
         all_rows.extend(rows)
@@ -216,7 +185,7 @@ def run_dataset_sweep(dataset_name: str, device: torch.device, all_rows: list[di
 
 
 def main() -> int:
-    """Entry point."""
+    """Run the C sweep and save its results."""
     parser = argparse.ArgumentParser(description="C-sweep for linear probing")
     add_devices_argument(parser)
     args = parser.parse_args()
@@ -236,7 +205,6 @@ def main() -> int:
         logger.info("Resume: loaded %d existing rows from %s", len(all_rows), OUTPUT)
 
     torch.manual_seed(SEED)
-    np.random.seed(SEED)
     logger.info("Running C sweep on %d datasets -> %s", len(DATASETS), OUTPUT)
 
     for dataset_name in DATASETS:

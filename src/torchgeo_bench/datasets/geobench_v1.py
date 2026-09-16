@@ -1,12 +1,11 @@
-"""GeoBench V1 PyTorch :class:`Dataset` and per-wrapper base class.
+"""GeoBench V1 loaders for local HDF5 files and WebDataset shards.
 
-Lightweight HDF5 reader that does not depend on the upstream ``geobench``
-package. Loads samples directly from ``classification_v1.0/<dataset>/``
-HDF5 files using the partition JSON files distributed alongside them.
+HDF5 samples require JSON metadata and partition files, not the upstream ``geobench`` package.
+
+Standard V1 downloads use JSON tar shards instead.
 """
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -16,15 +15,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ._metadata import unpickle_metadata
+from ._metadata import read_hdf5_metadata
 from .base import BenchDataset
 
 V1_ROOT = Path("data/classification_v1.0")
 V1_SHARDED_ROOT = Path("data/classification_v1.0_wds")
-
-# Public mirror of the WebDataset-converted V1 collection.  Auto-pulled the
-# first time a dataset is requested if no local copy is present.
-V1_HF_REPO_ID = "isaaccorley/geobenchv1-webdataset"
 
 
 class GeoBenchv1(Dataset):
@@ -40,7 +35,7 @@ class GeoBenchv1(Dataset):
         transform: Optional callable applied to each sample dict.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - public dataset constructor.
         self,
         root: str | Path,
         dataset_name: str,
@@ -58,7 +53,10 @@ class GeoBenchv1(Dataset):
 
         self.dataset_dir = self.root / dataset_name
         if not self.dataset_dir.exists():
-            raise FileNotFoundError(f"Dataset directory not found: {self.dataset_dir}")
+            raise FileNotFoundError(
+                f"Dataset directory not found: {self.dataset_dir}. "
+                "Run `torchgeo-bench download geobench_v1`."
+            )
 
         partition_file = self.dataset_dir / f"{partition}_partition.json"
         if not partition_file.exists():
@@ -80,16 +78,16 @@ class GeoBenchv1(Dataset):
             self.band_names = list(bands)
 
     def _load_sample_metadata(self, sample_id: str) -> dict:
-        """Load pickled metadata from HDF5 attributes."""
+        """Load JSON metadata from HDF5 attributes."""
         sample_path = self.dataset_dir / f"{sample_id}.hdf5"
         with h5py.File(sample_path, "r") as f:
-            return unpickle_metadata(f.attrs["pickle"])
+            return read_hdf5_metadata(f.attrs)
 
     def __len__(self) -> int:
         return len(self.sample_ids)
 
-    def __getitem__(self, idx: int) -> dict:
-        sample_id = self.sample_ids[idx]
+    def __getitem__(self, index: int) -> dict:
+        sample_id = self.sample_ids[index]
         sample_path = self.dataset_dir / f"{sample_id}.hdf5"
 
         metadata = self._load_sample_metadata(sample_id)
@@ -129,12 +127,7 @@ class GeoBenchv1(Dataset):
 
 
 class _V1Dataset(BenchDataset):
-    """Base class for every GeoBench V1 wrapper.
-
-    Concrete subclasses just declare metadata (``name``, ``num_classes``,
-    ``bands``, ``rgb_bands``, ``split_sizes``, ``multilabel``); ``get_dataset``
-    is fully implemented here and dispatches to :class:`GeoBenchv1`.
-    """
+    """Load GeoBench V1 splits for wrappers that declare dataset metadata."""
 
     supports_partitions = True
 
@@ -152,31 +145,18 @@ class _V1Dataset(BenchDataset):
     ) -> Dataset:
         """Return a torch :class:`Dataset` for the split (raw values).
 
-        Backend resolution order:
+        Loaders are tried in this order:
 
-        1. **Sharded WebDataset** at :data:`V1_SHARDED_ROOT` if shards already
-           exist locally (5–7× faster on NFS, fork-safe at high
-           ``num_workers``).
-        2. **Per-sample HDF5** at :data:`V1_ROOT` if the legacy distribution
-           layout is present.
-        3. **HuggingFace mirror** :data:`V1_HF_REPO_ID` — auto-downloaded into
-           :data:`V1_SHARDED_ROOT` on first use, then served via the sharded
-           backend.  Disabled by ``GEOBENCH_V1_NO_HF_DOWNLOAD=1``.
+        1. **Sharded WebDataset** at :data:`V1_SHARDED_ROOT` if shards exist locally.
+        2. **Custom JSON-metadata HDF5** at :data:`V1_ROOT` if present.
+
+        Missing data must be downloaded with ``torchgeo-bench download`` first.
         """
         v1_split: Literal["train", "valid", "test"] = "valid" if split == "val" else split  # type: ignore[assignment]
         source_bands = tuple(spec.source_name for spec in self.select_band_specs(bands))
 
         sharded_dir = V1_SHARDED_ROOT / self.name
         hdf5_dir = self.data_root() / self.name
-        if (
-            not (sharded_dir.exists() and any(sharded_dir.glob("shard_*.tar")))
-            and not hdf5_dir.exists()
-            and os.environ.get("GEOBENCH_V1_NO_HF_DOWNLOAD") != "1"
-        ):
-            from ._v1_webdataset import ensure_sharded_root
-
-            ensure_sharded_root(self.name, V1_SHARDED_ROOT)
-
         if sharded_dir.exists() and any(sharded_dir.glob("shard_*.tar")):
             from ._v1_webdataset import GeoBenchv1Sharded
 
@@ -187,6 +167,11 @@ class _V1Dataset(BenchDataset):
                 partition=partition,
                 bands=source_bands,
                 transform=transform,
+            )
+        if not hdf5_dir.exists():
+            raise FileNotFoundError(
+                f"GeoBench V1 dataset '{self.name}' is not downloaded. "
+                f"Run `torchgeo-bench download {self.name}` first."
             )
         return GeoBenchv1(
             root=self.data_root(),

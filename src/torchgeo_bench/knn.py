@@ -2,10 +2,8 @@
 
 Single-label and multi-label k-nearest neighbours backed by FAISS.
 
-The CPU path uses the selected FAISS backend's ``IndexFlatL2`` implementation.
-The GPU path delegates to :mod:`faissknn` when that backend provides CUDA
-resources. The two paths produce identical predictions modulo float-precision
-noise.
+CPU uses ``IndexFlatL2``; CUDA delegates to :mod:`faissknn` when GPU resources are available.
+For L2 distance, predictions agree apart from floating-point differences.
 """
 
 import logging
@@ -53,11 +51,11 @@ def resolve_knn_device(requested_device: str | None, model_device: str) -> str:
     if requested_device is not None:
         raise RuntimeError(
             f"GPU-enabled FAISS is unavailable for explicit KNN device {requested_device!r}. "
-            "Set eval.knn_device=cpu or install a GPU-enabled FAISS backend."
+            "Set --knn-device cpu or install a GPU-enabled FAISS backend."
         )
     logger.warning(
         "GPU-enabled FAISS is unavailable; using CPU for KNN while the model remains on %s. "
-        "Set eval.knn_device=cpu to make this choice explicit.",
+        "Set --knn-device cpu to make this choice explicit.",
         model_device,
     )
     return "cpu"
@@ -66,16 +64,15 @@ def resolve_knn_device(requested_device: str | None, model_device: str) -> str:
 class KNNClassifier:
     """FAISS-backed KNN classifier with single- and multi-label support.
 
-    Multi-label mode is auto-detected from the shape of ``y`` during
-    :meth:`fit`: 1-D labels → single-label, 2-D labels → multi-label.
+    :meth:`fit` uses 1-D labels for single-label tasks and 2-D labels for multi-label tasks.
 
     Args:
         n_neighbors: Number of neighbours (k). Clamped to ``min(k, n_train)``
             before either backend is constructed.
-        device: ``"cpu"`` (default) → the FAISS CPU index. Anything else
-            (``"cuda"``, ``"cuda:0"``) requires ``faissknn`` with a GPU FAISS
-            backend (installed automatically on Linux x86_64); raises an
-            actionable error if unavailable.
+        device: ``"cpu"`` (default) uses the FAISS CPU index.
+            Other values require ``faissknn`` with GPU FAISS.
+            The GPU backend is installed automatically on Linux x86_64.
+            An unavailable backend raises an error.
         metric: Distance metric — ``"l2"`` (default), ``"ip"`` (inner
             product), or ``"cosine"`` (cosine similarity; auto-normalizes
             inputs). GPU path only; CPU path always uses L2.
@@ -88,23 +85,22 @@ class KNNClassifier:
         n_neighbors: int = 5,
         device: str = "cpu",
         metric: Literal["l2", "ip", "cosine"] = "l2",
+        *,
         use_fp16: bool = False,
     ) -> None:
         if isinstance(n_neighbors, bool) or not isinstance(n_neighbors, int) or n_neighbors < 1:
             raise ValueError(f"n_neighbors must be a positive integer, got {n_neighbors!r}.")
         self.n_neighbors = n_neighbors
         self._effective_n_neighbors: int | None = None
-        self.device = device
+        self.device = "cuda:0" if device == "cuda" else device
         self.metric = metric
         self.use_fp16 = use_fp16
 
-        # CPU path state
         self._index: faiss.Index | None = None
         self._y: np.ndarray | None = None
         self._n_classes: int | None = None
         self._multi_label: bool = False
 
-        # GPU path state (faissknn delegate)
         self._impl = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> Self:
@@ -129,8 +125,6 @@ class KNNClassifier:
             self._fit_gpu(X, y)
         return self
 
-    # ---- CPU path (faiss IndexFlatL2) -------------------------------------
-
     def _fit_cpu(self, X: np.ndarray, y: np.ndarray) -> None:
         self._index = faiss.IndexFlatL2(X.shape[1])
         self._index.add(X)
@@ -149,8 +143,10 @@ class KNNClassifier:
         return indices
 
     def _neighbour_counts(self, indices: np.ndarray) -> np.ndarray:
-        """Vectorized per-row bincount: shape (n_test, n_classes)."""
-        n_test, k = indices.shape
+        """Count each class's votes per test sample, returning shape (n_test, n_classes)."""
+        assert self._y is not None
+        assert self._n_classes is not None
+        n_test, _k = indices.shape
         labels = self._y[indices].astype(np.int64)  # (n_test, k)
         offsets = (np.arange(n_test) * self._n_classes)[:, None]
         flat = (labels + offsets).ravel()
@@ -174,24 +170,16 @@ class KNNClassifier:
             return self._y[indices].mean(axis=1)
         return self._neighbour_counts(indices).astype(np.float32) / k_eff
 
-    # ---- GPU path (faissknn delegate) -------------------------------------
-
     def _fit_gpu(self, X: np.ndarray, y: np.ndarray) -> None:
-        try:
-            from faissknn import FaissKNNClassifier, FaissKNNMultilabelClassifier
-        except ImportError as exc:  # pragma: no cover — covered by env, not unit tests
-            raise ImportError(
-                f"KNNClassifier(device={self.device!r}): faissknn is not installed. "
-                "GPU KNN requires Linux x86_64, where it installs automatically; "
-                'otherwise request device="cpu".'
-            ) from exc
+        from faissknn import FaissKNNClassifier, FaissKNNMultilabelClassifier
 
         if not gpu_faiss_available():
             raise RuntimeError(
                 f"KNNClassifier(device={self.device!r}): GPU-enabled FAISS is unavailable. "
-                "Set eval.knn_device=cpu for CLI runs or request device='cpu'."
+                "Set --knn-device cpu for CLI runs or request device='cpu'."
             )
 
+        assert self._effective_n_neighbors is not None
         kwargs = {
             "n_neighbors": self._effective_n_neighbors,
             "device": self.device,
@@ -202,18 +190,15 @@ class KNNClassifier:
             self._n_classes = int(y.shape[1])
             self._impl = FaissKNNMultilabelClassifier(**kwargs)
         else:
-            # faissknn uses len(unique(y)) as n_classes, which breaks when labels
-            # have gaps (e.g. a small partition missing class 4 but containing class 11).
-            # Pass n_classes=max(y)+1 to guarantee the counts array is large enough.
+            # Gaps in class IDs require max(y) + 1 slots, not faissknn's unique-label count.
             self._n_classes = int(np.max(y)) + 1
             self._impl = FaissKNNClassifier(n_classes=self._n_classes, **kwargs)
-        self._impl.fit(X, y.astype(np.int64))
+        with torch.cuda.device(self.device):
+            self._impl.fit(X, y.astype(np.int64))
 
     def _to_gpu_tensor(self, X: np.ndarray) -> torch.Tensor:
-        """Convert numpy array to a CUDA tensor for zero-copy faissknn input."""
+        """Give faissknn a CUDA tensor so it can use device memory directly."""
         return torch.from_numpy(np.ascontiguousarray(X.astype(np.float32))).to(self.device)
-
-    # ---- Public API -------------------------------------------------------
 
     @property
     def multi_label(self) -> bool:
@@ -229,7 +214,9 @@ class KNNClassifier:
         if _is_cpu_device(self.device):
             return self._predict_cpu(X)
         assert self._impl is not None, "Call fit() first."
-        result = self._impl.predict(self._to_gpu_tensor(X))
+        # FAISS's Torch wrapper uses the current device to choose its CUDA stream.
+        with torch.cuda.device(self.device):
+            result = self._impl.predict(self._to_gpu_tensor(X))
         return result.cpu().numpy() if isinstance(result, torch.Tensor) else result
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
@@ -237,5 +224,6 @@ class KNNClassifier:
         if _is_cpu_device(self.device):
             return self._predict_proba_cpu(X)
         assert self._impl is not None, "Call fit() first."
-        result = self._impl.predict_proba(self._to_gpu_tensor(X))
+        with torch.cuda.device(self.device):
+            result = self._impl.predict_proba(self._to_gpu_tensor(X))
         return result.cpu().numpy() if isinstance(result, torch.Tensor) else result

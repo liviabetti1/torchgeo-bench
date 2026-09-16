@@ -20,42 +20,22 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
+from torchgeo_bench.coordbench.catalog import (
+    CDC_PLACES_MEASURES,
+    DEEPMIND_EVAL_CONFIGS,
+    FAMILY_BENCHMARKS,
+    SUSTAINBENCH_TASKS,
+    USAVARS_LABELS,
+)
+
 logger = logging.getLogger(__name__)
 
-# Unified source for every benchmark below.
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
 
-DEEPMIND_EVAL_CONFIGS = (
-    "africa_crop_mask",
-    "aster_ged",
-    "canada_crops_coarse",
-    "canada_crops_fine",
-    "descals",
-    "ethiopia_crops",
-    "glance",
-    "lcmap_lc",
-    "lcmap_lcc",
-    "lcmap_lu",
-    "lcmap_luc",
-    "lucas_lc",
-    "lucas_lu",
-    "openet_ensemble",
-    "us_trees",
-)
-
-USAVARS_LABELS = (
-    "treecover",
-    "elevation",
-    "population",
-    "nightlights",
-    "income",
-    "roads",
-    "housing",
-)
 USAVARS_NODATA = -999.0  # nodata sentinel in the label CSVs
 # log1p the heavy right-skewed targets (matches PDFM's own convention for pop/nightlights).
 USAVARS_LOG_LABELS = frozenset({"population", "income", "nightlights", "housing"})
@@ -436,7 +416,7 @@ def load_usavars() -> list[CoordBenchmark]:
         lat_a = df[cl["lat"]].to_numpy(np.float64)
         lon_a = df[cl["lon"]].to_numpy(np.float64)
         val_a = df[value_col].to_numpy(np.float64)
-        keep = val_a != USAVARS_NODATA  # drop nodata rows
+        keep = val_a != USAVARS_NODATA
         lat_a, lon_a, val_a = lat_a[keep], lon_a[keep], val_a[keep]
         if label in USAVARS_LOG_LABELS:
             val_a = np.log1p(val_a)
@@ -520,8 +500,7 @@ def load_deepmind() -> list[CoordBenchmark]:
         label = df["label"].to_numpy()
         integral = np.all(np.isfinite(label)) and np.allclose(label, np.round(label))
         is_clf = bool(integral and np.unique(label).size <= 100)
-        # CoordBench always carries a `timestamp` column, all-null when the source has no
-        # per-point time; keep year None in that case rather than an all-NaN array.
+        # Missing source timestamps produce an all-null column; use year=None, not an all-NaN array.
         year = None
         if ts_col is not None:
             yr = pd.to_datetime(df[ts_col], unit="ms").dt.year
@@ -557,37 +536,6 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "deepmind": load_deepmind,
 }
 
-
-# Benchmark names each family emits; lets a selection load only the needed family,
-# and lets callers enumerate the suite without a download.
-FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
-    "pdfm": ("pdfm-conus27",),
-    "air_temp": ("satclip-air-temp",),
-    "california_housing": ("california-housing",),
-    "satclip": (
-        "satclip-country",
-        "satclip-ecoregion",
-        "satclip-biome",
-        "satclip-population",
-        "satclip-elevation",
-    ),
-    "sustainbench": tuple(f"sustainbench-{k}" for k in SUSTAINBENCH_TASKS),
-    "better_together": (
-        "bt-cropharvest",
-        "bt-biomass",
-        "bt-landcover",
-        "bt-bioclim",
-        "bt-population",
-        "bt-distroad",
-    ),
-    "cdc_places": tuple(f"places-{k}" for k in CDC_PLACES_MEASURES),
-    "usavars": tuple(f"mosaiks-{label}" for label in USAVARS_LABELS),
-    "country": ("country",),
-    "ecoregions": ("ecoregions",),
-    "worldclim": ("worldclim-bio1", "worldclim-bio12"),
-    "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
-    "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
-}
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
@@ -625,7 +573,6 @@ def load_benchmarks(names: str | list[str] = "all") -> list[CoordBenchmark]:
     else:
         selection = list(names)
 
-    # Resolve the selection to (families to load, per-family name filters).
     families_to_load: list[str] = []
     name_filter: dict[str, set[str]] = {}
     for entry in selection:

@@ -1,269 +1,115 @@
-"""Command-line interface for ``torchgeo-bench``.
+# Copyright (c) TorchGeo Contributors. All rights reserved.
+# Licensed under the MIT License.
 
-Subcommands: ``run`` (benchmark), ``flops`` (compute-cost measurement), and
-``download`` (datasets).  This module imports only the standard library so
-``torchgeo-bench --help`` is instant; torch and friends load only once a
-command actually starts doing work.
-"""
+"""Command line interface: benchmark runs, catalogs, downloads, and measurements."""
 
 import argparse
+import pathlib
 import sys
+from collections.abc import Callable, Sequence
 
-_RUN_EPILOG = """\
-examples:
-  torchgeo-bench run -m timm/resnet50 -d m-eurosat
-  torchgeo-bench run -m torchgeo/scalemae_large_fmow -d m-eurosat,m-so2sat --device cuda:1
-  torchgeo-bench run -m rcf dataset.batch_size=128 eval.knn_k=10
-
-Any key=value pair overrides the config (values parse as YAML, e.g.
-dataset.names=[m-eurosat]). Flags are shorthand for common overrides and win
-over positional key=value pairs. Use --print-config to see the merged result.
-"""
+from . import __version__, commands
+from .commands.coord_arguments import add_coord_arguments
+from .commands.flops_arguments import add_flops_arguments
+from .commands.profile_arguments import add_profile_arguments
+from .commands.run_arguments import add_run_arguments
+from .config import list_model_configs
+from .datasets import get_dataset_task, list_datasets
 
 
-def _add_override_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "overrides",
-        nargs="*",
-        metavar="key=value",
-        help="Config overrides, e.g. dataset.batch_size=128 (values parse as YAML)",
-    )
+def _model_detail(name: str) -> str:
+    """Return the packaged model preset for a catalog detail request."""
+    path = pathlib.Path(__file__).parent / "conf" / "model" / f"{name}.yaml"
+    return path.read_text(encoding="utf-8")
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="torchgeo-bench",
-        description="Benchmark geospatial foundation models on GeoBench datasets.",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+def _dataset_detail(name: str) -> str:
+    """Return lightweight metadata for a dataset catalog detail request."""
+    task = get_dataset_task(name)
+    return f"name: {name}\ntask: {task}\n"
 
-    run = sub.add_parser(
-        "run",
-        help="Run KNN / linear-probe / segmentation benchmarks",
-        epilog=_RUN_EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    run.add_argument(
-        "-m", "--model", default=None, help="Model config, e.g. timm/resnet50 (default: rcf)"
-    )
-    run.add_argument(
-        "-d", "--datasets", default=None, help="Comma-separated dataset names, or 'all'"
-    )
-    run.add_argument("--device", default=None, help="Torch device, e.g. cuda:1 or cpu")
-    run.add_argument(
-        "-o",
-        "--output",
-        default=None,
-        help="Results CSV path (default: results/models/<model name>.csv)",
-    )
-    run.add_argument(
-        "--resume",
-        action="store_true",
-        help="Skip (dataset, method, config) combos already in the output CSV",
-    )
-    run.add_argument("--seed", type=int, default=None, help="Random seed (default: 0)")
-    run.add_argument("--partition", default=None, help="GeoBench partition (default: 'default')")
-    run.add_argument("--bands", default=None, help="rgb | all | comma-separated band names")
-    run.add_argument(
-        "--batch-size", type=int, default=None, help="Dataloader batch size (default: 64)"
-    )
-    run.add_argument(
-        "--image-size", type=int, default=None, help="Resize edge in px (default: 224)"
-    )
-    run.add_argument(
-        "--normalization",
-        choices=["bandspec_zscore", "model_native", "minmax", "minmax_zscore", "identity"],
-        default=None,
-        help="Input normalization strategy (default: bandspec_zscore)",
-    )
-    run.add_argument("--skip-linear", action="store_true", help="Skip the linear probe (KNN only)")
-    run.add_argument(
-        "--bootstrap", type=int, default=None, help="Bootstrap resamples for CIs (default: 200)"
-    )
-    run.add_argument("-v", "--verbose", action="store_true", help="Verbose progress logging")
-    run.add_argument("--print-config", action="store_true", help="Print the merged config and exit")
-    run.add_argument(
-        "--list-models", action="store_true", help="List available model configs and exit"
-    )
-    _add_override_arg(run)
-    run.set_defaults(func=_cmd_run)
 
-    flops = sub.add_parser("flops", help="Measure per-sample compute cost (GFLOPs)")
-    flops.add_argument(
-        "-m", "--model", required=False, default=None, help="Model config (required)"
-    )
-    flops.add_argument("--device", default=None, help="Torch device")
-    flops.add_argument("-o", "--output", default=None, help="Results CSV path")
-    flops.add_argument(
-        "--print-config", action="store_true", help="Print the merged config and exit"
-    )
-    _add_override_arg(flops)
-    flops.set_defaults(func=_cmd_flops)
+def _setup_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser without importing numerical dependencies."""
+    parser = argparse.ArgumentParser(prog="torchgeo-bench")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    subcommands = parser.add_subparsers(dest="command", required=True)
 
-    download = sub.add_parser("download", help="Download benchmark datasets")
-    download.add_argument(
-        "target",
-        choices=["geobench_v1", "geobench_v2", "eurosat", "resisc45"],
-        help="What to download",
-    )
-    download.add_argument(
-        "-o", "--output-dir", default="data", help="Benchmark data root (default: data)"
-    )
-    download.add_argument(
-        "--datasets", default=None, help="(GeoBench only) comma-separated dataset names"
-    )
-    download.set_defaults(func=_cmd_download)
+    # Image benchmarks
+    run = subcommands.add_parser("run", help="Run image benchmarks")
+    add_run_arguments(run)
 
+    # Model and dataset catalogs
+    for name, help_text in (
+        ("models", "List model presets or show one preset"),
+        ("datasets", "List datasets or show one dataset"),
+    ):
+        command = subcommands.add_parser(name, help=help_text)
+        command.add_argument("name", nargs="?")
+
+    # Dataset downloads
+    download = subcommands.add_parser("download", help="Download benchmark datasets")
+    download.add_argument("target", nargs="+")
+    download.add_argument("--output-dir", default="data")
+    download.add_argument("--datasets")
+
+    # Inference profiling and compute costs
+    profile = subcommands.add_parser("profile", help="Measure one real inference batch")
+    add_profile_arguments(profile)
+    flops = subcommands.add_parser("flops", help="Measure synthetic compute cost")
+    add_flops_arguments(flops)
+
+    # Coordinate benchmarks
+    coord = subcommands.add_parser("coord", help="Run coordinate encoder benchmarks")
+    add_coord_arguments(coord)
     return parser
 
 
-def _setup_logging() -> None:
-    import logging
-
-    from rich.logging import RichHandler
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
-    )
-
-
-def _flag_overrides(args: argparse.Namespace) -> list[str]:
-    """Translate convenience flags into config dotlist overrides."""
-    overrides = []
-    if args.model is not None:
-        overrides.append(f"model={args.model}")
-    if getattr(args, "datasets", None) is not None:
-        names = args.datasets if args.datasets == "all" else f"[{args.datasets}]"
-        overrides.append(f"dataset.names={names}")
-    if args.device is not None:
-        overrides.append(f"device={args.device}")
-    if args.output is not None:
-        overrides.append(f"output={args.output}")
-    if getattr(args, "resume", False):
-        overrides.append("resume=true")
-    if getattr(args, "seed", None) is not None:
-        overrides.append(f"seed={args.seed}")
-    if getattr(args, "partition", None) is not None:
-        overrides.append(f"dataset.partition={args.partition}")
-    if getattr(args, "bands", None) is not None:
-        bands = args.bands if args.bands in ("rgb", "all") else f"[{args.bands}]"
-        overrides.append(f"dataset.bands={bands}")
-    if getattr(args, "batch_size", None) is not None:
-        overrides.append(f"dataset.batch_size={args.batch_size}")
-    if getattr(args, "image_size", None) is not None:
-        overrides.append(f"dataset.image_size={args.image_size}")
-    if getattr(args, "normalization", None) is not None:
-        overrides.append(f"dataset.normalization={args.normalization}")
-    if getattr(args, "skip_linear", False):
-        overrides.append("eval.skip_linear=true")
-    if getattr(args, "bootstrap", None) is not None:
-        overrides.append(f"eval.bootstrap={args.bootstrap}")
-    if getattr(args, "verbose", False):
-        overrides.append("verbose=true")
-    return overrides
-
-
-def _compose(args: argparse.Namespace, *, config_name: str, default_model: str | None):
-    from omegaconf.errors import OmegaConfBaseException
-
-    from torchgeo_bench.config import compose_config
-
-    try:
-        return compose_config(
-            [*args.overrides, *_flag_overrides(args)],
-            config_name=config_name,
-            default_model=default_model,
-        )
-    except OmegaConfBaseException as err:
-        raise SystemExit(f"error: bad config override: {err}") from err
-    except ValueError as err:
-        raise SystemExit(f"error: {err}") from err
-
-
-def _cmd_run(args: argparse.Namespace) -> None:
-    if args.list_models:
-        from torchgeo_bench.config import list_model_configs
-
-        print("\n".join(list_model_configs()))
-        return
-    cfg = _compose(args, config_name="config", default_model="rcf")
-    if args.print_config:
-        from omegaconf import OmegaConf
-
-        print(OmegaConf.to_yaml(cfg), end="")
-        return
-    _setup_logging()
-    from torchgeo_bench.main import main
-
-    main(cfg)
-
-
-def _cmd_flops(args: argparse.Namespace) -> None:
-    cfg = _compose(args, config_name="flops_config", default_model=None)
-    if args.print_config:
-        from omegaconf import OmegaConf
-
-        print(OmegaConf.to_yaml(cfg), end="")
-        return
-    _setup_logging()
-    from torchgeo_bench.flops_pipeline import main
-
-    main(cfg)
-
-
-def _cmd_download(args: argparse.Namespace) -> None:
-    from pathlib import Path
-
-    _setup_logging()
-    from torchgeo_bench.download import (
-        download_eurosat,
-        download_geobench_v1,
-        download_geobench_v2,
-        download_resisc45,
-    )
-
-    names = None
-    if args.datasets is not None:
-        names = [n.strip() for n in args.datasets.split(",") if n.strip()]
-        if not names:
-            raise SystemExit("error: --datasets must contain at least one dataset name")
-
-    output_dir = Path(args.output_dir)
-    if args.target == "geobench_v1":
-        download_geobench_v1(output_dir, datasets=names)
-    elif args.target == "geobench_v2":
-        download_geobench_v2(output_dir, datasets=names)
+def _show_catalog(
+    name: str | None, choices: Sequence[str], detail: Callable[[str], str], kind: str
+) -> None:
+    """Print a catalog or one entry without loading its runtime."""
+    if name is None:
+        print("\n".join(choices))
+    elif name not in choices:
+        raise SystemExit(f"unknown {kind} {name!r}")
     else:
-        if names is not None:
-            raise SystemExit("error: --datasets is only supported for GeoBench downloads")
-        if args.target == "eurosat":
-            download_eurosat(output_dir)
-        else:
-            download_resisc45(output_dir)
+        print(detail(name), end="")
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Reject retired override syntax without confusing equals signs in flag values."""
+    parser = _setup_parser()
+    args, extras = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
+    if extras:
+        if any("=" in value and not value.startswith("--") for value in extras):
+            parser.error(
+                "key=value and +key=value overrides have been retired; use explicit flags "
+                "(for example --model rcf --dataset m-eurosat) or --config run.yaml"
+            )
+        parser.error(f"unrecognized arguments: {' '.join(extras)}")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Entry point for the ``torchgeo-bench`` console script."""
-    argv = list(sys.argv[1:] if argv is None else argv)
-    # key=value override tokens can appear anywhere after the subcommand;
-    # pull them out before argparse so they mix freely with flags.
-    overrides: list[str] = []
-    if argv and argv[0] in ("run", "flops"):
-        rest = [argv[0]]
-        for token in argv[1:]:
-            if "=" in token and not token.startswith("-"):
-                overrides.append(token)
-            else:
-                rest.append(token)
-        argv = rest
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-    if hasattr(args, "overrides"):
-        args.overrides = [*args.overrides, *overrides]
-    args.func(args)
+    """Run image, coordinate, download, and compute commands."""
+    args = _parse_args(argv)
+    if args.command == "run":
+        commands.run(args)
+    elif args.command == "models":
+        _show_catalog(args.name, list_model_configs(), _model_detail, "model")
+    elif args.command == "datasets":
+        _show_catalog(args.name, list_datasets(), _dataset_detail, "dataset")
+    elif args.command == "download":
+        commands.download(args)
+    elif args.command == "profile":
+        commands.profile(args)
+    elif args.command == "flops":
+        commands.flops(args)
+    elif args.command == "coord":
+        commands.coord(args)
+    else:
+        raise SystemExit(f"{args.command} is not implemented by the image CLI yet")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
-"""Sweep ``(batch_size, num_workers)`` for one ``(model, dataset, bands)`` combo and
-report samples/sec, peak GPU memory, and the throughput-maximising config.
+"""Compare data-loader batch sizes and worker counts for one model and dataset.
+
+Report samples per second, peak GPU memory, and the fastest successful setting.
 
 Usage::
 
@@ -11,27 +12,30 @@ Usage::
         --batch-sizes 64,128,256,512 \\
         --num-workers 4,8,16,32
 
-Designed for the post-WebDataset layout under
-``data/classification_v1.0_wds/`` so the dataloader is fork-safe at any
-``num_workers``.
+Uses GeoBench V1 tar shards, whose reader lets each worker open its own files.
 """
 
 import argparse
+import logging
 import time
 from pathlib import Path
 
 import torch
-from hydra import compose, initialize_config_module
-from hydra.utils import instantiate
-from rich.console import Console
-from rich.table import Table
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
+from torchgeo_bench.config.presets import NORMALIZATIONS, build_model, resolve_run_config
+from torchgeo_bench.config.run import RunConfig
+from torchgeo_bench.config.schema import ModelConfig
 from torchgeo_bench.datasets import get_bench_dataset_class
 from torchgeo_bench.datasets._v1_webdataset import GeoBenchv1Sharded
+from torchgeo_bench.datasets.base import BandSpec
+from torchgeo_bench.devices import resolve_device
+from torchgeo_bench.models.interface import BenchModel
+
+logger = logging.getLogger(__name__)
 
 
-def _build_dataset(name: str, bands: str, root: Path):
+def _build_dataset(name: str, bands: str, root: Path) -> GeoBenchv1Sharded:
     cls = get_bench_dataset_class(name)
     bench = cls()
     sel = (
@@ -51,28 +55,29 @@ def _build_dataset(name: str, bands: str, root: Path):
     )
 
 
-def _build_model(model_cfg: str, bands_list):
-    with initialize_config_module(config_module="torchgeo_bench.conf", version_base=None):
-        cfg = compose(config_name="config", overrides=[f"model={model_cfg}"])
-    return instantiate(
-        cfg.model,
+def _build_model(
+    model_name: str,
+    bands_list: list[BandSpec],
+    dataset_name: str = "m-bigearthnet",
+    train_dataset: Dataset | None = None,
+) -> BenchModel:
+    cfg, preset = resolve_run_config(
+        RunConfig(model=ModelConfig(name=model_name), datasets=[dataset_name]), dataset_name
+    )
+    runtime_options = {}
+    if preset.kwargs.get("mode") == "empirical":
+        runtime_options["dataset"] = train_dataset
+    return build_model(
+        preset,
         bands=bands_list,
-        normalization="bandspec_zscore",
-        _convert_="object",
+        normalization=NORMALIZATIONS[cfg.input.normalization],
+        **runtime_options,
     )
 
 
 def _bench(
-    model, dataset, batch_size: int, num_workers: int, device: torch.device, max_batches: int
-):
-    dl = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=False,
-        pin_memory=device.type == "cuda",
-        persistent_workers=num_workers > 0,
-    )
+    model: BenchModel, dl: DataLoader, device: torch.device, max_batches: int
+) -> tuple[float, float, float]:
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     t0 = time.perf_counter()
@@ -103,7 +108,8 @@ def main() -> None:
     p.add_argument("--device", default="cuda:0")
     args = p.parse_args()
 
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    device = resolve_device(args.device)
     bs_list = [int(x) for x in args.batch_sizes.split(",")]
     nw_list = [int(x) for x in args.num_workers.split(",")]
 
@@ -117,37 +123,42 @@ def main() -> None:
         else tuple(args.bands.split(","))
     )
     bands_list = bench_cls.select_band_specs(sel)
-    model = _build_model(args.model, bands_list).to(device).eval()
+    model = _build_model(args.model, bands_list, args.dataset, dataset).to(device).eval()
 
-    console = Console()
-    console.rule(f"Tuning [bold]{args.model}[/] × {args.dataset}/{args.bands} on {device}")
-
-    table = Table(show_header=True, header_style="bold cyan")
-    table.add_column("bs", justify="right")
-    table.add_column("nw", justify="right")
-    table.add_column("samples/sec", justify="right")
-    table.add_column("peak GB", justify="right")
-    table.add_column("wall", justify="right")
+    logger.info("Tuning %s on %s/%s (%s)", args.model, args.dataset, args.bands, device)
+    logger.info("%6s %6s %12s %10s %10s", "bs", "nw", "samples/sec", "peak GB", "wall (s)")
 
     results = []
     for bs in bs_list:
         for nw in nw_list:
+            loader = DataLoader(
+                dataset,
+                batch_size=bs,
+                num_workers=nw,
+                shuffle=False,
+                pin_memory=device.type == "cuda",
+                persistent_workers=nw > 0,
+            )
             try:
-                sps, peak, dt = _bench(model, dataset, bs, nw, device, args.max_batches)
+                sps, peak, dt = _bench(model, loader, device, args.max_batches)
                 results.append((sps, bs, nw, peak, dt))
-                table.add_row(str(bs), str(nw), f"{sps:.1f}", f"{peak:.2f}", f"{dt:.2f}s")
-            except Exception as e:
-                table.add_row(
-                    str(bs), str(nw), "[red]FAIL[/]", "", f"{type(e).__name__}: {str(e)[:40]}"
-                )
+                logger.info("%6d %6d %12.1f %10.2f %10.2f", bs, nw, sps, peak, dt)
+            except (
+                torch.cuda.OutOfMemoryError
+            ) as exc:  # allow-except: oversized batches are expected during tuning
+                torch.cuda.empty_cache()
+                logger.warning("batch_size=%d num_workers=%d: %s", bs, nw, exc)
 
-    console.print(table)
-    if results:
-        best = max(results, key=lambda r: r[0])
-        console.print(
-            f"\n[bold green]BEST:[/] batch_size={best[1]} num_workers={best[2]} "
-            f"→ [bold]{best[0]:.1f}[/] samples/sec ({best[3]:.2f} GB peak)"
-        )
+    if not results:
+        raise RuntimeError("No dataloader configuration completed successfully.")
+    best = max(results, key=lambda r: r[0])
+    logger.info(
+        "Best: batch_size=%d num_workers=%d, %.1f samples/sec (%.2f GB peak)",
+        best[1],
+        best[2],
+        best[0],
+        best[3],
+    )
 
 
 if __name__ == "__main__":
