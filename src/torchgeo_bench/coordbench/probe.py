@@ -66,6 +66,9 @@ def _ridge_eval(
     x_tr = torch.cat([x_tr, torch.ones(x_tr.shape[0], 1, device=dev)], dim=1).double()
     x_te = torch.cat([x_te, torch.ones(x_te.shape[0], 1, device=dev)], dim=1).double()
     eye = torch.eye(x_tr.shape[1], device=dev, dtype=torch.float64)
+    # fix so that intercep is not penalized
+    # this is the same normal equations as centering + solving on reduced system and then computing the intercept
+    eye[-1, -1] = 0
     weight = torch.linalg.solve(x_tr.T @ x_tr + alpha * eye, x_tr.T @ targets[train_idx].double())
     pred = x_te @ weight
     if task_type == "regression":
@@ -116,6 +119,7 @@ def _cv_alpha_scores(
     The O(N*D^2) Gram matrix (``x_tr.T @ x_tr``) doesn't depend on alpha, so it's
     built once per fold and reused across the whole alpha grid instead of being
     recomputed per (fold, alpha) pair — the dominant cost otherwise.
+    ^^ Livia made this change -- double check
     """
     nf = len(fold_ids)
     prepped = []
@@ -131,6 +135,9 @@ def _cv_alpha_scores(
         gram = x_tr.T @ x_tr
         xty = x_tr.T @ targets[train_idx].double()
         eye = torch.eye(gram.shape[0], device=dev, dtype=torch.float64)
+        # fix so that intercep is not penalized
+        # this is the same normal equations as centering + solving on reduced system and then computing the intercept
+        eye[-1, -1] = 0
         prepped.append((gram, xty, x_te, eye, test_idx))
 
     best_alpha, best_mean, best_scores = alphas[0], -1e30, []

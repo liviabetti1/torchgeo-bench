@@ -122,6 +122,19 @@ ERA5_ECMWF_LABELS = (
     'skt'
 )
 
+CHELSA_LABELS = (
+    'hurs',
+    'pr',
+    'ps',
+    'rsds',
+    'sfcWind',
+    'tas',
+    'tasmin',
+    'tasmax',
+    'tz',
+    'we'
+)
+
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
     from huggingface_hub import hf_hub_download
@@ -512,7 +525,33 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     )
     return [daily]
 
+def load_chelsa(subsample_locations: bool = True) -> list[CoordBenchmark]:
+    """"""
+    from huggingface_hub import hf_hub_download
+    import pyarrow.parquet as pq
 
+    path = hf_hub_download(
+        COORDBENCH_EXTENSION_REPO, "data/chelsa_2017/data.parquet", repo_type="dataset"
+    )
+    schema_cols = set(pq.ParquetFile(path).schema.names)
+    task_cols = [v for v in CHELSA_LABELS if v in schema_cols]
+
+    df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
+    if subsample_locations:
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
+        df = df.merge(pool, on=["lat", "lon"])
+
+    daily = CoordBenchmark(
+        name="chelsa",
+        lat=df["lat"].to_numpy(np.float32),
+        lon=df["lon"].to_numpy(np.float32),
+        tasks={v: df[v].to_numpy(np.float32) for v in task_cols},
+        # kept float64 for posix since it will lose second-level precision in float32
+        posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+        temporal_resolution="daily",
+        year=2017
+    )
+    return [daily]
 
 
 def load_deepmind() -> list[CoordBenchmark]:
@@ -570,6 +609,7 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "soilgrids": load_soilgrids,
     "deepmind": load_deepmind,
     "era5_ecmwf": load_era5_ecmwf,
+    "chelsa": load_chelsa,
 }
 
 
@@ -603,6 +643,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
     "era5_ecmwf": ("era5_ecmwf",),
+    "chelsa": ("chelsa",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
