@@ -140,6 +140,7 @@ def _cv_alpha_scores(
     The O(N*D^2) Gram matrix (``x_tr.T @ x_tr``) doesn't depend on alpha, so it's
     built once per fold and reused across the whole alpha grid instead of being
     recomputed per (fold, alpha) pair — the dominant cost otherwise.
+    ^^ Livia made this change -- double check
     """
     nf = len(fold_ids)
     scores_by_alpha: list[list[float]] = [[] for _ in alphas]
