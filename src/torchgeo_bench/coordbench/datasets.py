@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -95,6 +96,7 @@ CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = 
     "high_chol": "HIGHCHOL",
 }
 
+<<<<<<< HEAD
 ERA5_ECMWF_LABELS = (
     'd2m', 
     't2m', 
@@ -116,6 +118,15 @@ ERA5_ECMWF_LABELS = (
     'tp', 
     'skt'
 )
+=======
+ELECTRIC_LOAD_VARIABLES = [
+    "mean",
+    "min",
+    "max",
+    "median",
+]
+
+>>>>>>> e892e5f (add usa county electrical load data)
 
 CHELSA_LABELS = (
     'hurs',
@@ -292,6 +303,29 @@ def load_sustainbench() -> list[CoordBenchmark]:
                 test_mask=is_test[m.to_numpy()],
             )
         )
+    return out
+
+def load_usa_electric_usage() -> list[CoordBenchmark]:
+    """Data.gov electrical demand profiles for each county in the contiguous USA.
+    Data is hourly and aggregated to a vector of daily mean/min/max/median.
+    """
+    counties_path = "INSERT_COUNTIES_GEOPARQUET_PATH_HERE" #TODO: after uploading parquet files to huggingface
+    df = load_config("usa_electric_usage")
+    counties = gpd.read_file(counties_path)
+
+    finalized_df = df.merge(counties, on="county", how="left")
+
+    out: list[CoordBenchmark] = []
+    for col in ELECTRIC_LOAD_VARIABLES:
+        out.append(
+            CoordBenchmark(
+                name=f"usa_electric_usage-{col}",
+                lat=finalized_df["lat"].to_numpy(np.float64),
+                lon=finalized_df["lon"].to_numpy(np.float64),
+                tasks={col: finalized_df[col].to_numpy(np.float64)},
+            )
+        )
+
     return out
 
 

@@ -13,9 +13,6 @@ Public API
 .. autofunction:: run_coordbench
 """
 
-<<<<<<< HEAD
-import lazy_loader as lazy
-=======
 from torchgeo_bench.coordbench.datasets import (
     CoordBenchmark,
     list_benchmarks,
@@ -37,6 +34,5 @@ from torchgeo_bench.coordbench.probe import (
 )
 from torchgeo_bench.coordbench.splits import spatial_fold_ids
 from torchgeo_bench.coordbench.run import CoordResult, run_coordbench
->>>>>>> 511ea8b (added embedding aggregation)
 
 __getattr__, __dir__, __all__ = lazy.attach_stub(__name__, __file__)
