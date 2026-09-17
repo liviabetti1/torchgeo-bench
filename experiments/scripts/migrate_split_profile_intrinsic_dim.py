@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""One-off migration: split ``profile``/``intrinsic_dim`` rows out of results/models/.
-
-Profile (throughput/latency/params) and intrinsic-dim rows are one-time
-model+hardware measurements, unlike ``knn5``/``linear``/``seg-*`` rows which
-change on every metrics rerun. Historically both lived in the same
-``results/models/<name>.csv`` file, so a routine metrics rerun touched
-(and diffed) the file holding these expensive one-off measurements too.
+"""Move saved profile and intrinsic-dimension measurements into separate files.
 
 This script splits every ``results/models/<name>.csv`` by its ``method``
 column:
@@ -14,8 +8,7 @@ column:
 - ``intrinsic_dim`` rows -> ``results/intrinsic_dim/<name>.csv``
 - everything else stays in ``results/models/<name>.csv``
 
-Row order is preserved (no resorting) and each output side file's rows are
-appended after any rows already there, so this is safe to rerun.
+Preserve row order and append moved rows after existing destination rows.
 
 Usage::
 
@@ -23,7 +16,10 @@ Usage::
 """
 
 import csv
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT / "results" / "models"
@@ -65,7 +61,7 @@ def _append_rows(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
 
 
 def migrate_one(path: Path) -> tuple[int, dict[str, int]]:
-    """Split one models/<name>.csv file. Returns (kept, {method: moved_count})."""
+    """Split one model CSV and return ``(kept, {method: moved_count})``."""
     fieldnames, rows = _read_rows(path)
     kept_rows: list[dict] = []
     side_rows: dict[str, list[dict]] = {m: [] for m in SIDE_METHODS}
@@ -88,6 +84,7 @@ def migrate_one(path: Path) -> tuple[int, dict[str, int]]:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     csv_paths = sorted(MODELS_DIR.glob("*.csv"))
     total_original = 0
     total_kept = 0
@@ -101,19 +98,21 @@ def main() -> None:
         for method, count in moved_counts.items():
             total_moved[method] += count
         if any(moved_counts.values()):
-            print(f"{path.name}: kept={kept}, moved={moved_counts}")
+            logger.info("%s: kept=%d, moved=%s", path.name, kept, moved_counts)
 
     total_moved_all = sum(total_moved.values())
-    print(
-        f"\nTotal rows: original={total_original}, "
-        f"kept in models/={total_kept}, moved={total_moved} "
-        f"(sum moved={total_moved_all})"
+    logger.info(
+        "Total rows: original=%d, kept in models/=%d, moved=%s (sum moved=%d)",
+        total_original,
+        total_kept,
+        total_moved,
+        total_moved_all,
     )
     if total_kept + total_moved_all != total_original:
         raise SystemExit(
             f"Row count mismatch: {total_kept} + {total_moved_all} != {total_original}"
         )
-    print("Row counts conserved.")
+    logger.info("Row counts conserved.")
 
 
 if __name__ == "__main__":

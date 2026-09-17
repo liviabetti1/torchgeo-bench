@@ -1,21 +1,19 @@
-# OlmoEarth-v1.2-Tiny (AI2 geospatial foundation model)
-# Feature dimension: 192
-# v1.2 ships Nano/Tiny/Small/Base with RoPE position encoding (~12.5M params).
-
-_target_: torchgeo_bench.models.OlmoEarthBenchModel
-model_size: tiny
-version: v1_2
-patch_size: 8
-input_res: null
-time_steps: 1
-std_multiplier: 2.0
-normalize: false
-image_size: null  # OlmoEarth is resolution-flexible; evaluate at native size
-min_image_size: 64
 name: olmoearth_v1_2_tiny
-eval:
-  segmentation:
-    # Isotropic transformer: no spatial pyramid, so tap 4 blocks
-    # spread across depth, deepest first.  Derived by measurement
-    # (experiments/scripts/introspect_seg_layers.py).
-    layers: ["encoder_model.encoder.blocks.11", "encoder_model.encoder.blocks.8", "encoder_model.encoder.blocks.5", "encoder_model.encoder.blocks.2"]
+target: torchgeo_bench.models.OlmoEarthBenchModel
+kwargs:
+  model_size: tiny
+  version: v1_2
+  patch_size: 8
+  input_res: null
+  time_steps: 1
+  std_multiplier: 2.0
+  normalize: false
+  min_image_size: 64
+input:
+  image_size: null
+segmentation:
+  layers:
+    - encoder_model.encoder.blocks.11
+    - encoder_model.encoder.blocks.8
+    - encoder_model.encoder.blocks.5
+    - encoder_model.encoder.blocks.2

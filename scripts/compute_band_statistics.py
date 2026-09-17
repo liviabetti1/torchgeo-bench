@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Compute per-band ``BandSpec`` statistics for a registered dataset.
+"""Compute training-data band statistics for the default input normalization.
 
-Every :class:`~torchgeo_bench.datasets.base.BenchDataset` declares per-band
-``mean`` / ``std`` / ``min`` / ``max`` in raw sensor units.  Those numbers back
-the ``bandspec_zscore`` normalisation strategy that is the benchmark default,
-so they have to come from the data rather than from a paper or a guess.
+Exclude validation/test data so evaluation samples cannot affect input scaling.
 
-This script computes them from the **train split only** -- val and test
-statistics would leak evaluation data into the normalisation -- and prints a
-ready-to-paste ``bands = [...]`` block.
+Use raw sensor values; print a ready-to-paste ``bands = [...]`` block.
 
 Usage::
 
@@ -44,8 +39,7 @@ def compute_statistics(
 ) -> list[dict[str, float]]:
     """Return per-channel ``mean``/``std``/``min``/``max`` over the train split.
 
-    Accumulates in float64: a 256x256 uint8 dataset reaches ~1e9 pixels per
-    channel, where float32 sums lose precision well before the mean stabilises.
+    Use float64 totals to limit rounding error when summing large datasets.
     """
     bench = get_bench_dataset_class(dataset_name)()
     dataset = bench.get_dataset("train", bands=None)
@@ -74,8 +68,7 @@ def compute_statistics(
             logger.info("batch %d/%d", index, len(loader))
 
     mean = total / count
-    # var = E[x^2] - E[x]^2, clamped because catastrophic cancellation can push
-    # a near-constant band a hair below zero.
+    # Round-off can make a nearly constant band's variance slightly negative.
     std = (total_sq / count - mean * mean).clamp_min(0).sqrt()
 
     return [
@@ -118,13 +111,18 @@ def main(argv: list[str] | None = None) -> int:
         args.dataset, batch_size=args.batch_size, num_workers=args.num_workers
     )
 
-    print(f"\n{args.dataset} train-split statistics (raw sensor units)\n")
+    logger.info("%s train-split statistics (raw sensor units)", args.dataset)
     for values in stats:
-        print(
-            f"  {values['name']:<18} mean={values['mean']:>12.4f} "
-            f"std={values['std']:>12.4f} min={values['min']:>8.0f} max={values['max']:>8.0f}"
+        logger.info(
+            "  %-18s mean=%12.4f std=%12.4f min=%8.0f max=%8.0f",
+            values["name"],
+            values["mean"],
+            values["std"],
+            values["min"],
+            values["max"],
         )
-    print(f"\nPaste into the wrapper:\n\n{format_bandspec_block(args.dataset, stats)}")
+    logger.info("Paste into the wrapper:")
+    print(format_bandspec_block(args.dataset, stats))  # noqa: T201
     return 0
 
 

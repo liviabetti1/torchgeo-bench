@@ -1,8 +1,5 @@
 #!/usr/bin/env python
-"""Run every benchmark model across every dataset.
-
-Each model is one job that evaluates that model across all datasets
-(``dataset.names=all``).
+"""Run every configured model on all datasets, with one job per model.
 
 Usage:
     python experiments/run_main_experiments.py
@@ -13,6 +10,10 @@ import argparse
 import sys
 
 from _runner import Job, add_devices_argument, default_output, run_jobs
+
+from torchgeo_bench.config.run import RunConfig
+from torchgeo_bench.config.schema import ModelConfig
+from torchgeo_bench.datasets import list_datasets
 
 OUTPUT = default_output(__file__)
 
@@ -92,15 +93,18 @@ MODELS = [
 
 
 def build_jobs() -> list[Job]:
-    """Build one job per model (each runs over all datasets)."""
+    """Create one all-dataset job for each model."""
     return [
-        Job(label=model.split("/")[-1], overrides=[f"model={model}", "dataset.names=all"])
+        Job(
+            label=model.split("/")[-1],
+            config=RunConfig(model=ModelConfig(name=model), datasets=list_datasets()),
+        )
         for model in MODELS
     ]
 
 
 def main() -> int:
-    """Entry point."""
+    """Run the model catalog across all datasets."""
     parser = argparse.ArgumentParser(description=__doc__)
     add_devices_argument(parser)
     args = parser.parse_args()

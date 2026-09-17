@@ -1,11 +1,7 @@
-# SwinV2-Small Window8 256 (49M params)
-# Feature dimension: 768
-# Model: swinv2_small_window8_256
-
-_target_: torchgeo_bench.models.TimmPatchBenchModel
-model_name: swinv2_small_window8_256
-pretrained: true
-global_pool: avg
-seed: null
 name: swinv2_small_window8_256
-auto_resize: true
+target: torchgeo_bench.models.TimmPatchBenchModel
+kwargs:
+  model_name: swinv2_small_window8_256
+  pretrained: true
+  global_pool: avg
+  auto_resize: true

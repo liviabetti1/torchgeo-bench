@@ -1,15 +1,12 @@
-"""Generate the committed per-dataset geographic store.
+"""Write geographic metadata for every registered dataset.
 
-Thin CLI over :mod:`torchgeo_bench.geography`, which owns all the extraction
-logic.  Writes one ``<dataset>.json`` per registered dataset plus an
-``index.json`` under ``docs/_static/_dataset_geography/``.
+Write dataset records and ``index.json`` to ``docs/_static/_dataset_geography/``.
 
-Coverage comes from the dataset registry, so a newly registered dataset is
-picked up here automatically -- no edit to this script is needed.
+Use the registry so newly added datasets appear in the store.
 
 Usage::
 
-    # regenerate the whole store (the V1 HDF5 scan is the slow part)
+    # regenerate the whole store
     python experiments/scripts/extract_dataset_geography.py --all
 
     # regenerate a single dataset without rescanning everything
@@ -18,8 +15,6 @@ Usage::
     # report coverage without touching the store
     python experiments/scripts/extract_dataset_geography.py --check
 """
-
-from __future__ import annotations
 
 import argparse
 import logging
@@ -36,22 +31,24 @@ from torchgeo_bench.geography import (
     write_record,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _check() -> int:
-    """Print the current store's coverage; non-zero if a dataset is missing."""
+    """Report the current store's coverage; non-zero if a dataset is missing."""
     store = list_geography()
     missing = missing_datasets()
 
     for name in sorted(store):
         record = store[name]
         detail = record.reason or f"n={record.n}"
-        print(f"  {name:20s} {record.status:15s} {detail}")
+        logger.info("  %-20s %-15s %s", name, record.status, detail)
 
     if missing:
-        print(f"\n{len(missing)} registered dataset(s) with no record: {sorted(missing)}")
-        print("Run with --all (or --dataset <name>) to generate them.")
+        logger.warning("%d registered dataset(s) with no record: %s", len(missing), sorted(missing))
+        logger.info("Run with --all (or --dataset <name>) to generate them.")
         return 1
-    print(f"\nAll {len(store)} registered datasets have a record.")
+    logger.info("All %d registered datasets have a record.", len(store))
     return 0
 
 
@@ -65,7 +62,7 @@ def main() -> int:
         "--workers",
         type=int,
         default=min(32, (os.cpu_count() or 8)),
-        help="processes used for the V1 HDF5 scan",
+        help="processes used for the V1 metadata scan",
     )
     args = parser.parse_args()
 
@@ -77,27 +74,30 @@ def main() -> int:
 
     names = list_datasets() if args.all else [args.dataset]
     if not args.all and args.dataset not in list_datasets():
-        print(f"Unknown dataset {args.dataset!r}. Available: {', '.join(list_datasets())}")
+        logger.error("Unknown dataset %r. Available: %s", args.dataset, ", ".join(list_datasets()))
         return 1
 
     for name in names:
         record = extract_geography(name, workers=args.workers)
         write_record(record)
         detail = record.reason or f"n={record.n}, {len(record.bins)} bins"
-        print(f"  {name:20s} {record.status:15s} {detail}")
+        logger.info("  %-20s %-15s %s", name, record.status, detail)
 
     index = build_index()
     totals = index["totals"]
-    print(
-        f"\nWrote {STORE_DIR}: {totals['datasets']} records "
-        f"({totals['extracted']} extracted, {totals['samples']} samples)"
+    logger.info(
+        "Wrote %s: %d records (%d extracted, %d samples)",
+        STORE_DIR,
+        totals["datasets"],
+        totals["extracted"],
+        totals["samples"],
     )
     for continent, share in list(totals["continents"].items())[:6]:
-        print(f"  {continent:20s} {share:5.1f}%")
+        logger.info("  %-20s %5.1f%%", continent, share)
 
     missing = missing_datasets()
     if missing:
-        print(f"\nWARNING: no record for {sorted(missing)}")
+        logger.warning("No record for %s", sorted(missing))
         return 1
     return 0
 

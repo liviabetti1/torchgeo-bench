@@ -1,25 +1,16 @@
-"""Base classes for torchgeo-bench dataset definitions.
+"""Dataset metadata and split-loading contracts.
 
-Every benchmark dataset is a subclass of :class:`BenchDataset` that declares
-its metadata (bands, number of classes, task type, split sizes) and knows how
-to produce a PyTorch :class:`~torch.utils.data.Dataset` for each split.
+Each :class:`BenchDataset` declares metadata and loads a PyTorch dataset for each split.
 
-Datasets always live under ``data/`` (relative to the current working
-directory). Each family base class (``_V1Dataset``, ``_V2Dataset``) and the
-torchgeo :class:`~torchgeo_bench.datasets.eurosat.EuroSAT` wrapper exposes its
-own :meth:`BenchDataset.data_root` returning the family-specific subdirectory.
+Each family fixes its data root under ``data/``, relative to the working directory.
 
-This module is import-cheap: :class:`BandSpec` is re-exported from the
-dependency-free :mod:`torchgeo_bench.bands`, and torch is only imported for
-type checking.
+Torch is imported only for type checking so metadata stays available without loading it.
 """
-
-from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from torchgeo_bench.bands import BandSpec
 
@@ -55,9 +46,9 @@ class BenchDataset(ABC):
     name: str
     task: Literal["classification", "segmentation"]
     num_classes: int
-    bands: list[BandSpec]
-    rgb_bands: list[str]
-    split_sizes: dict[str, int]
+    bands: ClassVar[list[BandSpec]]
+    rgb_bands: ClassVar[list[str]]
+    split_sizes: ClassVar[dict[str, int]]
     multilabel: bool = False
     supports_partitions: bool = False
 
@@ -82,7 +73,7 @@ class BenchDataset(ABC):
         wrappers it is the dataset's own root (e.g. ``data/eurosat``).
         """
 
-    def select_band_specs(self, bands: Iterable[str] | None) -> list[BandSpec]:
+    def select_band_specs(self, bands: "Iterable[str] | None") -> list[BandSpec]:
         """Return the :class:`BandSpec` entries matching *bands*.
 
         Preserves the order given by *bands*. Raises ``ValueError`` if any
@@ -100,6 +91,21 @@ class BenchDataset(ABC):
             result.append(by_name[name])
         return result
 
+    def resolve_band_specs(self, selection: "str | Iterable[str]") -> list[BandSpec]:
+        """Resolve ``rgb``, ``all``, or explicit names using this dataset's metadata.
+
+        Band order and objects are preserved without loading dataset samples.
+        """
+        if not isinstance(selection, str):
+            return self.select_band_specs(selection)
+        if selection == "rgb":
+            return self.select_band_specs(self.rgb_bands)
+        if selection == "all":
+            return self.select_band_specs(None)
+        raise ValueError(
+            f"Unknown band selection {selection!r}; use rgb, all, or explicit band names"
+        )
+
     @abstractmethod
     def get_dataset(
         self,
@@ -107,8 +113,8 @@ class BenchDataset(ABC):
         *,
         partition: str = "default",
         bands: tuple[str, ...] | None = None,
-        transform: Callable | None = None,
-    ) -> Dataset:
+        transform: "Callable | None" = None,
+    ) -> "Dataset":
         """Return a PyTorch :class:`~torch.utils.data.Dataset` for a split.
 
         Datasets always emit raw float32 values; normalization is the

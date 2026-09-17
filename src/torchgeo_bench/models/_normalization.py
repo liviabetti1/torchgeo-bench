@@ -1,10 +1,7 @@
 """Selectable input-normalisation strategies for benchmark models.
 
-Each pretrained backbone was trained against a specific input pipeline, but
-"the right" cross-dataset normalisation is empirical — what works for
-m-eurosat (raw S2 DN) doesn't generalise to m-so2sat (already reflectance)
-or m-pv4ger (uint8 NAIP).  Rather than hard-code one policy, expose a
-strategy enum and let the sweep treat it as another axis.
+Input scales include raw S2 DN (m-eurosat), reflectance (m-so2sat), and uint8 (m-pv4ger).
+Normalization is therefore a configurable benchmark parameter.
 
 Strategies:
 
@@ -31,6 +28,10 @@ import torch
 from torchgeo_bench.datasets.base import BandSpec
 
 from ._input_units import InputUnit, detect_input_unit, to_reflectance, to_s2_dn
+
+
+class UnsupportedNormalizationError(ValueError):
+    """A model does not define the requested normalization pipeline."""
 
 
 class NormalizationStrategy(StrEnum):
@@ -88,8 +89,6 @@ def build_normalizer(
 
     if strategy is NormalizationStrategy.MINMAX_ZSCORE:
         lo, span = _bandspec_min_max(bands)
-        # Post-minmax mean_i = (raw_mean_i - min_i) / (max_i - min_i)
-        # Post-minmax std_i  = raw_std_i  / (max_i - min_i)
         n = len(bands)
         pmean = torch.tensor(
             [(b.mean - b.min) / max(b.max - b.min, 1e-8) for b in bands],
@@ -110,8 +109,20 @@ def build_normalizer(
 
         return _f
 
+    return build_model_native_normalizer(bands, expected_input_unit, pretrain_mean, pretrain_std)
+
+
+def build_model_native_normalizer(
+    bands: list[BandSpec],
+    expected_input_unit: InputUnit | None,
+    pretrain_mean: list[float] | None,
+    pretrain_std: list[float] | None,
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Convert sensor units before applying pretrained channel statistics."""
     if expected_input_unit is None:
-        raise ValueError("model_native normalisation requires expected_input_unit")
+        raise UnsupportedNormalizationError(
+            "model_native normalisation requires expected_input_unit"
+        )
     src = detect_input_unit(bands)
     if expected_input_unit == InputUnit.S2_DN:
         convert = lambda x: to_s2_dn(x, src)  # noqa: E731
@@ -124,24 +135,15 @@ def build_normalizer(
         convert = lambda x: x  # noqa: E731
 
     if pretrain_mean is None:
-        # Unit conversion alone is not a normalisation: it would feed raw DN
-        # (0 - 10 000) straight into the backbone, which measurably collapses
-        # the features — Prithvi scored an identical 0.264 on treesatai at
-        # 86M, 304M and 631M parameters, below the imagestats baseline.
-        #
-        # Raising here would break wrappers that install their own
-        # model_native normaliser *after* super().__init__ (TerraMind) or that
-        # override normalize_inputs entirely (the torchgeo wrappers, which use
-        # the Normalize bound to their weights).  So defer: fail only if this
-        # normaliser is actually the one used.
+        # Wrappers may replace this normalizer before use.
         def _undefined(_x: torch.Tensor) -> torch.Tensor:
-            raise ValueError(
+            raise UnsupportedNormalizationError(
                 "model_native normalisation is undefined for this model: it declares "
                 f"expected_input_unit={expected_input_unit.value!r} but no pretrain_mean/"
                 "pretrain_std, and it does not supply its own normaliser.  Converting "
                 "units without standardising leaves raw sensor values.  Set "
                 "pretrain_mean/pretrain_std on the wrapper, or evaluate it with "
-                "dataset.normalization=bandspec_zscore."
+                "--normalization dataset."
             )
 
         return _undefined

@@ -1,14 +1,12 @@
-# MaxViT-Tiny (30M params)
-# Feature dimension: 512
-# Model: maxvit_tiny_tf_224
-
-_target_: torchgeo_bench.models.TimmPatchBenchModel
-model_name: maxvit_tiny_tf_224
-pretrained: true
-global_pool: avg
-seed: null
 name: maxvit_tiny_tf_224
-eval:
-  segmentation:
-    # Coarse-to-fine: stages.3 (7×7, 512ch) → stages.0 (56×56, 64ch)
-    layers: ["stages.3", "stages.2", "stages.1", "stages.0"]
+target: torchgeo_bench.models.TimmPatchBenchModel
+kwargs:
+  model_name: maxvit_tiny_tf_224
+  pretrained: true
+  global_pool: avg
+segmentation:
+  layers:
+    - stages.3
+    - stages.2
+    - stages.1
+    - stages.0
