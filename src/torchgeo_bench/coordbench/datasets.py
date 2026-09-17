@@ -255,7 +255,7 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
     from huggingface_hub import hf_hub_download
-    import pyarrow.parquet as pq
+
     counties_path = hf_hub_download(
         COORDBENCH_EXTENSION_REPO, "data/electrical_load_usa_2016_2023/counties.parquet", repo_type="dataset"
     )
