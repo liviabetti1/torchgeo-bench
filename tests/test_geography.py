@@ -1,18 +1,10 @@
-"""Tests for the committed per-dataset geographic store.
-
-The store (``docs/_static/_dataset_geography/``) is generated from the raw
-imagery by ``experiments/scripts/extract_dataset_geography.py`` and committed,
-so these tests read the artifact rather than the data.  They run anywhere.
-
-The load-bearing one is :func:`test_all_registered_datasets_have_a_record`:
-it is what makes the store extend as datasets are added.  Registering a new
-dataset without generating its geography fails here, forcing a conscious
-decision (extract it, or declare why it has no coordinates) instead of the
-dataset silently disappearing from the map.
-"""
+"""Check committed geography records without loading raw imagery."""
 
 import json
+from pathlib import Path
 
+import h5py
+import numpy as np
 import pytest
 
 from torchgeo_bench.datasets import list_datasets
@@ -22,37 +14,83 @@ from torchgeo_bench.geography import (
     NO_GEO,
     STORE_DIR,
     GeoRecord,
+    _v1_origin,
+    build_index,
+    extract_geography,
     list_geography,
     missing_datasets,
+    write_record,
 )
 
 VALID_STATUSES = {"extracted", "no_geo", "not_downloaded"}
 
-pytestmark = pytest.mark.skipif(
-    not STORE_DIR.is_dir(),
-    reason=f"geography store not generated at {STORE_DIR}",
-)
-
 
 @pytest.fixture(scope="module")
 def store() -> dict[str, GeoRecord]:
+    if not STORE_DIR.is_dir():
+        pytest.skip(f"geography store not generated at {STORE_DIR}")
     return list_geography()
 
 
-def test_all_registered_datasets_have_a_record(store: dict[str, GeoRecord]) -> None:
-    """Every registered dataset must be accounted for in the store.
+@pytest.mark.parametrize("storage", ["string", "bytes"])
+def test_v1_origin_reads_hdf5_metadata(tmp_path: Path, storage: str) -> None:
+    metadata = {
+        "label": 0,
+        "bands_order": ["B04"],
+        "B04": {"transform": [10, 0, 456000, 0, -10, 1230000], "crs": "EPSG:32615"},
+    }
+    payload = json.dumps(metadata)
+    path = tmp_path / "sample.hdf5"
+    with h5py.File(path, "w") as file:
+        file.attrs["metadata_json"] = (
+            payload if storage == "string" else np.bytes_(payload.encode("utf-8"))
+        )
 
-    If this fails you have added a dataset without generating its geography.
-    Run ``python experiments/scripts/extract_dataset_geography.py --all``.
-    """
+    assert _v1_origin(str(path)) == (456000.0, 1230000.0, "EPSG:32615")
+
+
+def test_v1_origin_requires_sample_file(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        _v1_origin(str(tmp_path / "missing.hdf5"))
+
+
+@pytest.mark.parametrize("directory_exists", [False, True])
+def test_extract_geography_requires_imagery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, directory_exists: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if directory_exists:
+        (tmp_path / "data/classification_v1.0/m-eurosat").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="`torchgeo-bench download geobench_v1`"):
+        extract_geography("m-eurosat")
+
+
+def test_build_index_weights_continents_by_sample_count(tmp_path: Path) -> None:
+    for record in (
+        GeoRecord("a", "extracted", n=3, continents={"Europe": 100.0}),
+        GeoRecord("b", "extracted", n=1, continents={"Asia": 100.0}),
+        GeoRecord("c", "no_geo", reason="No coordinates"),
+    ):
+        write_record(record, tmp_path)
+
+    index = build_index(tmp_path)
+    assert index["totals"] == {
+        "datasets": 3,
+        "extracted": 2,
+        "samples": 4,
+        "continents": {"Europe": 75.0, "Asia": 25.0},
+    }
+    assert build_index(tmp_path) == index
+    assert json.loads((tmp_path / INDEX_NAME).read_text()) == index
+
+
+def test_store_contains_exactly_the_registered_datasets(store: dict[str, GeoRecord]) -> None:
+    """Keep every registered dataset represented in the geographic store."""
+    assert set(store) == set(list_datasets())
     assert missing_datasets() == set(), (
         f"registered datasets with no geography record: {sorted(missing_datasets())}"
     )
-
-
-def test_no_extra_records(store: dict[str, GeoRecord]) -> None:
-    """The store must not carry records for unregistered datasets."""
-    assert set(store) <= set(list_datasets())
 
 
 def test_statuses_are_valid(store: dict[str, GeoRecord]) -> None:
@@ -68,7 +106,7 @@ def test_absent_coordinates_are_explained(store: dict[str, GeoRecord]) -> None:
 
 
 def test_known_no_geo_datasets_are_declared(store: dict[str, GeoRecord]) -> None:
-    """The two verified no-coordinate datasets keep that status."""
+    """Datasets with no source coordinates must retain that status."""
     for name in NO_GEO:
         if name in store:
             assert store[name].status == "no_geo", f"{name} unexpectedly has coordinates"
@@ -104,14 +142,7 @@ def test_extracted_records_are_wellformed(store: dict[str, GeoRecord]) -> None:
             total = sum(record.continents.values())
             assert 99.0 <= total <= 101.0, f"{record.name}: continents sum to {total}"
 
-
-def test_sampled_points_lie_within_bbox(store: dict[str, GeoRecord]) -> None:
-    """Guards against a subsample/bbox mismatch in the builder."""
-    for record in store.values():
-        if record.status != "extracted" or record.bbox is None:
-            continue
-        min_lon, min_lat, max_lon, max_lat = record.bbox
-        # bbox is rounded to 3dp, so allow a hair of slack at the edges.
+        # Bounds are rounded to three decimal places, so allow 0.001 at each edge.
         for lon, lat, *_ in record.points:
             assert min_lon - 0.001 <= lon <= max_lon + 0.001, (
                 f"{record.name}: lon {lon} outside bbox"
@@ -122,7 +153,6 @@ def test_sampled_points_lie_within_bbox(store: dict[str, GeoRecord]) -> None:
 
 
 def test_index_matches_the_records(store: dict[str, GeoRecord]) -> None:
-    """``index.json`` must agree with the per-dataset files it summarises."""
     index_path = STORE_DIR / INDEX_NAME
     assert index_path.exists(), "index.json missing; run the extractor to rebuild it"
 
@@ -139,14 +169,34 @@ def test_index_matches_the_records(store: dict[str, GeoRecord]) -> None:
     assert totals["samples"] == sum(r.n for r in store.values())
 
 
-def test_records_roundtrip_through_json(store: dict[str, GeoRecord]) -> None:
-    """Serialisation is lossless, so the store can be read back exactly."""
-    for record in store.values():
-        assert GeoRecord.from_json(record.to_json()) == record
+@pytest.mark.parametrize(
+    "record",
+    [
+        GeoRecord("unlocated", "no_geo", reason="Coordinates are not published"),
+        GeoRecord("absent", "not_downloaded", reason="Imagery is not installed"),
+        GeoRecord(
+            "located",
+            "extracted",
+            version="v1",
+            n=2,
+            alias_of="original",
+            bbox=[10.0, 20.0, 11.0, 21.0],
+            continents={"Asia": 100.0},
+            bins=[[760, 440, 1], [764, 444, 1]],
+            points=[[10.0, 20.0, "北"], [11.0, 21.0]],
+        ),
+    ],
+)
+def test_records_roundtrip_through_json(tmp_path: Path, record: GeoRecord) -> None:
+    path = write_record(record, tmp_path)
+    assert list_geography(tmp_path) == {record.name: record}
+    payload = json.loads(path.read_text())
+    assert GeoRecord.from_json({**payload, "future_field": True}) == record
+    assert path.read_text() == json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def test_stored_files_are_canonical_json() -> None:
-    """Files are written sorted and compact, so re-runs stay byte-identical."""
+def test_stored_files_are_canonical_json(store: dict[str, GeoRecord]) -> None:
+    """Canonical JSON keeps regenerated records byte-identical."""
     for path in sorted(STORE_DIR.glob("*.json")):
         raw = path.read_text()
         assert raw == json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":")), (

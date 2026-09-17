@@ -17,12 +17,20 @@ from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+
+from torchgeo_bench.coordbench.catalog import (
+    CDC_PLACES_MEASURES,
+    DEEPMIND_EVAL_CONFIGS,
+    FAMILY_BENCHMARKS,
+    SUSTAINBENCH_TASKS,
+    USAVARS_LABELS,
+)
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 
 logger = logging.getLogger(__name__)
 
-# Unified source for every benchmark below.
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
 # Integrate with coordbench (right now, this is my personal repo)
@@ -31,33 +39,6 @@ COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "liviabe
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
 
-DEEPMIND_EVAL_CONFIGS = (
-    "africa_crop_mask",
-    "aster_ged",
-    "canada_crops_coarse",
-    "canada_crops_fine",
-    "descals",
-    "ethiopia_crops",
-    "glance",
-    "lcmap_lc",
-    "lcmap_lcc",
-    "lcmap_lu",
-    "lcmap_luc",
-    "lucas_lc",
-    "lucas_lu",
-    "openet_ensemble",
-    "us_trees",
-)
-
-USAVARS_LABELS = (
-    "treecover",
-    "elevation",
-    "population",
-    "nightlights",
-    "income",
-    "roads",
-    "housing",
-)
 USAVARS_NODATA = -999.0  # nodata sentinel in the label CSVs
 # log1p the heavy right-skewed targets (matches PDFM's own convention for pop/nightlights).
 USAVARS_LOG_LABELS = frozenset({"population", "income", "nightlights", "housing"})
@@ -100,6 +81,7 @@ CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = 
     "high_chol": "HIGHCHOL",
 }
 
+<<<<<<< HEAD
 ERA5_ECMWF_LABELS = (
     'd2m', 
     't2m', 
@@ -134,6 +116,14 @@ CHELSA_LABELS = (
     'tz',
     'we'
 )
+=======
+ELECTRIC_LOAD_VARIABLES = [
+    "mean",
+    "min",
+    "max",
+    "median",
+]
+>>>>>>> origin/main
 
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
@@ -299,6 +289,29 @@ def load_sustainbench() -> list[CoordBenchmark]:
         )
     return out
 
+def load_usa_electric_usage() -> list[CoordBenchmark]:
+    """Data.gov electrical demand profiles for each county in the contiguous USA.
+    Data is hourly and aggregated to a vector of daily mean/min/max/median.
+    """
+    counties_path = "INSERT_COUNTIES_GEOPARQUET_PATH_HERE" #TODO: after uploading parquet files to huggingface
+    df = load_config("usa_electric_usage")
+    counties = gpd.read_file(counties_path)
+
+    finalized_df = df.merge(counties, on="county", how="left")
+
+    out: list[CoordBenchmark] = []
+    for col in ELECTRIC_LOAD_VARIABLES:
+        out.append(
+            CoordBenchmark(
+                name=f"usa_electric_usage-{col}",
+                lat=finalized_df["lat"].to_numpy(np.float64),
+                lon=finalized_df["lon"].to_numpy(np.float64),
+                tasks={col: finalized_df[col].to_numpy(np.float64)},
+            )
+        )
+
+    return out
+
 
 def load_better_together() -> list[CoordBenchmark]:
     """Better Together (van der Plas et al.) — 6 coordinate -> label tasks.
@@ -430,7 +443,7 @@ def load_usavars() -> list[CoordBenchmark]:
         lat_a = df[cl["lat"]].to_numpy(np.float64)
         lon_a = df[cl["lon"]].to_numpy(np.float64)
         val_a = df[value_col].to_numpy(np.float64)
-        keep = val_a != USAVARS_NODATA  # drop nodata rows
+        keep = val_a != USAVARS_NODATA
         lat_a, lon_a, val_a = lat_a[keep], lon_a[keep], val_a[keep]
         if label in USAVARS_LOG_LABELS:
             val_a = np.log1p(val_a)
@@ -571,10 +584,8 @@ def load_deepmind() -> list[CoordBenchmark]:
         label = df["label"].to_numpy()
         integral = np.all(np.isfinite(label)) and np.allclose(label, np.round(label))
         is_clf = bool(integral and np.unique(label).size <= 100)
-        # CoordBench always carries a `timestamp` column, all-null when the source has no
-        # per-point time; keep posix_timestamp None in that case rather than an all-NaN array.
-        # (used to be year)
-        posix_timestamp = None
+        # Missing source timestamps produce an all-null column; use year=None, not an all-NaN array.
+        year = None
         if ts_col is not None:
             pts = pd.to_datetime(df[ts_col], unit="ms")
 
@@ -613,6 +624,7 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
 }
 
 
+<<<<<<< HEAD
 # Benchmark names each family emits; lets a selection load only the needed family,
 # and lets callers enumerate the suite without a download.
 FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
@@ -646,6 +658,8 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "chelsa": ("chelsa",),
 }
 
+=======
+>>>>>>> origin/main
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
 }
@@ -682,7 +696,6 @@ def load_benchmarks(names: str | list[str] = "all") -> list[CoordBenchmark]:
     else:
         selection = list(names)
 
-    # Resolve the selection to (families to load, per-family name filters).
     families_to_load: list[str] = []
     name_filter: dict[str, set[str]] = {}
     for entry in selection:

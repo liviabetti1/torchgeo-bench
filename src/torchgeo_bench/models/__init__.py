@@ -5,7 +5,7 @@ from ._normalization import NormalizationStrategy
 from .image_stats import ImageStatsBench
 from .interface import BenchModel
 from .olmoearth import OlmoEarthBenchModel
-from .rcf import RCFBench
+from .rcf import RCFBench, RCFModelSettings
 from .sam3 import SAM3Encoder
 from .segmentation_heads import ConvBlockHead, DPTHead, FPNHead, LinearHead, PatchLinearHead
 from .terratorch_models import (
@@ -13,7 +13,7 @@ from .terratorch_models import (
     TerraTorchPrithviBench,
     TerraTorchTerraMindBench,
 )
-from .timm import TimmPatchBenchModel
+from .timm import TimmModelSettings, TimmPatchBenchModel
 from .torchgeo_models import (
     TorchGeoCromaBench,
     TorchGeoDEOBench,
@@ -28,14 +28,23 @@ from .universat import UniverSatBenchModel
 
 __all__: list[str] = [
     "BenchModel",
-    "InputUnit",
-    "NormalizationStrategy",
-    "RCFBench",
+    "ConvBlockHead",
+    "DPTHead",
+    "FPNHead",
     "ImageStatsBench",
-    "TimmPatchBenchModel",
-    "UniverSatBenchModel",
+    "InputUnit",
+    "LinearHead",
+    "NormalizationStrategy",
     "OlmoEarthBenchModel",
+    "PatchLinearHead",
+    "RCFBench",
+    "RCFModelSettings",
     "SAM3Encoder",
+    "TerraTorchClayBench",
+    "TerraTorchPrithviBench",
+    "TerraTorchTerraMindBench",
+    "TimmModelSettings",
+    "TimmPatchBenchModel",
     "TorchGeoCromaBench",
     "TorchGeoDEOBench",
     "TorchGeoDOFABench",
@@ -44,12 +53,5 @@ __all__: list[str] = [
     "TorchGeoResNetBench",
     "TorchGeoScaleMAEBench",
     "TorchGeoSwinBench",
-    "TerraTorchPrithviBench",
-    "TerraTorchClayBench",
-    "TerraTorchTerraMindBench",
-    "LinearHead",
-    "PatchLinearHead",
-    "ConvBlockHead",
-    "FPNHead",
-    "DPTHead",
+    "UniverSatBenchModel",
 ]

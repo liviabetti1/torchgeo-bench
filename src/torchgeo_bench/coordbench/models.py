@@ -1,23 +1,30 @@
 """Coordinate-only encoders for the CoordBench location-encoder track.
 
+<<<<<<< HEAD
 A :class:`LocationEncoder` maps points ``(lon, lat[, posix_timestamp])`` to a fixed-length
 feature vector, one row per point; the probes and cross-validation live downstream.
 Add a model by subclassing :class:`LocationEncoder`, implementing :meth:`_encode`,
 and pointing a Hydra ``model`` config's ``_target_`` at it.
+=======
+A :class:`LocationEncoder` maps ``(lon, lat[, year])`` to one feature vector per point.
+>>>>>>> origin/main
 
-The trivial :class:`SinCosLocationEncoder` and the pretrained
-:class:`MINDLocationEncoder` ship in the base install. The other pretrained
-reference encoders (SatCLIP / GeoCLIP / Climplicit / SINR) are thin wrappers
-over the ``rshf`` package and require the ``coordbench`` extra
-(``pip install -e ".[coordbench]"``).
+Add models by implementing :meth:`LocationEncoder._encode` and selecting their config target.
+
+SinCos and MIND ship with the base install.
+
+SatCLIP, GeoCLIP, Climplicit, and SINR need ``pip install -e '.[coordbench]'``.
 """
 import os
 import logging
 from abc import ABC, abstractmethod
+from typing import override
 
 import numpy as np
 import pandas as pd
 import torch
+
+from torchgeo_bench.devices import resolve_device
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +38,18 @@ class LocationEncoder(ABC):
     """Frozen coordinate encoder: ``(lon, lat[, posix_timestamp]) -> (N, D)`` features.
 
     Args:
-        device: Torch device string for the forward pass.
+        device: Torch device or ``auto`` for current CUDA when available, otherwise CPU.
         batch_size: Points per forward chunk.
+
+    Raises:
+        ValueError: If the device is invalid, or explicit CUDA is unavailable or out of range.
     """
 
     #: Human-readable identifier recorded in result rows.
     name: str = "location_encoder"
 
     def __init__(self, device: str = "cpu", batch_size: int = 8192) -> None:
-        self.device = device if (device == "cpu" or torch.cuda.is_available()) else "cpu"
+        self.device = str(resolve_device(device))
         self.batch_size = int(batch_size)
 
     @abstractmethod
@@ -83,7 +93,12 @@ class SinCosLocationEncoder(LocationEncoder):
 
     name = "sincos"
 
+<<<<<<< HEAD
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+=======
+    @override
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
+>>>>>>> origin/main
         lat_r, lon_r = np.deg2rad(lat), np.deg2rad(lon)
         return np.stack(
             [np.sin(lat_r), np.cos(lat_r), np.sin(lon_r), np.cos(lon_r)], axis=1
@@ -93,11 +108,11 @@ class SinCosLocationEncoder(LocationEncoder):
 class MINDLocationEncoder(LocationEncoder):
     """MIND location encoder (distilled from AlphaEarth/Climplicit/GeoCLIP/SINR).
 
-    Loads a released checkpoint from the HuggingFace Hub. Two configs ship:
-    ``mind`` (the 64-d Matryoshka deploy prefix of the pooled trunk) and
-    ``mind_small`` (the distilled student's 128-d head output). ``feature`` picks
-    the trunk (``pooled``) or the projected head (``head``); ``dim`` truncates the
-    Matryoshka embedding.
+    Load released weights from Hugging Face. ``mind`` uses the first 64 trunk features.
+
+    ``mind_small`` uses the distilled student's 128-dimensional head output.
+
+    Select trunk or head with ``feature``; ``dim`` keeps the first embedding dimensions.
 
     Note: Time is currently not supported for MIND.
 
@@ -110,7 +125,7 @@ class MINDLocationEncoder(LocationEncoder):
 
     name = "mind"
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - pretrained model options.
         self,
         repo: str = "isaaccorley/MIND",
         filename: str = "mind.safetensors",
@@ -182,9 +197,15 @@ class _RSHFEncoder(LocationEncoder):
 
     coord_order: str = "lonlat"
     dtype: torch.dtype = torch.float32
+    model: torch.nn.Module
 
+    @override
     @torch.no_grad()
+<<<<<<< HEAD
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+=======
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
+>>>>>>> origin/main
         first, second = (lon, lat) if self.coord_order == "lonlat" else (lat, lon)
         x = torch.stack([torch.as_tensor(first), torch.as_tensor(second)], dim=1).to(
             self.device, self.dtype
@@ -265,8 +286,13 @@ class SINRLocationEncoder(_RSHFEncoder):
         )
         self.model = SINR.from_pretrained(repo, config=conf).to(self.device).eval()
 
+    @override
     @torch.no_grad()
+<<<<<<< HEAD
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+=======
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
+>>>>>>> origin/main
         from rshf.sinr import preprocess_locs
 
         x = torch.stack([torch.as_tensor(lon), torch.as_tensor(lat)], dim=1).float().to(self.device)

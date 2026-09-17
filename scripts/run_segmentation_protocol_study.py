@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a cross-model segmentation training-protocol sensitivity study."""
+"""Compare segmentation training settings across models and datasets."""
 
 import argparse
 import csv
@@ -22,7 +22,10 @@ from _seg_sweep_common import (
     run_exclusively,
     torchgeo_bench_cli,
     write_json_atomic,
+    write_run_config,
 )
+
+from torchgeo_bench.config.run import RunConfig
 
 logger = logging.getLogger(__name__)
 VAL_PATTERN = re.compile(r"Epoch (\d+) Val mIoU: (\S+)")
@@ -30,7 +33,7 @@ VAL_PATTERN = re.compile(r"Epoch (\d+) Val mIoU: (\S+)")
 
 @dataclass(frozen=True)
 class Variant:
-    """Segmentation-head optimization configuration."""
+    """Head-training settings for one comparison."""
 
     name: str
     epochs: int
@@ -91,7 +94,7 @@ VARIANTS = [
 
 
 def build_jobs() -> list[Job]:
-    """Return the complete cross-model protocol-study matrix."""
+    """Create every model, dataset, and training-setting combination."""
     return [
         Job(model, dataset, variant)
         for model in MODELS
@@ -111,7 +114,7 @@ def _source_hash(root: Path) -> str:
 
 
 def study_metadata(root: Path, seed: int) -> dict[str, object]:
-    """Return the result-affecting study configuration."""
+    """Record the source and settings used to decide whether results can be resumed."""
     return {
         "schema_version": 1,
         "source_hash": _source_hash(root),
@@ -138,7 +141,7 @@ class StudyConfig(RunnerConfig):
 
 
 class StudyRunner(BaseGpuRunner):
-    """Dynamically schedule protocol-study jobs across GPUs."""
+    """Run training-setting comparisons across the selected GPUs."""
 
     config: StudyConfig
 
@@ -187,7 +190,7 @@ class StudyRunner(BaseGpuRunner):
                 and float(row["best_lr"]) == job.variant.lr
                 and int(float(row["best_batch_size"])) == job.model.probe_batch_size
             )
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError):  # allow-except: incomplete results must be rerun
             return False
         if not valid_csv:
             return False
@@ -211,27 +214,48 @@ class StudyRunner(BaseGpuRunner):
 
     def _command(self, job: Job, gpu: int, attempt: int) -> list[str]:
         loader_batch = max(1, job.model.loader_batch_size // (2 ** (attempt - 1)))
+        config_path = self.config.state_dir / "configs" / f"{job.job_id}.yaml"
+        write_run_config(
+            config_path,
+            RunConfig.model_validate(
+                {
+                    "model": {"name": job.model.config},
+                    "datasets": [job.dataset.name],
+                    "segmentation": {
+                        "head": "fpn",
+                        "epochs": job.variant.epochs,
+                        "learning_rate": job.variant.lr,
+                        "scheduler": job.variant.scheduler,
+                        "batch_size": job.model.probe_batch_size,
+                        "cache_features": True,
+                        "cache_dtype": "float16",
+                    },
+                }
+            ),
+        )
         return [
-            str(self.config.cli),
+            sys.executable,
+            "-m",
+            "torchgeo_bench",
             "run",
-            f"model={job.model.config}",
-            f"dataset.names=[{job.dataset.name}]",
-            f"dataset.bands={job.dataset.bands}",
-            "dataset.image_size=224",
-            f"dataset.batch_size={loader_batch}",
-            f"dataset.num_workers={self.config.num_workers}",
-            f"seed={self.config.seed}",
-            f"device=cuda:{gpu}",
-            "eval.segmentation.head_type=fpn",
-            f"eval.segmentation.epochs={job.variant.epochs}",
-            f"eval.segmentation.lr={job.variant.lr}",
-            f"eval.segmentation.lr_scheduler={job.variant.scheduler}",
-            f"eval.segmentation.batch_size={job.model.probe_batch_size}",
-            "eval.segmentation.cache_features=true",
-            "eval.segmentation.cache_dtype=float16",
-            "verbose=true",
-            f"output={self._output_path(job)}",
-            "resume=false",
+            "--config",
+            str(config_path),
+            "--bands",
+            job.dataset.bands,
+            "--image-size",
+            "224",
+            "--batch-size",
+            str(loader_batch),
+            "--workers",
+            str(self.config.num_workers),
+            "--seed",
+            str(self.config.seed),
+            "--device",
+            f"cuda:{gpu}",
+            "--verbose",
+            "--output",
+            str(self._output_path(job)),
+            "--no-resume",
         ]
 
     def _run_job(self, job: Job, gpu: int) -> bool:
@@ -299,7 +323,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run the protocol sensitivity study."""
+    """Compare segmentation training settings."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = _parse_args()
     root = Path(__file__).resolve().parents[1]

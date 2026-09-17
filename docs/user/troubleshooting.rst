@@ -30,24 +30,26 @@ CUDA out of memory
 
 .. code-block:: console
 
-   $ torchgeo-bench run dataset.batch_size=32
+   $ torchgeo-bench run --model rcf --dataset m-eurosat --batch-size 32
    $ # or run on CPU
-   $ torchgeo-bench run device=cpu
+   $ torchgeo-bench run --model rcf --dataset m-eurosat --device cpu
 
 For segmentation, also try
 
-.. code-block:: console
+.. code-block:: yaml
 
-   $ torchgeo-bench run \
-       eval.segmentation.cache_dtype=float32 \
-       eval.segmentation.cache_features=false
+   model: {name: timm/resnet18}
+   datasets: [caffe]
+   segmentation:
+     cache_features: false
 
-if RAM (rather than GPU memory) is the bottleneck.
+in a file passed through ``--config`` if RAM (rather than GPU memory) is
+the bottleneck.
 
 GPU run crashes immediately
 ---------------------------
 
-The default config is ``device: cuda:0``, so the first documented run uses the
+The image default is ``runtime.device: cuda:0``, so an unmodified image run uses the
 GPU.  ``uv sync`` installs the latest ``torch``, whose bundled CUDA and kernel
 architectures may not match your GPU or driver.  Two distinct failures:
 
@@ -64,7 +66,7 @@ Either way you can fall back to CPU (slower, but always works):
 
 .. code-block:: console
 
-   $ torchgeo-bench run dataset.names=[m-eurosat] device=cpu
+   $ torchgeo-bench run --model rcf --dataset m-eurosat --device cpu
 
 CPU is fine for the small V1 splits, but large V2 datasets (e.g. ``benv2`` /
 BigEarthNet) can take far longer — prefer a working GPU for those.
@@ -74,28 +76,27 @@ BigEarthNet) can take far longer — prefer a working GPU for those.
 
 A known V2 issue: ``geobench_v2.rearrange_bands`` expects modality keys
 (``'s2'``, ``'s1'``, …) that aren't present when a flat band list is
-requested.  Workaround: use ``dataset.bands=all`` for affected V2
+requested.  Workaround: use ``--bands all`` for affected V2
 datasets.
 
 ``eurosat-spatial`` reports ``Dataset not found``
 -------------------------------------------------
 
-``torchgeo-bench download eurosat`` fetches EuroSAT plus the standard
-``eurosat-{train,val,test}.txt`` splits, but the ``eurosat-spatial`` dataset
-uses ``torchgeo.datasets.EuroSATSpatial``, which needs its own *spatial* split
-files.  Those download automatically on the first CLI run that uses
-``eurosat-spatial``; the plain ``download eurosat`` command does not provision
-them, so its slow test skips until that first run.
+``torchgeo-bench download eurosat`` fetches the shared EuroSAT images and
+both the standard and spatial train/val/test splits. If an older download
+is missing the spatial split files, rerun this command before benchmarking
+``eurosat-spatial``.
 
-V1 slow tests skip after the auto-download
-------------------------------------------
+V1 reports missing JSON metadata
+--------------------------------
 
-The per-dataset auto-download (triggered by running a V1 dataset such as
-``dataset.names=[m-eurosat]``) writes the webdataset layout under
-``data/classification_v1.0_wds/``.  The V1 *slow* integration tests instead
-read the legacy HDF5 layout under ``data/classification_v1.0/`` and skip if only
-the ``_wds`` data is present.  Fetch the legacy bundle with
-``torchgeo-bench download geobench_v1`` to run them.
+Old V1 downloads contain ``.meta.pkl`` shard members or HDF5 ``pickle`` attributes. These are no longer loaded. Replace the cached data with the pickle-free mirror:
+
+.. code-block:: console
+
+   $ torchgeo-bench download geobench_v1 --datasets m-eurosat
+
+Omit ``--datasets`` to replace the full V1 suite. Downloads and V1 slow tests both use ``data/classification_v1.0_wds/``. Tests skip absent datasets, but present legacy or malformed data fails visibly.
 
 Build / docs warnings
 ---------------------

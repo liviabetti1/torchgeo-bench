@@ -21,37 +21,27 @@ def _bands(n: int = 4) -> list[BandSpec]:
     ]
 
 
-def test_normalize_inputs_is_identity():
-    """normalize_inputs must return the tensor unchanged."""
+def test_normalize_inputs_is_identity() -> None:
+    """Preserve raw sensor values in the statistics baseline."""
     model = ImageStatsBench(bands=_bands(3))
-    x = torch.randn(2, 3, 16, 16) * 5000
+    x = torch.arange(2 * 3 * 16 * 16, dtype=torch.float32).reshape(2, 3, 16, 16)
     out = model.normalize_inputs(x)
     assert out is x
 
 
-def test_output_stats_values():
-    """Output is (B, 4*C) whose mean/std/max/min slices match manual computation."""
+def test_output_stats_values() -> None:
+    """Features are grouped by statistic, not by channel."""
     n = 2
     model = ImageStatsBench(bands=_bands(n))
-    # Constant-value images per channel so stats are predictable
-    x = torch.zeros(1, n, 4, 4)
-    x[0, 0] = 3.0
-    x[0, 1] = 7.0
+    x = torch.tensor([1.0, 3.0, 5.0, 7.0, 2.0, 6.0, 10.0, 14.0]).reshape(1, n, 2, 2)
     feats = model(x)
-    assert feats.shape == (1, 4 * n)
-    assert torch.allclose(feats[0, 0], torch.tensor(3.0))
-    assert torch.allclose(feats[0, 1], torch.tensor(7.0))
-    # std of constant = 0
-    assert torch.allclose(feats[0, n], torch.tensor(0.0), atol=1e-5)
-    assert torch.allclose(feats[0, 2 * n], torch.tensor(3.0))
-    assert torch.allclose(feats[0, 3 * n], torch.tensor(3.0))
+    expected = torch.tensor([[4.0, 8.0, 5**0.5, 20**0.5, 7.0, 14.0, 1.0, 2.0]])
+    torch.testing.assert_close(feats, expected)
 
 
-def test_single_pixel_image():
-    """1×1 spatial images produce finite statistics with zero population std."""
+def test_single_pixel_image() -> None:
+    """Population standard deviation stays finite for a one-pixel image."""
     model = ImageStatsBench(bands=_bands(2))
-    x = torch.tensor([[[[5.0]], [[9.0]]]])  # (1, 2, 1, 1)
+    x = torch.tensor([[[[5.0]], [[9.0]]]])
     feats = model(x)
-    assert feats.shape == (1, 8)
-    assert torch.isfinite(feats).all()
-    assert torch.equal(feats[0, 2:4], torch.zeros(2))
+    torch.testing.assert_close(feats, torch.tensor([[5.0, 9.0, 0.0, 0.0, 5.0, 9.0, 5.0, 9.0]]))

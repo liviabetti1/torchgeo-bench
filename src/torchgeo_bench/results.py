@@ -1,24 +1,24 @@
 """Result rows, bootstrap CIs, atomic CSV writing, and per-model storage.
 
-``EvaluationResult`` is the flat CSV schema — every field is a column with
-downstream consumers in ``scripts/`` and ``experiments/``, so treat it as
-frozen: append-only, never reorder.
+``EvaluationResult`` defines the CSV columns used by ``scripts/`` and ``experiments/``.
+Add fields at the end; do not reorder existing fields.
 
-Each run writes to ``results/models/<model name>.csv`` rather than one shared
-CSV, so adding or re-running a model touches only that model's file.  Profile
-and intrinsic-dim rows -- one-time model+hardware measurements -- are split
-into their own ``results/profiles/<model name>.csv`` and
-``results/intrinsic_dim/<model name>.csv`` files so a routine metrics rerun
-doesn't touch them.  Use :func:`load_results` to read a whole directory back
-as a single DataFrame.
+Metrics go to ``results/models/<model name>.csv``, so rerunning a model touches only its own file.
+
+Profiles go to ``results/profiles/<model name>.csv``.
+Intrinsic-dimension results go to ``results/intrinsic_dim/<model name>.csv``.
+Routine metric runs leave these files untouched.
+:func:`load_results` combines a directory into one DataFrame.
 """
 
 import io
 import logging
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import numpy as np
 import pandas as pd
@@ -27,10 +27,6 @@ import torch
 logger = logging.getLogger(__name__)
 
 DEFAULT_RESULTS_DIR = "results/models"
-# Profile (throughput/latency/params) and intrinsic-dim rows are one-time
-# model+hardware measurements, so they live in their own per-model files
-# instead of the metrics file that routine classification/segmentation
-# sweeps rewrite.
 DEFAULT_PROFILE_RESULTS_DIR = "results/profiles"
 DEFAULT_INTRINSIC_DIM_RESULTS_DIR = "results/intrinsic_dim"
 
@@ -118,7 +114,7 @@ def bootstrap_map(
     for _ in range(n_boot):
         idx = rng.integers(0, n, size=n)
         yt = y_true[idx]
-        # Skip degenerate resamples with no positive labels
+        # Average precision needs at least one positive label.
         if yt.sum() == 0:
             continue
         valid_maps.append(average_precision_score(yt, y_scores[idx], average="micro"))
@@ -140,10 +136,9 @@ def bootstrap_miou(
 ) -> tuple[float, float]:
     """Bootstrap interval for dataset-level mIoU from per-image confusion matrices.
 
-    ``confusion_matrices`` holds one ``(C, C)`` matrix per test image. Each
-    resample draws images with replacement, sums their confusion matrices,
-    and recomputes mIoU from the summed matrix -- mirroring how the metric is
-    computed over the whole test set rather than averaging a per-image score.
+    ``confusion_matrices`` contains one ``(C, C)`` matrix per test image.
+    Resample images with replacement and compute mIoU from their summed matrix.
+    Do not average per-image mIoUs.
     """
     if n_boot < 1:
         return float("nan"), float("nan")
@@ -172,20 +167,20 @@ def bootstrap_miou(
     )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class EvaluationResult:
     """Container for a single evaluation result row."""
 
     dataset: str
-    method: str  # 'knn5', 'linear', or seg head type
-    metric_name: str  # 'accuracy', 'micro_mAP', or 'mIoU' (primary metric)
+    method: str  # e.g. 'knn5', 'linear', or 'seg-linear'
+    metric_name: str  # e.g. 'accuracy', 'micro_mAP', or 'mIoU'
     metric_value: float
-    ci_lower: float
-    ci_upper: float
+    ci_lower: float = 0.0
+    ci_upper: float = 0.0
     feature_dim: int
-    best_c: float | None
-    best_lr: float | None
-    best_batch_size: int | None
+    best_c: float | None = None
+    best_lr: float | None = None
+    best_batch_size: int | None = None
     n_train: int
     n_val: int
     n_test: int
@@ -198,16 +193,14 @@ class EvaluationResult:
     partition: str
     bands: str
     num_classes: int
-    # Fingerprint of the full config (seed, device, dataset, eval, model); see
-    # ``resume._resume_config_hash``.  Part of the resume key.
+    # Config fingerprint for resume; see resume.resume_config_hash.
     config_hash: str
     c_range_start: float
     c_range_stop: float
     c_range_num: int
     merge_val: bool
     bootstrap: int
-    # Scale-MAE's dataset_overrides vary these per dataset (#215); they are
-    # part of the resume key, so they must round-trip through the CSV.
+    # Keep resolution and pooling in the CSV for per-dataset resume keys (Scale-MAE, #215).
     res: float | None = None
     pool: str | None = None
     # Segmentation-only metrics (None for classification rows)
@@ -231,47 +224,36 @@ class EvaluationResult:
         return self.__dict__.copy()
 
 
-def metric_row(
-    common_meta: dict,
-    *,
-    method: str,
-    metric_name: str,
-    metric_value: float,
-    feature_dim: int,
-    n_counts: dict[str, int],
-    **extra: object,
-) -> dict:
-    """Build one CSV row dict; CIs default to 0 and probe hyperparams to None."""
-    return EvaluationResult(
-        **common_meta,
-        method=method,
-        metric_name=metric_name,
-        metric_value=metric_value,
-        feature_dim=feature_dim,
-        ci_lower=extra.pop("ci_lower", 0.0),
-        ci_upper=extra.pop("ci_upper", 0.0),
-        best_c=extra.pop("best_c", None),
-        best_lr=extra.pop("best_lr", None),
-        best_batch_size=extra.pop("best_batch_size", None),
-        n_train=n_counts.get("train", 0),
-        n_val=n_counts.get("val", 0),
-        n_test=n_counts.get("test", 0),
-        **extra,  # type: ignore[arg-type]
-    ).to_row()
+def _replace_csv(path: str, contents: str) -> None:
+    """Publish a fully written replacement without modifying the existing file on failure."""
+    destination = Path(path)
+    mode = stat.S_IMODE(destination.stat().st_mode)
+    staged_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            newline="",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as replacement:
+            staged_path = Path(replacement.name)
+            replacement.write(contents)
+            replacement.flush()
+            staged_path.chmod(mode)
+            os.fsync(replacement.fileno())
+        os.replace(staged_path, destination)
+    finally:
+        if staged_path is not None:
+            staged_path.unlink(missing_ok=True)
 
 
 def append_rows_atomic(path: str, rows: list[dict]) -> None:
-    """Append rows to a CSV atomically, with advisory file lock and schema healing.
+    """Append CSV rows under a file lock, extending the schema when needed.
 
-    Behavior:
-
-    - Empty/missing file: writes the header derived from ``rows`` and the rows.
-    - Existing file whose header matches ``rows[0]`` keys exactly: appends
-      rows without rewriting the header (fast path).
-    - Existing file with a different schema (e.g. ``EvaluationResult`` gained
-      a field since the file was first written): the file is rewritten with
-      the unioned schema so every value lives under a named column instead
-      of being silently stuffed into an unnamed position.
+    Write the header for an empty or new file. Append when column names and order match.
+    Otherwise, stage and atomically replace the file with all old and new columns.
 
     Args:
         path: Output CSV path; created if missing.
@@ -282,12 +264,9 @@ def append_rows_atomic(path: str, rows: list[dict]) -> None:
     if not rows:
         return
     df_local = pd.DataFrame(rows)
-    # Cross-platform advisory lock (Linux/macOS/Windows) so concurrent SLURM
-    # array tasks don't interleave their read-modify-append and corrupt the CSV.
     with FileLock(f"{path}.lock"):
         fd = os.open(path, os.O_RDWR | os.O_CREAT)
-        # newline="" keeps the csv line terminators from being translated to
-        # CRLF on Windows, which would otherwise inject blank rows.
+        # Disable newline translation to avoid blank CSV rows on Windows.
         with os.fdopen(fd, "r+", newline="", closefd=True) as f:
             f.seek(0, os.SEEK_END)
             empty = f.tell() == 0
@@ -316,9 +295,10 @@ def append_rows_atomic(path: str, rows: list[dict]) -> None:
                         list(df_local.columns),
                         ordered,
                     )
-                    f.seek(0)
-                    f.truncate()
                     combined.to_csv(buf, header=True, index=False)
-                    f.write(buf.getvalue())
+                    # Windows requires the destination handle to close before replacement.
+                    f.close()
+                    _replace_csv(path, buf.getvalue())
+                    return
             f.flush()
             os.fsync(f.fileno())

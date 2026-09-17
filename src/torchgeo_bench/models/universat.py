@@ -12,21 +12,19 @@ Model code loads via ``torch.hub`` and weights from the HuggingFace Hub
 
 import logging
 from collections import defaultdict
-from typing import ClassVar
+from typing import ClassVar, Protocol, Self, cast
 
 import torch
 import torch.nn.functional as F
 
 from torchgeo_bench.datasets.base import BandSpec
 
+from ._normalization import NormalizationStrategy
 from .interface import BenchModel
 
 logger = logging.getLogger(__name__)
 
-# Pinned UniverSat revision for reproducible torch.hub loads. The repo has no
-# tags/releases and rewrote its history after the previous pin, orphaning it
-# (torch.hub's fork-of-default-branch check then fails to resolve the ref) --
-# repin to the current main tip if this happens again.
+# Pin model code for reproducible torch.hub loads.
 UNIVERSAT_REPO = "gastruc/UniverSat"
 UNIVERSAT_REF = "d4e8712d29651c34c4fdb9f9d2c0b168dd5c678b"
 
@@ -120,13 +118,14 @@ def _build_sensor_groups(
         if mod == "s1":
             wavelengths: list[float | str] = [_sar_code(b.name) for b in group_bands]
         else:
-            wavelengths = [b.wavelength_um for b in group_bands]
-            if any(w is None for w in wavelengths):
+            band_wavelengths = [b.wavelength_um for b in group_bands]
+            if any(w is None for w in band_wavelengths):
                 missing = [b.name for b in group_bands if b.wavelength_um is None]
                 raise ValueError(
                     f"UniverSat needs a wavelength per channel; BandSpecs {missing} "
                     f"have wavelength_um=None."
                 )
+            wavelengths = [w for w in band_wavelengths if w is not None]
         res = input_res if (input_res is not None and single_sensor) else _MODALITY_INPUT_RES[mod]
         groups.append(
             {
@@ -138,6 +137,27 @@ def _build_sensor_groups(
             }
         )
     return groups
+
+
+class UniverSatEncoder(Protocol):
+    """The inference methods exposed by UniverSat's torch.hub model."""
+
+    def eval(self) -> Self:
+        """Switch to inference mode."""
+        ...
+
+    def encode(  # noqa: PLR0913 - upstream model API
+        self,
+        x: dict[str, torch.Tensor],
+        *,
+        patch_size: float,
+        output_grid: int | None,
+        wavelengths: dict[str, list[float | str]],
+        input_res: dict[str, float],
+        subpatches: dict[str, int],
+    ) -> tuple[torch.Tensor, object]:
+        """Encode modality tensors into spatial tokens."""
+        ...
 
 
 class UniverSatBenchModel(BenchModel):
@@ -157,7 +177,7 @@ class UniverSatBenchModel(BenchModel):
             m-brick-kiln; https://github.com/gastruc/UniverSat's other GeoBench
             configs tune this per dataset GSD and have no S2 classification
             entry to match otherwise).
-        output_grid: Side ``G`` of the ``G×G`` token grid. ``None`` (default)
+        output_grid: Side ``G`` of the ``GxG`` token grid. ``None`` (default)
             lets UniverSat infer the natural patch grid; tokens are mean-pooled.
         input_res: Override the physical resolution (m/px), single-sensor only;
             ``None`` uses the registry value per modality.
@@ -169,7 +189,7 @@ class UniverSatBenchModel(BenchModel):
     # Output embedding dimension of the released Base model.
     embed_dim: ClassVar[int] = 768
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - public YAML options
         self,
         bands: list[BandSpec],
         *,
@@ -180,9 +200,10 @@ class UniverSatBenchModel(BenchModel):
         normalize: bool = False,
         repo: str = UNIVERSAT_REPO,
         repo_ref: str | None = UNIVERSAT_REF,
+        normalization: NormalizationStrategy | str = NormalizationStrategy.BANDSPEC_ZSCORE,
         **_kwargs: object,
     ) -> None:
-        super().__init__(bands=bands, **_kwargs)
+        super().__init__(bands=bands, normalization=normalization, **_kwargs)
 
         self._groups = _build_sensor_groups(self.bands, modality=modality, input_res=input_res)
 
@@ -191,13 +212,11 @@ class UniverSatBenchModel(BenchModel):
         self.do_normalize = normalize
 
         source = f"{repo}:{repo_ref}" if repo_ref else repo
-        # compile=False: the current hub entrypoint defaults to torch.compile
-        # max-autotune, tuned for repeated large-batch training steps. A
-        # single-pass feature-extraction sweep never amortises that warmup
-        # cost, and varying per-dataset input shapes across the sweep can
-        # overflow dynamo's recompile limit.
-        self.model = torch.hub.load(
-            source, "from_pretrained", trust_repo=True, compile=False
+        # Single-pass extraction does not amortize torch.compile's max-autotune warmup.
+        # Varying dataset shapes can also exhaust its recompile limit.
+        self.model = cast(
+            UniverSatEncoder,
+            torch.hub.load(source, "from_pretrained", trust_repo=True, compile=False),
         ).eval()
         logger.info(
             "UniverSat loaded (modalities=%s, %d channels, patch_size=%sm)",

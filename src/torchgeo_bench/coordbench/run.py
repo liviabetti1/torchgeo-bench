@@ -1,24 +1,39 @@
 """Runner for the CoordBench location-encoder track.
 
-Driven from ``torchgeo-bench run mode=coord``: instantiate a coordinate encoder
-from the Hydra ``model`` config, embed each benchmark's points once, then probe
+Driven by a :class:`CoordConfig`: instantiate a coordinate encoder from its
+model preset, embed each benchmark's points once, then probe
 with KNN and/or a ridge linear head under random and/or spatial-block
 cross-validation. One CSV row per (benchmark, task, method, split) is appended
-to ``coord.output`` via the shared atomic writer, with resume support.
+to ``output.file`` via the shared atomic writer, with resume support.
 """
 
 import logging
 import os
+<<<<<<< HEAD
 import time
 from collections.abc import Sequence
+=======
+from collections.abc import Iterator, Sequence
+>>>>>>> origin/main
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
+<<<<<<< HEAD
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import Progress
+=======
+import torch
+from tqdm.auto import tqdm
+>>>>>>> origin/main
 
-from torchgeo_bench.config import instantiate
+from torchgeo_bench.config.presets import ModelPreset, build_model
+from torchgeo_bench.coordbench.config import (
+    CoordConfig,
+    CoordEvaluationConfig,
+    resolve_coord_preset,
+)
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.temporal_aggregation import TEMPORAL_AGGREGATION_METHODS, temporal_aggregation
 from torchgeo_bench.coordbench.models import LocationEncoder
@@ -26,7 +41,12 @@ from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
     linear_probe_score
 )
+<<<<<<< HEAD
 from torchgeo_bench.coordbench.splits import spatial_fold_ids
+=======
+from torchgeo_bench.devices import resolve_device
+from torchgeo_bench.results import append_rows_atomic
+>>>>>>> origin/main
 
 logger = logging.getLogger(__name__)
 
@@ -56,36 +76,28 @@ class CoordResult:
     model_target: str
     embedding_aggregation: str  # "none" | "yearly:{year}:{freq}" | "summer:{year}:{freq}"
 
-    def to_row(self) -> dict:
+    def to_row(self) -> dict[str, Any]:
         """Convert to a flat dict suitable for CSV/DataFrame export."""
         return self.__dict__.copy()
 
 
-def _instantiate_encoder(model_cfg: DictConfig, device: str) -> tuple[LocationEncoder, str]:
-    """Build a :class:`LocationEncoder` from a Hydra model config.
-
-    Returns the encoder and the ``name`` recorded in result rows. ``name`` is a
-    display field, not a constructor argument, so it is stripped before
-    instantiation.
-    """
-    cfg = model_cfg.copy()
-    OmegaConf.set_struct(cfg, False)
-    name = cfg.pop("name", cfg.get("_target_", "model").split(".")[-1])
-    encoder = instantiate(cfg, device=device)
+def _instantiate_encoder(preset: ModelPreset, device: str) -> LocationEncoder:
+    """Build a coordinate encoder using only its constructor options."""
+    encoder = build_model(preset, device=device)
     if not isinstance(encoder, LocationEncoder):
         raise TypeError(
-            f"mode=coord requires model._target_ to be a LocationEncoder subclass; "
-            f"got {type(encoder).__name__}. Pick a coord model, e.g. model=sincos."
+            f"coord requires model.target to be a LocationEncoder subclass; "
+            f"got {type(encoder).__name__}. Pick a coordinate model, e.g. --model sincos."
         )
-    return encoder, str(name)
+    return encoder
 
 
 def _resolve_splits(split: str) -> list[str]:
-    """Expand the ``coord.split`` value into concrete CV modes to run."""
+    """Expand the selected CV modes to run."""
     if split == "both":
         return ["random", "spatial"]
     if split not in ("random", "spatial"):
-        raise ValueError(f"coord.split must be one of random|spatial|both; got {split!r}")
+        raise ValueError(f"evaluation.split must be random|spatial|both; got {split!r}")
     return [split]
 
 
@@ -115,43 +127,19 @@ def _methods_for(task_type: str, requested: Sequence[str], knn_k: int) -> list[t
     return methods
 
 
-def _score_one(
-    kind: str,
-    features: np.ndarray,
-    labels: np.ndarray,
-    task_type: str,
-    *,
-    folds: int,
-    seed: int,
-    device: str,
-    knn_device: str,
-    knn_k: int,
-    test_mask: np.ndarray | None,
-    fold_assign: np.ndarray | None,
-) -> tuple[float, list[float]]:
-    if kind == "knn":
-        return knn_probe_score(
-            features,
-            labels,
-            folds=folds,
-            seed=seed,
-            k=knn_k,
-            device=knn_device,
-            test_mask=test_mask,
-            fold_assign=fold_assign,
-        )
-    return linear_probe_score(
-        features,
-        labels,
-        task_type,
-        folds=folds,
-        seed=seed,
-        device=device,
-        test_mask=test_mask,
-        fold_assign=fold_assign,
-    )
+def _evaluation_split(
+    bench: CoordBenchmark, split: str, coord: CoordEvaluationConfig, seed: int
+) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+    """Use an official holdout when present, otherwise the requested CV split."""
+    if bench.test_mask is not None:
+        return bench.test_mask, None, "official"
+    if split == "spatial":
+        assignment = spatial_fold_ids(bench.lat, bench.lon, coord.folds, coord.cell_deg, seed)
+        return None, assignment, "spatial"
+    return None, None, "random"
 
 
+<<<<<<< HEAD
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     methods: Sequence[str],
@@ -172,9 +160,18 @@ def _expand_temporal(
 
 
 def run_coordbench(cfg: DictConfig) -> None:
+=======
+def run_coordbench(cfg: CoordConfig) -> None:
+>>>>>>> origin/main
     """Run the CoordBench location-encoder benchmark for the configured model."""
-    from torchgeo_bench.main import append_rows_atomic  # lazy: avoids import cycle
+    preset = resolve_coord_preset(cfg)
+    device = str(resolve_device(cfg.runtime.device))
+    torch.manual_seed(cfg.runtime.seed)
+    if cfg.runtime.device != device:
+        cfg = cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"device": device})})
+    splits = _resolve_splits(cfg.evaluation.split)
 
+<<<<<<< HEAD
     coord = cfg.coord
     device = str(cfg.device)
     seed = int(cfg.seed)
@@ -188,16 +185,19 @@ def run_coordbench(cfg: DictConfig) -> None:
     aggregate_embeddings = bool(coord.aggregate_embeddings)
 
     output_path = str(coord.output)
+=======
+    output_path = cfg.output.file
+>>>>>>> origin/main
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    encoder, model_name = _instantiate_encoder(cfg.model, device)
-    model_target = str(cfg.model.get("_target_", type(encoder).__name__))
-    logger.info("CoordBench: model=%s device=%s splits=%s", model_name, device, splits)
+    encoder = _instantiate_encoder(preset, device)
+    logger.info("CoordBench: model=%s device=%s splits=%s", preset.name, device, splits)
 
-    completed = _completed_keys(output_path) if cfg.resume else set()
+    completed = _completed_keys(output_path) if cfg.output.resume else set()
     if completed:
         logger.info("Resume mode: %d existing coord results in %s", len(completed), output_path)
 
+<<<<<<< HEAD
     t0 = time.perf_counter()
     benchmarks = load_benchmarks(coord.names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
@@ -255,13 +255,33 @@ def run_coordbench(cfg: DictConfig) -> None:
                 len(rows),
             )
             progress.advance(task_id)
+=======
+    names = "all" if cfg.datasets == ["all"] else cfg.datasets
+    benchmarks = load_benchmarks(names)
+    logger.info("CoordBench: %d benchmarks selected", len(benchmarks))
+
+    for bench in tqdm(benchmarks, desc="CoordBench"):
+        for row in _evaluate_benchmark(bench, encoder, cfg, preset, completed):
+            append_rows_atomic(output_path, [row])
+            completed.add(tuple(str(row[col]) for col in RESUME_KEY_COLS))
+>>>>>>> origin/main
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
+
+
+def test_sample_count(labels: np.ndarray, task_type: str, test_mask: np.ndarray | None) -> int:
+    """Count held-out samples, or finite regression labels for cross-validation."""
+    if test_mask is not None:
+        return int(np.asarray(test_mask, dtype=bool).sum())
+    if task_type == "regression":
+        return int(np.isfinite(np.asarray(labels, dtype=np.float64)).sum())
+    return len(labels)
 
 
 def _evaluate_benchmark(
     bench: CoordBenchmark,
     encoder: LocationEncoder,
+<<<<<<< HEAD
     *,
     methods: Sequence[str],
     splits: Sequence[str],
@@ -281,9 +301,21 @@ def _evaluate_benchmark(
     Returns ``(rows, encode_seconds, probe_seconds)`` so the caller can log where
     time went for this benchmark.
     """
+=======
+    cfg: CoordConfig,
+    preset: ModelPreset,
+    completed: set[tuple[str, ...]],
+) -> Iterator[dict[str, Any]]:
+    """Embed one benchmark once and probe every (task, method, split) combination."""
+    coord = cfg.evaluation
+    seed = cfg.runtime.seed
+    folds = coord.folds
+    knn_k = coord.knn_k
+>>>>>>> origin/main
     metric_name = "r2" if bench.task_type == "regression" else "accuracy"
-    method_kinds = _methods_for(bench.task_type, methods, knn_k)
+    method_kinds = _methods_for(bench.task_type, coord.methods, knn_k)
     if not method_kinds:
+<<<<<<< HEAD
         return [], 0.0, 0.0
 
     t0 = time.perf_counter()
@@ -365,3 +397,65 @@ def _evaluate_benchmark(
         if bench.test_mask is not None:
             break
     return rows, encode_s, probe_s
+=======
+        return
+
+    features = None
+
+    for split in _resolve_splits(coord.split):
+        test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)
+
+        for task, labels in bench.tasks.items():
+            for method_label, kind in method_kinds:
+                key = (bench.name, task, method_label, preset.name, split_label)
+                if key in completed:
+                    continue
+                if features is None:
+                    features = encoder.encode(bench.lon, bench.lat, bench.year)
+                if kind == "knn":
+                    score, fold_scores = knn_probe_score(
+                        features,
+                        np.asarray(labels),
+                        folds=folds,
+                        seed=seed,
+                        k=knn_k,
+                        device=coord.knn_device,
+                        test_mask=test_mask,
+                        fold_assign=fold_assign,
+                    )
+                else:
+                    score, fold_scores = linear_probe_score(
+                        features,
+                        np.asarray(labels),
+                        bench.task_type,
+                        folds=folds,
+                        seed=seed,
+                        device=cfg.runtime.device,
+                        test_mask=test_mask,
+                        fold_assign=fold_assign,
+                    )
+                std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
+                n_test = test_sample_count(labels, bench.task_type, test_mask)
+                yield CoordResult(
+                    dataset=bench.name,
+                    task=task,
+                    task_type=bench.task_type,
+                    method=method_label,
+                    split=split_label,
+                    metric_name=metric_name,
+                    metric_value=score,
+                    ci_lower=score - std,
+                    ci_upper=score + std,
+                    n_folds=1 if split_label == "official" else folds,
+                    cell_deg=coord.cell_deg,
+                    feature_dim=int(features.shape[1]),
+                    n_samples=len(labels),
+                    n_test=n_test,
+                    seed=seed,
+                    model_name=preset.name,
+                    model_target=preset.target,
+                ).to_row()
+        # An official test set is evaluated once, even when both CV modes were requested.
+        if bench.test_mask is not None:
+            break
+>>>>>>> origin/main

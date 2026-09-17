@@ -1,38 +1,43 @@
 """Tests for the per-sample compute-cost (GFLOPs) pipeline.
 
-The fast tests build tiny synthetic modules so they run on CPU without
-downloading anything.  Tests that need a real pretrained backbone are marked
-``slow`` (``-m slow`` to include), matching the repo-wide convention.
+Fast tests run on CPU without downloads; use ``-m slow`` for real pretrained backbones.
 """
 
 import math
+from pathlib import Path
 
 import pytest
 import torch
+from pydantic import ValidationError
 from torch import nn
 
+from tests.support.numerical import isolated_torch_rng as isolated_torch_rng
+from torchgeo_bench import flops_pipeline
+from torchgeo_bench.bands import BandCompatibilityError
+from torchgeo_bench.config.flops import FlopsConfig, FlopsSegmentationConfig
+from torchgeo_bench.config.presets import ModelPreset, build_model, load_model_preset
+from torchgeo_bench.config.schema import ModelConfig, SegmentationConfig
 from torchgeo_bench.datasets import get_bench_dataset_class
+from torchgeo_bench.datasets.base import BandSpec
 from torchgeo_bench.flops_pipeline import (
     _MODALITY_FOR_BAND_CONFIG,
-    _is_band_incompatibility,
+    _build_model,
+    _build_seg_probe,
     _load_completed,
     _n_tokens,
     _probe_gflops,
     _seg_head_gflops,
+    main,
 )
-from torchgeo_bench.model_profile import _count_gflops, lenient_grad_hooks
-from torchgeo_bench.segmentation_task import build_seg_probe_and_solver
+from torchgeo_bench.model_profile import ProfileTiming, _count_gflops
 
 CPU = torch.device("cpu")
 
-
-# ---------------------------------------------------------------------------
-# lenient_grad_hooks: the no-op guarantee
-# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.usefixtures("isolated_torch_rng")
 
 
 class _TinyConvNet(nn.Module):
-    """Healthy model — never trips module_tracker's grad_fn assertion."""
+    """Small backbone with known convolution and linear costs."""
 
     def __init__(self, in_ch: int = 3, width: int = 8) -> None:
         super().__init__()
@@ -46,82 +51,45 @@ class _TinyConvNet(nn.Module):
 
 
 class _GradBreakingNet(nn.Module):
-    """Reproduces Panopticon's failure shape.
-
-    A ``conv3d`` fed a tensor introduced *inside* the forward has no
-    ``grad_fn``, so ``module_tracker``'s forward-pre-hook raises before any
-    counting happens.  This is the structural pattern, not the model.
-    """
+    """Reproduce Panopticon's detached channel-fusion features."""
 
     def __init__(self, in_ch: int = 3) -> None:
         super().__init__()
-        # (B, 1, 1, H, W) -> (B, 4, 1, H, W), squeezed back to (B, 4, H, W).
         self.conv3d = nn.Conv3d(1, 4, kernel_size=(1, 3, 3), padding=(0, 1, 1))
         self.head = nn.Linear(4, 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Detach severs the autograd chain the way Panopticon's chn-fusion does.
         broken = x.mean(dim=1, keepdim=True).detach()
         y = self.conv3d(broken.unsqueeze(1)).squeeze(2)
         return self.head(y.mean(dim=(-2, -1)))
 
 
-def test_lenient_grad_hooks_is_bit_identical_for_healthy_models():
-    """The load-bearing check: the workaround must change nothing for models
-    that already work.  Bit-identical, not merely close."""
-    model = _TinyConvNet().eval()
-    x = torch.randn(2, 3, 32, 32)
-
-    plain = _count_gflops(model, x)
-    with lenient_grad_hooks():
-        lenient = _count_gflops(model, x)
-
-    assert plain == lenient, f"{plain!r} != {lenient!r}"
-    assert plain > 0
-
-
-def test_lenient_grad_hooks_restores_the_original_hook():
-    """The patch must not leak outside the context manager."""
+def test_counting_does_not_patch_autograd():
     import torch.autograd.graph as autograd_graph
     import torch.utils.module_tracker as module_tracker
 
     before = autograd_graph.register_multi_grad_hook
     before_mt = module_tracker.register_multi_grad_hook
-    with lenient_grad_hooks():
-        assert autograd_graph.register_multi_grad_hook is not before
+    model = _TinyConvNet().eval()
+
+    def check_hooks(module, inputs):
+        assert autograd_graph.register_multi_grad_hook is before
+        assert module_tracker.register_multi_grad_hook is before_mt
+        assert not torch.is_grad_enabled()
+
+    with model.register_forward_pre_hook(check_hooks):
+        assert _count_gflops(model, torch.randn(2, 3, 32, 32)) > 0
     assert autograd_graph.register_multi_grad_hook is before
     assert module_tracker.register_multi_grad_hook is before_mt
 
 
-def test_lenient_grad_hooks_restores_on_exception():
-    import torch.autograd.graph as autograd_graph
-
-    before = autograd_graph.register_multi_grad_hook
-    with pytest.raises(RuntimeError), lenient_grad_hooks():
-        raise RuntimeError("boom")
-    assert autograd_graph.register_multi_grad_hook is before
-
-
 def test_grad_breaking_model_is_measurable():
-    """A model with Panopticon's grad-breaking shape yields finite GFLOPs.
-
-    ``_count_gflops`` runs the whole tier ladder inside ``lenient_grad_hooks``,
-    so this must not raise ``NotImplementedError``.
-    """
     model = _GradBreakingNet().eval()
     gflops = _count_gflops(model, torch.randn(2, 3, 32, 32))
-    assert math.isfinite(gflops)
-    assert gflops > 0
-
-
-# ---------------------------------------------------------------------------
-# Determinism and scaling
-# ---------------------------------------------------------------------------
+    assert gflops == pytest.approx((2 * 4 * 32 * 32 * 9 + 2 * 4 * 2) / 1e9)
 
 
 def test_gflops_independent_of_batch_size():
-    """``_count_gflops`` slices ``sample[:1]``, so GFLOPs is per-sample
-    regardless of the batch handed in."""
     model = _TinyConvNet().eval()
     one = _count_gflops(model, torch.randn(1, 3, 32, 32))
     many = _count_gflops(model, torch.randn(16, 3, 32, 32))
@@ -129,7 +97,7 @@ def test_gflops_independent_of_batch_size():
 
 
 def test_gflops_scales_with_resolution():
-    """Doubling each spatial dim quadruples conv FLOPs."""
+    """Doubling spatial dimensions nearly quadruples cost; the classifier stays fixed."""
     model = _TinyConvNet().eval()
     small = _count_gflops(model, torch.randn(1, 3, 32, 32))
     large = _count_gflops(model, torch.randn(1, 3, 64, 64))
@@ -137,24 +105,15 @@ def test_gflops_scales_with_resolution():
 
 
 def test_channel_count_changes_only_the_stem():
-    """C=3 vs C=12 differ only in stem cost, so the delta is exactly the extra
-    stem MACs — far smaller than the total."""
+    """Increasing input channels from 3 to 12 nearly quadruples the stem-dominated cost."""
     x3, x12 = torch.randn(1, 3, 32, 32), torch.randn(1, 12, 32, 32)
     g3 = _count_gflops(_TinyConvNet(in_ch=3).eval(), x3)
     g12 = _count_gflops(_TinyConvNet(in_ch=12).eval(), x12)
     assert g12 > g3
-    # stem is the only channel-dependent layer: 12/3 = 4x its cost
     assert g12 == pytest.approx(4 * g3, rel=0.05)
 
 
-# ---------------------------------------------------------------------------
-# Probe capacity confound
-# ---------------------------------------------------------------------------
-
-
 class _WidthModel(nn.Module):
-    """Emits a fixed-width embedding, standing in for a pooled backbone."""
-
     def __init__(self, width: int) -> None:
         super().__init__()
         self.width = width
@@ -165,13 +124,12 @@ class _WidthModel(nn.Module):
 
 
 def test_probe_scales_with_feature_dim_not_classes():
-    """A ``pool='both'`` model hands the probe a 2x wider vector; the linear
-    probe's cost and params scale with it."""
+    """Doubling embedding width, as ``pool='both'`` does, should double linear-probe cost."""
     narrow = _WidthModel(1024).eval()
     wide = _WidthModel(2048).eval()
 
-    g_n, p_n, d_n = _probe_gflops(narrow, 3, 32, CPU, "linear", 10)
-    g_w, p_w, d_w = _probe_gflops(wide, 3, 32, CPU, "linear", 10)
+    g_n, p_n, d_n = _probe_gflops(narrow, (3, 32, 32), CPU, "linear", 10)
+    g_w, p_w, d_w = _probe_gflops(wide, (3, 32, 32), CPU, "linear", 10)
 
     assert (d_n, d_w) == (1024, 2048)
     assert g_w == pytest.approx(2 * g_n, rel=0.01)
@@ -179,22 +137,19 @@ def test_probe_scales_with_feature_dim_not_classes():
 
 
 def test_mlp_probe_scales_as_feature_dim_squared():
-    """``linear.py`` builds ``Linear(D, D, bias=False)`` — the confound is D^2,
-    over the *feature* dim, not the class count."""
+    """Doubling feature width nearly quadruples the dominant D-by-D projection cost."""
     narrow = _WidthModel(512).eval()
     wide = _WidthModel(1024).eval()
 
-    g_n, _, _ = _probe_gflops(narrow, 3, 32, CPU, "mlp", 10)
-    g_w, _, _ = _probe_gflops(wide, 3, 32, CPU, "mlp", 10)
+    g_n, _, _ = _probe_gflops(narrow, (3, 32, 32), CPU, "mlp", 10)
+    g_w, _, _ = _probe_gflops(wide, (3, 32, 32), CPU, "mlp", 10)
 
-    # The D x D projection dominates the D x n_classes classifier, so doubling
-    # D roughly quadruples the probe.
     assert g_w / g_n == pytest.approx(4.0, rel=0.05)
 
 
-# ---------------------------------------------------------------------------
-# n_tokens
-# ---------------------------------------------------------------------------
+def test_unknown_probe_head_is_rejected():
+    with pytest.raises(ValueError, match="Unknown probe head"):
+        _probe_gflops(_WidthModel(8).eval(), (3, 32, 32), CPU, "typo", 10)
 
 
 class _PatchModel(nn.Module):
@@ -217,20 +172,12 @@ def test_n_tokens_is_none_for_cnns():
     assert _n_tokens(_TinyConvNet(), 224) is None
 
 
-# ---------------------------------------------------------------------------
-# Segmentation head
-# ---------------------------------------------------------------------------
-
-
 class _TapModel(nn.Module):
-    """Backbone exposing named spatial layers at a chosen tap resolution."""
-
     def __init__(self, in_ch: int = 12, tap_stride: int = 16) -> None:
         super().__init__()
-        # SegmentationProbe._dry_run_channels reads `num_channels` off the
-        # backbone to size its probe tensor (defaulting to 3).
+        # The channel probe uses num_channels to size its input.
         self.num_channels = in_ch
-        # Four isotropic taps — DPTHead requires exactly 4 feature layers.
+        # DPT requires exactly four feature layers.
         self.layer1 = nn.Conv2d(in_ch, 32, kernel_size=tap_stride, stride=tap_stride)
         self.layer2 = nn.Conv2d(32, 32, kernel_size=1)
         self.layer3 = nn.Conv2d(32, 32, kernel_size=1)
@@ -244,30 +191,16 @@ class _TapModel(nn.Module):
 _TAP_LAYERS = ["layer4", "layer3", "layer2", "layer1"]
 
 
-def _seg_cfg(layers: list[str], head_type: str):
-    from omegaconf import OmegaConf
-
-    return OmegaConf.create(
-        {
-            "segmentation": {
-                "layers": layers,
-                "head_type": head_type,
-                "lr_scheduler": "cosine",
-                "criterion": {
-                    "_target_": "torch.nn.CrossEntropyLoss",
-                    "ignore_index": 255,
-                },
-            }
-        }
-    )
+def _seg_cfg(layers: list[str], head_type: str) -> SegmentationConfig:
+    return SegmentationConfig.model_validate({"layers": layers, "head": head_type})
 
 
-@pytest.mark.parametrize("head_type", ["fpn", "dpt"])
+@pytest.mark.parametrize("head_type", ["linear", "conv_block", "fpn", "dpt", "patch_linear"])
 def test_seg_head_gflops_is_positive_and_deterministic(head_type):
     if head_type == "dpt":
         pytest.importorskip("transformers")
     model = _TapModel().eval()
-    probe, _ = build_seg_probe_and_solver(model, 4, _seg_cfg(_TAP_LAYERS, head_type), CPU, 1e-3)
+    probe = _build_seg_probe(model, 4, _seg_cfg(_TAP_LAYERS, head_type))
     probe.eval()
     first = _seg_head_gflops(probe, 12, 224, CPU)
     second = _seg_head_gflops(probe, 12, 224, CPU)
@@ -276,70 +209,40 @@ def test_seg_head_gflops_is_positive_and_deterministic(head_type):
 
 
 def test_finer_taps_make_a_more_expensive_head():
-    """Head cost is driven by finest tap resolution — a backbone property —
-    not by class count.  A stride-8 tap is 4x the pixels of a stride-16 one.
-    """
+    """Halving feature stride gives the head four times as many pixels at the same class count."""
     coarse = _TapModel(tap_stride=16).eval()
     fine = _TapModel(tap_stride=8).eval()
 
-    probe_c, _ = build_seg_probe_and_solver(coarse, 4, _seg_cfg(_TAP_LAYERS, "fpn"), CPU, 1e-3)
-    probe_f, _ = build_seg_probe_and_solver(fine, 4, _seg_cfg(_TAP_LAYERS, "fpn"), CPU, 1e-3)
+    probe_c = _build_seg_probe(coarse, 4, _seg_cfg(_TAP_LAYERS, "fpn"))
+    probe_f = _build_seg_probe(fine, 4, _seg_cfg(_TAP_LAYERS, "fpn"))
     g_coarse = _seg_head_gflops(probe_c.eval(), 12, 224, CPU)
     g_fine = _seg_head_gflops(probe_f.eval(), 12, 224, CPU)
     assert g_fine > g_coarse
 
 
 def test_num_classes_barely_moves_head_cost():
-    """Sub-2% for 2 -> 15 classes, which is why num_classes is not an axis."""
+    """Class count is not varied in the sweep because it barely changes head cost."""
     model = _TapModel().eval()
-    probe2, _ = build_seg_probe_and_solver(model, 2, _seg_cfg(_TAP_LAYERS, "fpn"), CPU, 1e-3)
-    probe15, _ = build_seg_probe_and_solver(model, 15, _seg_cfg(_TAP_LAYERS, "fpn"), CPU, 1e-3)
+    probe2 = _build_seg_probe(model, 2, _seg_cfg(_TAP_LAYERS, "fpn"))
+    probe15 = _build_seg_probe(model, 15, _seg_cfg(_TAP_LAYERS, "fpn"))
     g2 = _seg_head_gflops(probe2.eval(), 12, 224, CPU)
     g15 = _seg_head_gflops(probe15.eval(), 12, 224, CPU)
     assert abs(g15 - g2) / g2 < 0.02
 
 
-# ---------------------------------------------------------------------------
-# Band configs and the TerraMind modality agreement
-# ---------------------------------------------------------------------------
-
-
-def test_band_configs_come_from_cloudsen12_class_attributes():
-    """Band specs are read off class attributes — no instantiation of data,
-    no download."""
-    bench = get_bench_dataset_class("cloudsen12")()
-    rgb = bench.select_band_specs(bench.rgb_bands)
-    s2 = bench.select_band_specs(None)
-
-    assert len(rgb) == 3
-    assert len(s2) == 12
-    # cloudsen12's 12 bands are the canonical S2 set: all sensor "s2", unlike
-    # so2sat's 10 S2 + 2 SAR.
-    assert {b.sensor for b in s2} == {"s2"}
-    assert [b.name for b in rgb] == ["b04", "b03", "b02"]
-
-
-def test_terramind_modality_map_matches_shipped_configs():
-    """Assert no cell can pair an RGB modality with a 12-channel tensor.
-
-    This is the one failure mode that yields a plausible-looking wrong number
-    instead of an exception, so it is pinned against the actual config files.
-    """
-    from torchgeo_bench.config import compose_config
-
-    for config_name, band_config in [
+@pytest.mark.parametrize(
+    ("config_name", "band_config"),
+    [
         ("terratorch/terramind_v1_base", "s2"),
         ("terratorch/terramind_v1_base_rgb", "rgb"),
         ("terratorch/terramind_v1_large", "s2"),
         ("terratorch/terramind_v1_large_rgb", "rgb"),
-    ]:
-        cfg = compose_config([f"model={config_name}"])
-        assert str(cfg.model.modality) == _MODALITY_FOR_BAND_CONFIG[band_config]
-
-
-# ---------------------------------------------------------------------------
-# Resume
-# ---------------------------------------------------------------------------
+    ],
+)
+def test_terramind_modality_map_matches_shipped_configs(config_name: str, band_config: str) -> None:
+    """An RGB modality paired with 12 channels can produce plausible but wrong FLOP counts."""
+    preset = load_model_preset(ModelConfig(name=config_name))
+    assert preset.kwargs["modality"] == _MODALITY_FOR_BAND_CONFIG[band_config]
 
 
 def test_load_completed_missing_file(tmp_path):
@@ -363,157 +266,341 @@ def test_load_completed_reads_cell_keys(tmp_path):
     assert ("resnet50", "s2", "segmentation", "dpt") not in completed
 
 
-def test_load_completed_tolerates_malformed_csv(tmp_path):
-    """A partial/garbled CSV must not abort the sweep."""
+def test_load_completed_rejects_invalid_schema(tmp_path: Path) -> None:
     path = tmp_path / "broken.csv"
     path.write_text("this,is not\na valid;;csv\n")
-    assert _load_completed(str(path)) == frozenset()
+    with pytest.raises(KeyError, match="name"):
+        _load_completed(str(path))
 
 
-# ---------------------------------------------------------------------------
-# Band-incompatibility detection
-# ---------------------------------------------------------------------------
+def test_build_model_skips_explicit_band_incompatibility(monkeypatch, caplog):
+    def incompatible(config, **kwargs):
+        raise BandCompatibilityError("unsupported selection")
 
-
-def _wrap(exc: BaseException, depth: int = 2) -> BaseException:
-    """Nest *exc* in `depth` layers of wrapper exceptions."""
-    out: BaseException = exc
-    for i in range(depth):
-        try:
-            raise RuntimeError(f"instantiation failed (layer {i})") from out
-        except RuntimeError as wrapper:
-            out = wrapper
-    return out
-
-
-def test_band_incompatibility_detected_through_wrapping():
-    """A wrapped band ValueError is still found by walking the chain."""
-    inner = ValueError("Missing required model band 'nir'. Available canonical bands: ...")
-    assert _is_band_incompatibility(_wrap(inner)) is inner
-
-
-def test_band_incompatibility_matches_empty_intersection():
-    inner = ValueError("select_src_bands: none of the target bands ['blue'] are present.")
-    assert _is_band_incompatibility(_wrap(inner)) is inner
-
-
-def test_interpolation_key_error_is_not_a_band_incompatibility():
-    """omegaconf's InterpolationKeyError subclasses ValueError, so an
-    unresolved ``${seed}`` must not be classified as a band incompatibility."""
-    from omegaconf.errors import InterpolationKeyError
-
-    assert issubclass(InterpolationKeyError, ValueError)  # why the narrowing is needed
-    exc = InterpolationKeyError("Interpolation key 'seed' not found")
-    assert _is_band_incompatibility(_wrap(exc)) is None
+    monkeypatch.setattr("torchgeo_bench.flops_pipeline.build_model", incompatible)
+    cfg = ModelPreset(target="example.Model", name="example")
+    assert _build_model(cfg, [], "identity", "rgb") is None
+    assert "unsupported selection" in caplog.text
 
 
 @pytest.mark.parametrize(
-    "exc",
+    "error",
     [
+        KeyError("missing constructor option"),
+        ValueError("input channels configuration is invalid"),
         ValueError("Could not find weights for 'tt_clay_v1_5'"),
         OSError("[Errno 122] Disk quota exceeded"),
         RuntimeError("CUDA error: out of memory"),
-        ValueError("invalid literal for int() with base 10: 'x'"),
     ],
 )
-def test_real_failures_are_not_swallowed(exc):
-    """A missing checkpoint or a full disk is a failure, not a skip."""
-    assert _is_band_incompatibility(_wrap(exc)) is None
+def test_build_model_propagates_real_failures(error, monkeypatch):
+    def broken(config, **kwargs):
+        raise error
+
+    monkeypatch.setattr("torchgeo_bench.flops_pipeline.build_model", broken)
+    cfg = ModelPreset(target="example.Model", name="example")
+    with pytest.raises(type(error)) as exc:
+        _build_model(cfg, [], "identity", "rgb")
+    assert exc.value is error
 
 
-def test_band_incompatibility_survives_a_cyclic_cause_chain():
-    """``__cause__ or __context__`` can cycle when an exception is raised while
-    handling itself; the walk must terminate rather than spin."""
-    a = ValueError("Missing required model band 'swir1'")
-    b = RuntimeError("wrapper")
-    a.__context__ = b
-    b.__context__ = a
-    assert _is_band_incompatibility(b) is a
+def test_terramind_modality_mismatch_is_rejected():
+    cfg = ModelPreset(target="example.TerraMind", name="example", kwargs={"modality": "S2L2A"})
+    with pytest.raises(ValueError, match="does not match band config"):
+        _build_model(cfg, [], "identity", "rgb")
 
 
-def test_band_incompatibility_terminates_on_unmatched_cycle():
-    a = RuntimeError("one")
-    b = RuntimeError("two")
-    a.__context__ = b
-    b.__context__ = a
-    assert _is_band_incompatibility(a) is None
-
-
-def test_band_markers_match_what_band_mapping_actually_raises():
-    """The markers are matched by message, so they are pinned against the real
-    raise sites.  A reword there without a matching update here would silently
-    widen the sweep's blind spot back out."""
-    from torchgeo_bench.datasets.base import BandSpec
-    from torchgeo_bench.models._band_mapping import map_to_model_bands, select_src_bands
-
-    rgb = [
-        BandSpec(sensor="s2", name=n, source_name=n.upper(), mean=0.0, std=1.0, min=0.0, max=1.0)
-        for n in ("red", "green", "blue")
-    ]
-
-    with pytest.raises(ValueError) as missing:
-        map_to_model_bands(torch.zeros(1, 3, 4, 4), rgb, ["blue", "green", "red", "nir"])
-    assert _is_band_incompatibility(missing.value) is missing.value
-
-    with pytest.raises(ValueError) as empty:
-        select_src_bands(rgb, ["swir1", "swir2"])
-    assert _is_band_incompatibility(empty.value) is empty.value
-
-
-def test_channel_count_disagreement_is_a_bug_not_a_band_skip():
-    """map_to_model_bands' own caller assertion — a tensor whose channel count
-    disagrees with its BandSpecs — means the *pipeline* is wrong, not the model.
-    It must propagate rather than be logged as a routine band skip."""
-    from torchgeo_bench.datasets.base import BandSpec
-    from torchgeo_bench.models._band_mapping import map_to_model_bands
-
-    rgb = [
-        BandSpec(sensor="s2", name=n, source_name=n.upper(), mean=0.0, std=1.0, min=0.0, max=1.0)
-        for n in ("red", "green", "blue")
-    ]
-    with pytest.raises(ValueError) as mismatch:
-        map_to_model_bands(torch.zeros(1, 7, 4, 4), rgb, ["red", "green", "blue"])
-    assert "channels but" in str(mismatch.value)
-    assert _is_band_incompatibility(mismatch.value) is None
-
-
-def test_terramind_modality_mismatch_is_a_band_incompatibility():
-    """_build_model raises this itself for an S2L2A/rgb pairing."""
-    exc = ValueError(
-        "TerraMind modality 'S2L2A' does not match band config 'rgb' "
-        "(3 channels, expects 'RGB'). Measuring this pair would map through "
-        "the wrong band table."
+@pytest.fixture
+def flops_config(tmp_path):
+    return FlopsConfig.model_validate(
+        {
+            "model": {"name": "rcf"},
+            "output": {"file": str(tmp_path / "flops.csv")},
+            "runtime": {"device": "cpu"},
+            "input": {"image_size": 32, "band_configs": ["rgb"]},
+            "timing": {"batch_size": 2, "n_warmup": 0, "n_measure": 1},
+        }
     )
-    assert _is_band_incompatibility(exc) is exc
 
 
-def test_flops_config_resolves_every_shipped_model_config():
-    """conf/model/rcf.yaml carries ``seed: ${seed}``, which raises
-    InterpolationKeyError unless flops_config defines a top-level ``seed``,
-    so the sweep's own config is checked here instead of in the job."""
-    from omegaconf import OmegaConf
+def test_completed_profile_survives_incompatible_segmentation_head(flops_config, monkeypatch):
+    import pandas as pd
 
-    from torchgeo_bench.config import compose_config
+    monkeypatch.setattr(
+        "torchgeo_bench.flops_pipeline.build_model", lambda *args, **kwargs: _TinyConvNet()
+    )
+    flops_config.segmentation = FlopsSegmentationConfig(
+        heads=["dpt"], probe=SegmentationConfig(layers=["stem"])
+    )
+    with pytest.raises(ValueError, match="DPT"):
+        main(flops_config)
 
-    cfg = compose_config(["model=rcf"], config_name="flops_config", default_model=None)
-    resolved = OmegaConf.to_container(cfg, resolve=True)  # raises if unresolvable
-    assert resolved["model"]["seed"] == resolved["seed"] == 0
+    rows = pd.read_csv(flops_config.output.file)
+    assert list(rows["task"]) == ["classification"]
+    assert rows.iloc[0]["gflops_total"] > 0
+    assert not rows.iloc[0]["lenient_grad_hooks"]
 
 
-# ---------------------------------------------------------------------------
-# Real backbones (slow)
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "error",
+    [
+        BandCompatibilityError("unsupported selection"),
+        ValueError("input channels implementation is broken"),
+    ],
+)
+def test_forward_pass_only_skips_explicit_band_errors(flops_config, monkeypatch, caplog, error):
+    class BrokenForward(nn.Module):
+        def forward(self, images):
+            raise error
+
+    monkeypatch.setattr(
+        "torchgeo_bench.flops_pipeline.build_model", lambda *args, **kwargs: BrokenForward()
+    )
+    if isinstance(error, BandCompatibilityError):
+        main(flops_config)
+        assert "unsupported selection" in caplog.text
+    else:
+        with pytest.raises(ValueError, match="implementation is broken"):
+            main(flops_config)
+
+
+def test_flops_config_resolves_rcf_seed():
+    config = FlopsConfig(model=ModelConfig(name="rcf"))
+    resolved, preset = config.resolve()
+    assert preset.kwargs["seed"] == resolved.runtime.seed == 0
+
+
+type FlopsRun = tuple[FlopsConfig, list[dict[str, object]], list[str]]
+
+
+@pytest.fixture
+def flops_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlopsRun:
+    cfg = FlopsConfig.model_validate(
+        {
+            "output": {"file": str(tmp_path / "compute_cost.csv"), "resume": False},
+            "runtime": {"device": "cpu"},
+            "input": {"image_size": 8},
+            "segmentation": {
+                "heads": ["fpn", "dpt"],
+                "num_classes": 3,
+                "probe": {"layers": ["stem"]},
+            },
+            "classification": {"head": "linear", "num_classes": 7},
+            "timing": {"batch_size": 8, "n_warmup": 1, "n_measure": 2},
+            "model": {"target": "test.TinyModel", "name": "tiny"},
+        }
+    )
+    rows: list[dict[str, object]] = []
+    events: list[str] = []
+
+    def build_model(_cfg: ModelPreset, bands: list, *_args: object) -> nn.Module:
+        events.append(f"model:{len(bands)}")
+        return _WidthModel(5)
+
+    def measure_backbone(_model: nn.Module, channels: int, *_args: object) -> tuple[dict, int]:
+        events.append(f"backbone:{channels}")
+        return {
+            "gflops": 2.0,
+            "params_m": 0.1,
+            "throughput_samples_per_sec": 16.0,
+            "latency_ms_per_batch_p50": 250.0,
+            "peak_gpu_mem_gb": None,
+            "reserved_gpu_mem_gb": None,
+        }, 4
+
+    def build_head(_model: nn.Module, _classes: int, head_cfg: SegmentationConfig) -> nn.Module:
+        events.append(f"head:{head_cfg.head}")
+        assert head_cfg.layers == ["stem"]
+        probe = nn.Module()
+        probe.head = nn.Linear(5, 3)
+        probe.channels_list = [2, 3]
+        probe.hooks = []
+        probe._features = {}
+        return probe
+
+    monkeypatch.setattr(flops_pipeline, "_build_model", build_model)
+    monkeypatch.setattr(flops_pipeline, "_measure_backbone", measure_backbone)
+    monkeypatch.setattr(flops_pipeline, "_probe_gflops", lambda *_args: (0.5, 0.01, 5))
+    monkeypatch.setattr(flops_pipeline, "_build_seg_probe", build_head)
+    monkeypatch.setattr(flops_pipeline, "_seg_head_gflops", lambda *_args: 0.25)
+    monkeypatch.setattr(
+        flops_pipeline, "append_rows_atomic", lambda _path, values: rows.extend(values)
+    )
+    monkeypatch.setattr(flops_pipeline, "_now", lambda: "2026-09-04T00:00:00+00:00")
+    return cfg, rows, events
+
+
+def written_keys(rows: list[dict[str, object]]) -> list[tuple[object, object, object]]:
+    return [(row["band_config"], row["task"], row["head_type"]) for row in rows]
+
+
+def test_main_writes_ordered_measurement_rows(flops_run: FlopsRun) -> None:
+    cfg, rows, _events = flops_run
+    flops_pipeline.main(cfg)
+
+    assert written_keys(rows) == [
+        (band, task, head)
+        for band in ("rgb", "s2")
+        for task, head in (("classification", ""), ("segmentation", "fpn"), ("segmentation", "dpt"))
+    ]
+    assert [row["n_channels"] for row in rows] == [3, 3, 3, 12, 12, 12]
+    classification, segmentation = rows[:2]
+    assert classification["gflops_backbone"] == 2.0
+    assert classification["gflops_probe"] == 0.5
+    assert classification["gflops_total"] == 2.5
+    assert classification["params_probe_m"] == 0.01
+    assert classification["timing_batch_size"] == 4
+    assert classification["throughput_samples_per_sec"] == 16.0
+    assert classification["num_classes"] == 7
+    assert segmentation["gflops_head"] == 0.25
+    assert segmentation["gflops_backbone"] is None
+    assert segmentation["gflops_total"] is None
+    assert segmentation["feature_dim"] == 5
+    assert segmentation["num_classes"] == 3
+    assert segmentation["params_head_m"] == pytest.approx(18 / 1e6)
+    assert segmentation["timing_batch_size"] is None
+
+
+@pytest.mark.parametrize("all_complete", [False, True])
+def test_main_skips_completed_cells(flops_run: FlopsRun, *, all_complete: bool) -> None:
+    cfg, rows, events = flops_run
+    cfg.output.resume = True
+    completed = [("rgb", "classification", ""), ("s2", "segmentation", "fpn")]
+    if all_complete:
+        completed = [
+            (band, task, head)
+            for band in ("rgb", "s2")
+            for task, head in (
+                ("classification", ""),
+                ("segmentation", "fpn"),
+                ("segmentation", "dpt"),
+            )
+        ]
+    Path(cfg.output.file).write_text(
+        "name,band_config,task,head_type\n"
+        + "".join(f"tiny,{band},{task},{head}\n" for band, task, head in completed)
+    )
+    flops_pipeline.main(cfg)
+
+    if all_complete:
+        assert rows == []
+        assert events == ["model:3", "model:12"]
+    else:
+        assert written_keys(rows) == [
+            ("rgb", "segmentation", "fpn"),
+            ("rgb", "segmentation", "dpt"),
+            ("s2", "classification", ""),
+            ("s2", "segmentation", "dpt"),
+        ]
+        assert "backbone:3" not in events
+
+
+def test_main_skips_unavailable_model(flops_run: FlopsRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg, rows, events = flops_run
+    build = flops_pipeline._build_model
+    monkeypatch.setattr(
+        flops_pipeline,
+        "_build_model",
+        lambda model_cfg, bands, *args: None if len(bands) == 3 else build(model_cfg, bands, *args),
+    )
+    flops_pipeline.main(cfg)
+
+    assert written_keys(rows) == [
+        ("s2", "classification", ""),
+        ("s2", "segmentation", "fpn"),
+        ("s2", "segmentation", "dpt"),
+    ]
+    assert "backbone:3" not in events
+
+
+@pytest.mark.parametrize("stage", ["_measure_backbone", "_probe_gflops"])
+@pytest.mark.parametrize("band_mismatch", [False, True])
+def test_main_classification_failure_handling(
+    flops_run: FlopsRun, monkeypatch: pytest.MonkeyPatch, stage: str, *, band_mismatch: bool
+) -> None:
+    cfg, rows, events = flops_run
+    measure = getattr(flops_pipeline, stage)
+
+    def fail_rgb(model: nn.Module, shape: int | tuple[int, int, int], *args: object) -> object:
+        channels = shape if isinstance(shape, int) else shape[0]
+        if channels == 3:
+            if band_mismatch:
+                raise BandCompatibilityError("Missing required model band 'nir'")
+            raise RuntimeError("bad forward")
+        return measure(model, shape, *args)
+
+    monkeypatch.setattr(flops_pipeline, stage, fail_rgb)
+    if not band_mismatch:
+        with pytest.raises(RuntimeError, match="bad forward"):
+            flops_pipeline.main(cfg)
+        assert rows == []
+        assert "model:12" not in events
+        return
+
+    flops_pipeline.main(cfg)
+    assert written_keys(rows) == [
+        ("s2", "classification", ""),
+        ("s2", "segmentation", "fpn"),
+        ("s2", "segmentation", "dpt"),
+    ]
+    assert events.count("head:fpn") == 1
+
+
+@pytest.mark.parametrize("failed_head", ["fpn", "dpt"])
+def test_main_segmentation_failure_preserves_completed_rows(
+    flops_run: FlopsRun, monkeypatch: pytest.MonkeyPatch, failed_head: str
+) -> None:
+    cfg, rows, _events = flops_run
+    cfg.input.band_configs = ["rgb"]
+    build = flops_pipeline._build_seg_probe
+
+    def fail_head(model: nn.Module, classes: int, head_cfg: SegmentationConfig) -> nn.Module:
+        if head_cfg.head == failed_head:
+            raise ValueError("unsupported head")
+        return build(model, classes, head_cfg)
+
+    monkeypatch.setattr(flops_pipeline, "_build_seg_probe", fail_head)
+    with pytest.raises(ValueError, match="unsupported head"):
+        flops_pipeline.main(cfg)
+    expected = [("rgb", "classification", "")]
+    if failed_head == "dpt":
+        expected.append(("rgb", "segmentation", "fpn"))
+    assert written_keys(rows) == expected
+
+
+@pytest.mark.parametrize("empty_layers", [False, True])
+def test_main_skips_excluded_segmentation(flops_run: FlopsRun, *, empty_layers: bool) -> None:
+    cfg, rows, events = flops_run
+    if empty_layers:
+        cfg.segmentation.probe.layers = []
+    else:
+        cfg.segmentation.band_configs = []
+    flops_pipeline.main(cfg)
+
+    assert written_keys(rows) == [("rgb", "classification", ""), ("s2", "classification", "")]
+    assert "head:fpn" not in events
+
+
+@pytest.mark.parametrize("layers", [None, 1])
+def test_main_rejects_malformed_layers_before_measurement(
+    flops_run: FlopsRun, layers: int | None
+) -> None:
+    cfg, rows, events = flops_run
+    values = cfg.model_dump_yaml()
+    values["segmentation"]["probe"]["layers"] = layers
+    with pytest.raises(ValidationError, match="layers"):
+        FlopsConfig.model_validate(values)
+    assert rows == []
+    assert events == []
 
 
 @pytest.mark.slow
 def test_panopticon_yields_finite_gflops():
-    """Panopticon yields finite GFLOPs through the lenient_grad_hooks path."""
-    from torchgeo_bench.config import compose_config, instantiate
-
+    """Count the real Panopticon backbone without replacing PyTorch hooks."""
     bench = get_bench_dataset_class("cloudsen12")()
-    cfg = compose_config(["model=torchgeo/panopticon"])
-    model = instantiate(
-        cfg.model,
+    preset = load_model_preset(ModelConfig(name="torchgeo/panopticon"))
+    model = build_model(
+        preset,
         bands=bench.select_band_specs(None),
         normalization="bandspec_zscore",
     ).eval()
@@ -525,15 +612,13 @@ def test_panopticon_yields_finite_gflops():
 
 @pytest.mark.slow
 def test_vit_gflops_ordering_and_tokens():
-    """Sanity ordering: ViT-L > ViT-B, and n_tokens tracks (size/patch)^2."""
-    from torchgeo_bench.config import compose_config, instantiate
-
+    """ViT-L costs more than ViT-B, with patch tokens following (image_size / patch_size)^2."""
     bench = get_bench_dataset_class("cloudsen12")()
     rgb = bench.select_band_specs(bench.rgb_bands)
 
     def build(name):
-        cfg = compose_config([f"model={name}"])
-        return instantiate(cfg.model, bands=rgb, normalization="bandspec_zscore").eval()
+        preset = load_model_preset(ModelConfig(name=name))
+        return build_model(preset, bands=rgb, normalization="bandspec_zscore").eval()
 
     base = build("timm/vit/vit_base_patch16_224")
     large = build("timm/vit/vit_large_patch16_224")
@@ -541,3 +626,170 @@ def test_vit_gflops_ordering_and_tokens():
 
     assert _count_gflops(large, x) > _count_gflops(base, x)
     assert _n_tokens(base, 224) == 196
+
+
+def test_measure_backbone_retries_cuda_oom(monkeypatch: pytest.MonkeyPatch) -> None:
+    batches: list[int] = []
+    cache_clears: list[None] = []
+
+    def profile(
+        _model: nn.Module,
+        sample: torch.Tensor,
+        _device: torch.device,
+        n_warmup: int,
+        n_measure: int,
+    ) -> dict[str, float | None]:
+        assert (n_warmup, n_measure) == (1, 2)
+        batches.append(sample.shape[0])
+        if sample.shape[0] > 2:
+            raise torch.cuda.OutOfMemoryError("synthetic OOM")
+        return {"gflops": 1.0}
+
+    monkeypatch.setattr(flops_pipeline, "measure_profile", profile)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: cache_clears.append(None))
+    metrics, batch_size = flops_pipeline._measure_backbone(
+        nn.Identity(),
+        3,
+        8,
+        CPU,
+        ProfileTiming(batch_size=8, n_warmup=1, n_measure=2),
+    )
+    assert batches == [8, 4, 2]
+    assert len(cache_clears) == 2
+    assert batch_size == 2
+    assert metrics == {"gflops": 1.0}
+
+
+def test_measure_backbone_propagates_oom_at_batch_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    def profile(*_args: object, **_kwargs: object) -> dict[str, float | None]:
+        raise torch.cuda.OutOfMemoryError("synthetic OOM")
+
+    monkeypatch.setattr(flops_pipeline, "measure_profile", profile)
+    with pytest.raises(torch.cuda.OutOfMemoryError, match="synthetic OOM"):
+        flops_pipeline._measure_backbone(
+            nn.Identity(),
+            3,
+            8,
+            CPU,
+            ProfileTiming(batch_size=1, n_warmup=1, n_measure=2),
+        )
+
+
+@pytest.mark.parametrize(("modality", "expected_band"), [("RGB", "rgb"), ("S2L2A", "s2")])
+def test_terramind_pipeline_measures_only_its_modality(
+    flops_run: FlopsRun, modality: str, expected_band: str
+) -> None:
+    config, rows, _ = flops_run
+    config.model = ModelConfig(
+        name="tt_terramind_v1_base_rgb", target="example.TerraMind", kwargs={"modality": modality}
+    )
+    main(config)
+    assert {row["band_config"] for row in rows} == {expected_band}
+    assert {row["name"] for row in rows} == {"tt_terramind_v1_base"}
+
+
+def test_auto_device_uses_cpu_when_cuda_is_unavailable(
+    flops_run: FlopsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    cfg, rows, events = flops_run
+    cfg.runtime.device = "auto"
+    main(cfg)
+    assert len(rows) == 6
+    assert "backbone:3" in events
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"), [("auto", "cuda:1"), ("cuda", "cuda:1"), ("cuda:0", "cuda:0")]
+)
+def test_flops_places_models_on_resolved_cuda(
+    flops_run: FlopsRun, monkeypatch: pytest.MonkeyPatch, requested: str, expected: str
+) -> None:
+    cfg, rows, _ = flops_run
+    cfg.runtime.device = requested
+    cfg.segmentation.heads = []
+    devices = []
+
+    def place(model: nn.Module, device: torch.device) -> nn.Module:
+        devices.append(str(device))
+        return model
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(nn.Module, "to", place)
+    main(cfg)
+    assert devices == [expected, expected]
+    assert len(rows) == 2
+    assert all(row["gflops_total"] == 2.5 for row in rows)
+
+
+def test_invalid_cuda_index_fails_before_model_construction(
+    flops_run: FlopsRun,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg, rows, events = flops_run
+    cfg.runtime.device = "cuda:2"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    with pytest.raises(ValueError, match="index 2"):
+        main(cfg)
+    assert not rows
+    assert not events
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_segmentation_hooks_released_after_measurement(
+    monkeypatch: pytest.MonkeyPatch, *, fail: bool
+) -> None:
+    model = _TapModel(in_ch=3).eval()
+    options = FlopsSegmentationConfig.model_validate(
+        {"heads": ["linear", "fpn"], "probe": {"layers": _TAP_LAYERS}}
+    )
+    metadata = {"name": "tiny", "band_config": "rgb", "n_channels": 3, "image_size": 32}
+    if fail:
+
+        def broken(*args: object) -> float:
+            raise RuntimeError("broken head forward")
+
+        monkeypatch.setattr(flops_pipeline, "_seg_head_gflops", broken)
+        with pytest.raises(RuntimeError, match="broken head forward"):
+            list(flops_pipeline.segmentation_rows(options, model, metadata, CPU, frozenset()))
+    else:
+        rows = list(flops_pipeline.segmentation_rows(options, model, metadata, CPU, frozenset()))
+        assert len(rows) == 2
+        assert all(row["gflops_head"] > 0 for row in rows)
+    assert all(not module._forward_hooks for module in model.modules())
+
+
+def _custom_backbone(*, bands: list[BandSpec], normalization: str, width: int) -> nn.Module:
+    model = _TinyConvNet(in_ch=len(bands), width=width)
+    model.normalization = normalization
+    return model
+
+
+def test_importable_custom_constructor_receives_only_model_options() -> None:
+    bench = get_bench_dataset_class("cloudsen12")()
+    preset = ModelPreset(name="custom", target=f"{__name__}._custom_backbone", kwargs={"width": 6})
+    model = _build_model(preset, bench.bands, "identity", "s2")
+    assert model is not None
+    assert model.normalization == "identity"
+    assert model(torch.randn(2, 12, 16, 16)).shape == (2, 4)
+
+
+def test_real_rcf_construction_uses_run_seed() -> None:
+    bench = get_bench_dataset_class("cloudsen12")()
+    bands = bench.select_band_specs(bench.rgb_bands)
+    sample = torch.randn(2, 3, 16, 16)
+    outputs = []
+    for seed in (23, 23, 24):
+        config = FlopsConfig.model_validate(
+            {"model": {"name": "rcf", "kwargs": {"features": 8}}, "runtime": {"seed": seed}}
+        )
+        _, preset = config.resolve()
+        model = _build_model(preset, bands, "identity", "rgb")
+        assert model is not None
+        outputs.append(model.eval()(sample))
+    assert torch.equal(outputs[0], outputs[1])
+    assert not torch.equal(outputs[0], outputs[2])

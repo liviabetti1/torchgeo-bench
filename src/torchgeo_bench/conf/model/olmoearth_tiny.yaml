@@ -1,15 +1,12 @@
-# OlmoEarth-v1-Tiny (AI2 geospatial foundation model)
-# Feature dimension: 192
-# Default: RGB mode (3 channels). For full S2, set dataset.bands=all
-# Run with: dataset.normalization=identity (the wrapper applies OlmoEarth's own normalizer)
-
-_target_: torchgeo_bench.models.OlmoEarthBenchModel
-model_size: tiny
-patch_size: 8
-input_res: null
-time_steps: 1
-std_multiplier: 2.0
-normalize: false
-image_size: null  # OlmoEarth is resolution-flexible; evaluate at native size
-min_image_size: 64  # upsample 32-px datasets (e.g. m-so2sat) for denser patch grids
 name: olmoearth_v1_tiny
+target: torchgeo_bench.models.OlmoEarthBenchModel
+kwargs:
+  model_size: tiny
+  patch_size: 8
+  input_res: null
+  time_steps: 1
+  std_multiplier: 2.0
+  normalize: false
+  min_image_size: 64
+input:
+  image_size: null
