@@ -2,12 +2,9 @@ paper/
 results/*
 !results/contributed/
 results/contributed/*.csv
-# Per-model benchmark results: one CSV per model, tracked so a new model PR
-# adds its own file instead of editing a shared one.
+# Track per-model results so model changes can include their benchmark data.
 !results/models/
 !results/models/*.csv
-# Profile/intrinsic-dim rows are one-time model+hardware measurements, split
-# out of results/models/ so routine metrics reruns don't touch them.
 !results/profiles/
 !results/profiles/*.csv
 !results/intrinsic_dim/
@@ -15,7 +12,6 @@ results/contributed/*.csv
 !results/legacy/
 !results/legacy/*.csv
 experiments/scripts/*
-!experiments/scripts/viz_results.py
 !experiments/scripts/repack_geobench_v1.py
 !experiments/scripts/tune_dataloader.py
 !experiments/scripts/regen_results_explorer.py
@@ -95,12 +91,14 @@ env/
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .mypy_cache/
 .ruff_cache/
 
-# Hydra outputs
+# Experiment outputs
 outputs/
 multirun/
 .hydra/
@@ -117,18 +115,16 @@ data/
 # Results
 *.csv
 *.json
-# Per-model benchmark results: one CSV per model, tracked so a new model PR
-# adds its own file instead of editing a shared one.
+# Keep the result and metadata files needed by the benchmark and docs.
 !results/models/
 !results/models/*.csv
-# Profile/intrinsic-dim rows are one-time model+hardware measurements, split
-# out of results/models/ so routine metrics reruns don't touch them.
 !results/profiles/
 !results/profiles/*.csv
 !results/intrinsic_dim/
 !results/intrinsic_dim/*.csv
 !results/legacy/
 !results/legacy/*.csv
+!results/coordbench_results.csv
 !conf/**/*.json
 !**/band_stats.json
 !**/normalizer.json
@@ -163,6 +159,3 @@ site/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
-
-# tracked benchmark results
-!coordbench-results.csv

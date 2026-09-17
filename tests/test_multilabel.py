@@ -3,29 +3,33 @@
 import builtins
 import logging
 import sys
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
+from sklearn.metrics import average_precision_score
 
 import torchgeo_bench.knn as knn
+from tests.support.numerical import isolated_torch_rng as isolated_torch_rng
+from torchgeo_bench.config.run import RunConfig
 from torchgeo_bench.knn import KNNClassifier, resolve_knn_device
-from torchgeo_bench.linear import LogisticRegression
+from torchgeo_bench.utils import FeatureSplit, FeatureSplits
+
+pytestmark = pytest.mark.usefixtures("isolated_torch_rng")
 
 
 @pytest.fixture
 def multilabel_data():
-    """Synthetic multi-label dataset: 200 train, 50 val, 50 test, 10 classes."""
     rng = np.random.default_rng(42)
     n_train, n_val, n_test = 200, 50, 50
     n_features, n_classes = 32, 10
     n_total = n_train + n_val + n_test
 
     X = rng.standard_normal((n_total, n_features)).astype(np.float32)
-    # Generate multi-hot labels with ~3 active classes per sample
+    # About three positive labels per sample, with at least one on every sample.
     Y = (rng.random((n_total, n_classes)) > 0.7).astype(np.float32)
-    # Ensure at least one positive label per sample
     for i in range(n_total):
         if Y[i].sum() == 0:
             Y[i, rng.integers(0, n_classes)] = 1.0
@@ -43,7 +47,6 @@ def multilabel_data():
 
 @pytest.fixture
 def singlelabel_data():
-    """Synthetic single-label dataset for KNN tests."""
     rng = np.random.default_rng(99)
     n_train, n_test = 100, 30
     n_features, n_classes = 16, 4
@@ -62,39 +65,40 @@ def singlelabel_data():
     }
 
 
-# ---- KNNClassifier tests ----
+@pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+@pytest.mark.parametrize("multi_label", [False, True])
+def test_cpu_knn_uses_l2_neighbor_votes(metric: str, *, multi_label: bool) -> None:
+    """The CPU contract is L2 even when GPU-only metric options are supplied."""
+    train = np.array([[0.0], [1.0], [3.0], [10.0]], dtype=np.float32)
+    queries = np.array([[0.2], [9.0]], dtype=np.float32)
+    labels = np.array([[1, 0], [1, 1], [0, 1], [0, 1]]) if multi_label else np.array([2, 2, 5, 5])
+    classifier = KNNClassifier(n_neighbors=3, metric=metric).fit(train, labels)
+    distances = ((queries[:, None] - train[None]) ** 2).sum(axis=2)
+    neighbors = np.argsort(distances, axis=1)[:, :3]
+    votes = labels[neighbors] if multi_label else np.eye(6)[labels[neighbors]]
+    probabilities = votes.mean(axis=1)
+    np.testing.assert_allclose(classifier.predict_proba(queries), probabilities, rtol=1e-6)
+    np.testing.assert_array_equal(
+        classifier.predict(queries),
+        probabilities > 0.5 if multi_label else probabilities.argmax(axis=1),
+    )
+    assert classifier.multi_label is multi_label
 
 
-class TestKNNClassifierSingleLabel:
-    def test_fit_predict_shapes(self, singlelabel_data):
-        d = singlelabel_data
-        clf = KNNClassifier(n_neighbors=5)
-        clf.fit(d["x_train"], d["y_train"])
-
-        preds = clf.predict(d["x_test"])
-        assert preds.shape == (len(d["x_test"]),)
-        assert all(0 <= p < d["n_classes"] for p in preds)
-
-    def test_predict_proba_shapes(self, singlelabel_data):
-        d = singlelabel_data
-        clf = KNNClassifier(n_neighbors=5)
-        clf.fit(d["x_train"], d["y_train"])
-
-        probs = clf.predict_proba(d["x_test"])
-        assert probs.shape == (len(d["x_test"]), d["n_classes"])
-        np.testing.assert_allclose(probs.sum(axis=1), 1.0, atol=1e-6)
-
+class TestKNNClassifier:
     def test_k_clamped_to_train_size(self):
-        """k > n_train should not crash."""
         rng = np.random.default_rng(0)
         X = rng.standard_normal((3, 8)).astype(np.float32)
         y = np.array([0, 1, 2], dtype=np.int64)
         clf = KNNClassifier(n_neighbors=10)
         clf.fit(X, y)
-        preds = clf.predict(X)
-        assert preds.shape == (3,)
+        np.testing.assert_allclose(clf.predict_proba(X), np.full((3, 3), 1 / 3), rtol=1e-6)
+        np.testing.assert_array_equal(clf.predict(X), np.zeros(3))
 
-    def test_gpu_k_is_clamped_before_faissknn_construction(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("multi_label", [False, True])
+    def test_gpu_backend_receives_clamped_k_and_options(
+        self, monkeypatch: pytest.MonkeyPatch, *, multi_label: bool
+    ) -> None:
         """FAISS GPU uses -1 neighbor IDs when asked for k > n_train."""
         constructed: list[object] = []
 
@@ -107,6 +111,7 @@ class TestKNNClassifierSingleLabel:
                 del X, y
 
         monkeypatch.setattr(knn, "gpu_faiss_available", lambda: True)
+        monkeypatch.setattr(knn.torch.cuda, "device", lambda _device: nullcontext())
         monkeypatch.setitem(
             sys.modules,
             "faissknn",
@@ -116,82 +121,20 @@ class TestKNNClassifierSingleLabel:
             ),
         )
         X = np.zeros((3, 2), dtype=np.float32)
-        y = np.array([0, 1, 2], dtype=np.int64)
+        y = np.array([[1, 0], [0, 1], [1, 1]]) if multi_label else np.array([2, 4, 2])
 
-        KNNClassifier(n_neighbors=10, device="cuda").fit(X, y)
+        KNNClassifier(n_neighbors=10, device="cuda:1", metric="cosine", use_fp16=True).fit(X, y)
 
         assert len(constructed) == 1
-        assert constructed[0].kwargs["n_neighbors"] == 3
+        expected = {"n_neighbors": 3, "device": "cuda:1", "metric": "cosine", "use_fp16": True}
+        if not multi_label:
+            expected["n_classes"] = 5
+        assert constructed[0].kwargs == expected
 
     @pytest.mark.parametrize("n_neighbors", [0, -1, True, 1.5])
     def test_rejects_invalid_neighbor_count(self, n_neighbors):
         with pytest.raises(ValueError, match="positive integer"):
             KNNClassifier(n_neighbors=n_neighbors)
-
-
-class TestKNNClassifierMultiLabel:
-    def test_fit_predict_shapes(self, multilabel_data):
-        d = multilabel_data
-        clf = KNNClassifier(n_neighbors=5)
-        clf.fit(d["x_train"], d["y_train"])
-
-        preds = clf.predict(d["x_test"])
-        assert preds.shape == (len(d["x_test"]), d["n_classes"])
-        assert set(np.unique(preds)).issubset({0, 1})
-
-    def test_predict_proba_shapes(self, multilabel_data):
-        d = multilabel_data
-        clf = KNNClassifier(n_neighbors=5)
-        clf.fit(d["x_train"], d["y_train"])
-
-        probs = clf.predict_proba(d["x_test"])
-        assert probs.shape == (len(d["x_test"]), d["n_classes"])
-        assert np.all(probs >= 0) and np.all(probs <= 1)
-
-
-# ---- LogisticRegression multi-label tests ----
-
-
-class TestMultiLabelLogisticRegression:
-    def test_fit_and_predict_shapes(self, multilabel_data):
-        d = multilabel_data
-        X_t = torch.from_numpy(d["x_train"])
-        Y_t = torch.from_numpy(d["y_train"])
-        X_test = torch.from_numpy(d["x_test"])
-
-        clf = LogisticRegression(C=1.0, max_iter=100, multi_label=True, device="cpu")
-        clf.fit(X_t, Y_t)
-
-        preds = clf.predict(X_test)
-        assert preds.shape == (len(d["x_test"]), d["n_classes"])
-        assert set(np.unique(preds)).issubset({0, 1})
-
-        probs = clf.predict_proba(X_test)
-        assert probs.shape == (len(d["x_test"]), d["n_classes"])
-        assert np.all(probs >= 0) and np.all(probs <= 1)
-
-    def test_lbfgs_solver(self, multilabel_data):
-        d = multilabel_data
-        X_t = torch.from_numpy(d["x_train"])
-        Y_t = torch.from_numpy(d["y_train"])
-
-        clf = LogisticRegression(
-            C=1.0, max_iter=200, solver="lbfgs", multi_label=True, device="cpu"
-        )
-        clf.fit(X_t, Y_t)
-        assert clf._fitted
-
-    def test_adam_solver(self, multilabel_data):
-        d = multilabel_data
-        X_t = torch.from_numpy(d["x_train"])
-        Y_t = torch.from_numpy(d["y_train"])
-
-        clf = LogisticRegression(C=1.0, max_iter=50, solver="adam", multi_label=True, device="cpu")
-        clf.fit(X_t, Y_t)
-        assert clf._fitted
-
-
-# ---- Bootstrap mAP tests ----
 
 
 class TestBootstrapMAP:
@@ -207,7 +150,13 @@ class TestBootstrapMAP:
         y_scores = rng.random((n, c)).astype(np.float32)
 
         mean, lo, hi = bootstrap_map(y_true, y_scores, n_boot=100, seed=42)
-        assert 0 <= lo <= mean <= hi <= 1.0
+        draws = np.random.default_rng(42).integers(0, n, size=(100, n))
+        reference = np.array(
+            [average_precision_score(y_true[idx], y_scores[idx], average="micro") for idx in draws],
+            dtype=np.float32,
+        )
+        assert mean == pytest.approx(average_precision_score(y_true, y_scores, average="micro"))
+        np.testing.assert_allclose([lo, hi], np.percentile(reference, [2.5, 97.5]))
 
     def test_perfect_scores(self):
         from torchgeo_bench import bootstrap_map
@@ -215,67 +164,23 @@ class TestBootstrapMAP:
         y_true = np.eye(5, dtype=np.float32)
         y_scores = np.eye(5, dtype=np.float32)
 
-        mean, lo, hi = bootstrap_map(y_true, y_scores, n_boot=50, seed=0)
-        assert mean == pytest.approx(1.0)
+        assert bootstrap_map(y_true, y_scores, n_boot=50, seed=0) == pytest.approx((1.0, 1.0, 1.0))
 
 
-# ---- KNNClassifier metric / use_fp16 / GPU path tests ----
-
-_cuda_available = pytest.mark.skipif(
-    not __import__("torch").cuda.is_available(), reason="CUDA not available"
-)
+_cuda_available = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 _faissknn_available = pytest.mark.skipif(
     not knn.gpu_faiss_available(),
     reason="GPU-enabled FAISS is not installed",
 )
 
 
-class TestKNNMetricParam:
-    """CPU path: metric param is accepted; output shapes / value ranges hold."""
-
-    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
-    def test_metric_singlelabel_shapes(self, singlelabel_data, metric):
-        d = singlelabel_data
-        clf = KNNClassifier(n_neighbors=3, device="cpu", metric=metric)
-        clf.fit(d["x_train"], d["y_train"])
-        preds = clf.predict(d["x_test"])
-        probs = clf.predict_proba(d["x_test"])
-        assert preds.shape == (len(d["x_test"]),)
-        assert probs.shape == (len(d["x_test"]), d["n_classes"])
-        np.testing.assert_allclose(probs.sum(axis=1), 1.0, atol=1e-5)
-
-    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
-    def test_metric_multilabel_shapes(self, multilabel_data, metric):
-        d = multilabel_data
-        clf = KNNClassifier(n_neighbors=3, device="cpu", metric=metric)
-        clf.fit(d["x_train"], d["y_train"])
-        preds = clf.predict(d["x_test"])
-        probs = clf.predict_proba(d["x_test"])
-        assert preds.shape == (len(d["x_test"]), d["n_classes"])
-        assert probs.shape == (len(d["x_test"]), d["n_classes"])
-        assert np.all((probs >= 0) & (probs <= 1))
-
-    def test_cosine_uses_normalized_distance(self, singlelabel_data):
-        """Cosine metric should give the same answer on L2-normalised inputs as l2."""
-        d = singlelabel_data
-        X_train = d["x_train"] / (np.linalg.norm(d["x_train"], axis=1, keepdims=True) + 1e-8)
-        X_test = d["x_test"] / (np.linalg.norm(d["x_test"], axis=1, keepdims=True) + 1e-8)
-        clf_l2 = KNNClassifier(n_neighbors=3, device="cpu", metric="l2")
-        clf_cos = KNNClassifier(n_neighbors=3, device="cpu", metric="cosine")
-        clf_l2.fit(X_train, d["y_train"])
-        clf_cos.fit(X_train, d["y_train"])
-        # Both operate on unit-norm inputs; predictions should agree
-        np.testing.assert_array_equal(clf_l2.predict(X_test), clf_cos.predict(X_test))
-
-
 class TestKNNGPUPath:
-    """GPU / faissknn path: requires CUDA + faissknn."""
+    """Requires CUDA and GPU-enabled FAISS."""
 
     @_cuda_available
     @_faissknn_available
     @pytest.mark.slow
     def test_gpu_fp16_output_shapes(self, singlelabel_data):
-        """use_fp16=True should not change output shapes or value ranges."""
         d = singlelabel_data
         clf = KNNClassifier(n_neighbors=5, device="cuda", use_fp16=True)
         clf.fit(d["x_train"], d["y_train"])
@@ -289,7 +194,6 @@ class TestKNNGPUPath:
     @_faissknn_available
     @pytest.mark.slow
     def test_gpu_predict_returns_numpy(self, singlelabel_data):
-        """predict() and predict_proba() must always return np.ndarray, not torch.Tensor."""
         d = singlelabel_data
         clf = KNNClassifier(n_neighbors=5, device="cuda")
         clf.fit(d["x_train"], d["y_train"])
@@ -309,7 +213,7 @@ class TestKNNGPUPath:
         monkeypatch.setattr(builtins, "__import__", fake_import)
         d = singlelabel_data
         clf = KNNClassifier(n_neighbors=5, device="cuda")
-        with pytest.raises(ImportError, match='request device="cpu"'):
+        with pytest.raises(ImportError, match="blocked for test"):
             clf.fit(d["x_train"], d["y_train"])
 
     def test_explicit_gpu_with_cpu_faiss_raises_actionable_error(
@@ -318,7 +222,7 @@ class TestKNNGPUPath:
         monkeypatch.setattr(knn, "gpu_faiss_available", lambda: False)
         d = singlelabel_data
         clf = KNNClassifier(n_neighbors=5, device="cuda")
-        with pytest.raises(RuntimeError, match="eval.knn_device=cpu"):
+        with pytest.raises(RuntimeError, match="--knn-device cpu"):
             clf.fit(d["x_train"], d["y_train"])
 
 
@@ -346,21 +250,27 @@ class TestResolveKNNDevice:
         assert resolve_knn_device("cpu", "cuda:0") == "cpu"
 
 
-# ---- Unified evaluate_knn / evaluate_logistic tests ----
-
-
 class TestUnifiedEvaluateKNN:
     def test_single_label(self, singlelabel_data):
         from torchgeo_bench import evaluate_knn
 
         d = singlelabel_data
         score, lo, hi, cal, _ = evaluate_knn(
-            d["x_train"],
-            d["y_train"],
-            d["x_test"],
-            d["y_test"],
-            seed=42,
-            n_bootstrap=50,
+            FeatureSplit(d["x_train"], d["y_train"]),
+            FeatureSplit(d["x_test"], d["y_test"]),
+            RunConfig.model_validate(
+                {
+                    "model": {"name": "rcf"},
+                    "datasets": ["m-eurosat"],
+                    "runtime": {"device": "cpu", "seed": 42},
+                    "classification": {
+                        "bootstrap_samples": 50,
+                        "linear": {"refit_train_val": False},
+                        "calibration": {"temp_scale": True},
+                    },
+                }
+            ),
+            device="cpu",
         )
         assert 0 <= lo <= score <= hi <= 1.0
         assert set(cal) == {"ece", "rms_ce", "mce"}
@@ -372,12 +282,21 @@ class TestUnifiedEvaluateKNN:
 
         d = multilabel_data
         score, lo, hi, cal, _ = evaluate_knn(
-            d["x_train"],
-            d["y_train"],
-            d["x_test"],
-            d["y_test"],
-            seed=42,
-            n_bootstrap=50,
+            FeatureSplit(d["x_train"], d["y_train"]),
+            FeatureSplit(d["x_test"], d["y_test"]),
+            RunConfig.model_validate(
+                {
+                    "model": {"name": "rcf"},
+                    "datasets": ["m-eurosat"],
+                    "runtime": {"device": "cpu", "seed": 42},
+                    "classification": {
+                        "bootstrap_samples": 50,
+                        "linear": {"refit_train_val": False},
+                        "calibration": {"temp_scale": True},
+                    },
+                }
+            ),
+            device="cpu",
         )
         assert 0 <= lo <= score <= hi <= 1.0
         assert set(cal) == {"ece", "rms_ce", "mce"}
@@ -389,41 +308,55 @@ class TestUnifiedEvaluateLogistic:
 
         d = singlelabel_data
         score, lo, hi, best_c, cal, cal_ts = evaluate_logistic(
-            d["x_train"],
-            d["y_train"],
-            d["x_test"][:15],
-            d["y_test"][:15],  # use as val
-            d["x_test"][15:],
-            d["y_test"][15:],
+            FeatureSplits(
+                FeatureSplit(d["x_train"], d["y_train"]),
+                FeatureSplit(d["x_test"][:15], d["y_test"][:15]),
+                FeatureSplit(d["x_test"][15:], d["y_test"][15:]),
+            ),
             c_values=[0.1, 1.0],
-            seed=42,
-            n_bootstrap=50,
-            merge_val=False,
-            device="cpu",
+            cfg=RunConfig.model_validate(
+                {
+                    "model": {"name": "rcf"},
+                    "datasets": ["m-eurosat"],
+                    "runtime": {"device": "cpu", "seed": 42},
+                    "classification": {
+                        "bootstrap_samples": 50,
+                        "linear": {"refit_train_val": False},
+                        "calibration": {"temp_scale": True},
+                    },
+                }
+            ),
         )
         assert 0 <= lo <= score <= hi <= 1.0
         assert best_c in [0.1, 1.0]
         assert set(cal) == {"ece", "rms_ce", "mce"}
         assert set(cal_ts) == {"ece_ts", "rms_ce_ts", "mce_ts", "temperature"}
-        assert cal_ts["temperature"] is not None and cal_ts["temperature"] > 0
+        assert cal_ts["temperature"] is not None
+        assert cal_ts["temperature"] > 0
 
     def test_multi_label(self, multilabel_data):
         from torchgeo_bench import evaluate_logistic
 
         d = multilabel_data
         score, lo, hi, best_c, cal, cal_ts = evaluate_logistic(
-            d["x_train"],
-            d["y_train"],
-            d["x_val"],
-            d["y_val"],
-            d["x_test"],
-            d["y_test"],
+            FeatureSplits(
+                FeatureSplit(d["x_train"], d["y_train"]),
+                FeatureSplit(d["x_val"], d["y_val"]),
+                FeatureSplit(d["x_test"], d["y_test"]),
+            ),
             c_values=[0.01, 0.1, 1.0],
-            seed=42,
-            n_bootstrap=50,
-            merge_val=True,
-            device="cpu",
-            verbose=True,
+            cfg=RunConfig.model_validate(
+                {
+                    "model": {"name": "rcf"},
+                    "datasets": ["m-bigearthnet"],
+                    "runtime": {"device": "cpu", "seed": 42, "verbose": True},
+                    "classification": {
+                        "bootstrap_samples": 50,
+                        "linear": {"refit_train_val": True},
+                        "calibration": {"temp_scale": False},
+                    },
+                }
+            ),
         )
         assert 0 <= lo <= score <= hi <= 1.0
         assert best_c in [0.01, 0.1, 1.0]

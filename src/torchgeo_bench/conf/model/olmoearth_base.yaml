@@ -1,16 +1,12 @@
-# OlmoEarth-v1-Base (AI2 geospatial foundation model)
-# Feature dimension: 768
-# Multi-modal: auto-routes S2/SAR/Landsat/NAIP bands to the correct modality.
-# input_res auto-detected from primary sensor (S2/SAR=10m, Landsat=30m).
-# The wrapper applies OlmoEarth's internal Normalizer (normalize_inputs=identity).
-
-_target_: torchgeo_bench.models.OlmoEarthBenchModel
-model_size: base
-patch_size: 8
-input_res: null
-time_steps: 1
-std_multiplier: 2.0
-normalize: false
-image_size: null  # OlmoEarth is resolution-flexible; evaluate at native size
-min_image_size: 64  # upsample 32-px datasets (e.g. m-so2sat) for denser patch grids
 name: olmoearth_v1_base
+target: torchgeo_bench.models.OlmoEarthBenchModel
+kwargs:
+  model_size: base
+  patch_size: 8
+  input_res: null
+  time_steps: 1
+  std_multiplier: 2.0
+  normalize: false
+  min_image_size: 64
+input:
+  image_size: null

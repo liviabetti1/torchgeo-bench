@@ -1,27 +1,17 @@
-"""High-level dataset loading helpers and registry for torchgeo-bench.
+"""Dataset registry, band selection, resizing, and split dataloaders.
 
-This module owns the public ``get_datasets`` API used by
-``torchgeo_bench.main`` and the registry that maps dataset names to their
-:class:`~.base.BenchDataset` subclass.  All band resolution, resize
-transforms and DataLoader construction live here so the per-dataset wrappers
-stay focused on declaring metadata.
-
-Wrapper modules (and torch) import lazily: ``list_datasets`` reads only the
-registry spec below, and ``get_bench_dataset_class`` imports just the one
-module that defines the requested dataset.
+Wrapper modules and torch load only when needed; listing datasets does not import them.
 """
-
-from __future__ import annotations
 
 import logging
 import warnings
 from importlib import import_module
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .base import BenchDataset
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
 
     import torch
     from torch.utils.data import DataLoader, Dataset
@@ -29,37 +19,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Dataset name -> (submodule, class name).  Kept as strings so that importing
-# this module stays cheap; ``get_bench_dataset_class`` resolves entries on
-# demand and verifies the class's ``name`` attribute matches its key.
-_REGISTRY_SPEC: dict[str, tuple[str, str]] = {
+# Store (submodule, class name, task) so catalogs need no wrapper imports.
+_REGISTRY_SPEC: dict[str, tuple[str, str, Literal["classification", "segmentation"]]] = {
     # V1 classification
-    "m-eurosat": ("m_eurosat", "MEurosat"),
-    "m-forestnet": ("m_forestnet", "MForestnet"),
-    "m-so2sat": ("m_so2sat", "MSo2Sat"),
-    "m-pv4ger": ("m_pv4ger", "MPv4ger"),
-    "m-brick-kiln": ("m_brick_kiln", "MBrickKiln"),
-    "m-bigearthnet": ("m_bigearthnet", "MBigEarthNet"),
+    "m-eurosat": ("m_eurosat", "MEurosat", "classification"),
+    "m-forestnet": ("m_forestnet", "MForestnet", "classification"),
+    "m-so2sat": ("m_so2sat", "MSo2Sat", "classification"),
+    "m-pv4ger": ("m_pv4ger", "MPv4ger", "classification"),
+    "m-brick-kiln": ("m_brick_kiln", "MBrickKiln", "classification"),
+    "m-bigearthnet": ("m_bigearthnet", "MBigEarthNet", "classification"),
     # V2 classification
-    "benv2": ("benv2", "BENV2"),
-    "treesatai": ("treesatai", "TreeSatAI"),
-    "so2sat": ("so2sat", "So2Sat"),
-    "forestnet": ("forestnet", "Forestnet"),
+    "benv2": ("benv2", "BENV2", "classification"),
+    "treesatai": ("treesatai", "TreeSatAI", "classification"),
+    "so2sat": ("so2sat", "So2Sat", "classification"),
+    "forestnet": ("forestnet", "Forestnet", "classification"),
     # V2 segmentation
-    "caffe": ("caffe", "CaFFe"),
-    "burn_scars": ("burn_scars", "BurnScars"),
-    "cloudsen12": ("cloudsen12", "CloudSEN12"),
-    "dynamic_earthnet": ("dynamic_earthnet", "DynamicEarthNet"),
-    "flair2": ("flair2", "FLAIR2"),
-    "fotw": ("fotw", "FieldsOfTheWorld"),
-    "kuro_siwo": ("kuro_siwo", "KuroSiwo"),
-    "pastis": ("pastis", "PASTIS"),
-    "spacenet2": ("spacenet2", "SpaceNet2"),
-    "spacenet7": ("spacenet7", "SpaceNet7"),
-    # torchgeo template
-    "eurosat": ("eurosat", "EuroSAT"),
-    "eurosat-spatial": ("eurosat", "EuroSATSpatial"),
-    "resisc45": ("resisc45", "RESISC45"),
+    "caffe": ("caffe", "CaFFe", "segmentation"),
+    "burn_scars": ("burn_scars", "BurnScars", "segmentation"),
+    "cloudsen12": ("cloudsen12", "CloudSEN12", "segmentation"),
+    "dynamic_earthnet": ("dynamic_earthnet", "DynamicEarthNet", "segmentation"),
+    "flair2": ("flair2", "FLAIR2", "segmentation"),
+    "fotw": ("fotw", "FieldsOfTheWorld", "segmentation"),
+    "kuro_siwo": ("kuro_siwo", "KuroSiwo", "segmentation"),
+    "pastis": ("pastis", "PASTIS", "segmentation"),
+    "spacenet2": ("spacenet2", "SpaceNet2", "segmentation"),
+    "spacenet7": ("spacenet7", "SpaceNet7", "segmentation"),
+    # torchgeo datasets
+    "eurosat": ("eurosat", "EuroSAT", "classification"),
+    "eurosat-spatial": ("eurosat", "EuroSATSpatial", "classification"),
+    "resisc45": ("resisc45", "RESISC45", "classification"),
 }
 
 
@@ -78,7 +66,7 @@ def get_bench_dataset_class(name: str) -> type[BenchDataset]:
     if name not in _REGISTRY_SPEC:
         available = ", ".join(sorted(_REGISTRY_SPEC))
         raise KeyError(f"Unknown dataset '{name}'. Available: {available}")
-    module_name, class_name = _REGISTRY_SPEC[name]
+    module_name, class_name, _ = _REGISTRY_SPEC[name]
     cls: type[BenchDataset] = getattr(import_module(f".{module_name}", __package__), class_name)
     if cls.name != name:
         raise RuntimeError(
@@ -93,23 +81,42 @@ def list_datasets() -> list[str]:
     return sorted(_REGISTRY_SPEC)
 
 
-def _make_resize_transform(
-    image_size: int | None,
-    interpolation: str,
-) -> Callable[[dict], dict] | None:
-    """Build a sample-level transform that resizes ``image`` (and ``mask``)."""
-    if image_size is None:
-        return None
+def get_dataset_task(name: str) -> Literal["classification", "segmentation"]:
+    """Return a registered dataset's task without importing its wrapper.
+
+    Raises:
+        KeyError: If *name* is not in the registry.
+    """
+    return _REGISTRY_SPEC[name][2]
+
+
+def download_command(name: str) -> str:
+    """Return the command that downloads one registered dataset."""
+    if name.startswith("m-"):
+        return f"torchgeo-bench download geobench_v1 --datasets {name}"
+    if name in {"eurosat", "eurosat-spatial", "resisc45"}:
+        return f"torchgeo-bench download {name.removesuffix('-spatial')}"
+    return f"torchgeo-bench download geobench_v2 --datasets {name}"
+
+
+class _ResizeTransform:
+    """Sample-level transform that resizes ``image`` (and ``mask``)."""
 
     valid_modes = ("area", "bicubic", "bilinear", "nearest")
-    if interpolation not in valid_modes:
-        raise ValueError(f"interpolation must be one of {valid_modes}, got {interpolation!r}.")
-    interp_mode = interpolation
-    align_corners = False if interp_mode in ("bicubic", "bilinear") else None
 
-    import torch.nn.functional as F
+    def __init__(self, image_size: int, interp_mode: str) -> None:
+        if interp_mode not in self.valid_modes:
+            raise ValueError(
+                f"interpolation must be one of {self.valid_modes}, got {interp_mode!r}."
+            )
+        self.image_size = image_size
+        self.interp_mode = interp_mode
+        self.align_corners = False if interp_mode in ("bicubic", "bilinear") else None
 
-    def _resize(sample: dict) -> dict:
+    def __call__(self, sample: dict) -> dict:
+        import torch.nn.functional as F
+
+        image_size = self.image_size
         img: torch.Tensor = sample["image"]
         h, w = img.shape[-2], img.shape[-1]
         if h != image_size or w != image_size:
@@ -118,8 +125,8 @@ def _make_resize_transform(
             img = F.interpolate(
                 resize_input,
                 size=(image_size, image_size),
-                mode=interp_mode,
-                align_corners=align_corners,
+                mode=self.interp_mode,
+                align_corners=self.align_corners,
             )
             if squeeze_batch:
                 img = img.squeeze(0)
@@ -148,10 +155,11 @@ def _make_resize_transform(
                 sample["mask"] = mask
         return sample
 
-    return _resize
 
-
-def _make_loader(ds: Dataset, *, batch_size: int, shuffle: bool, num_workers: int) -> DataLoader:
+def _make_loader(
+    ds: "Dataset", *, batch_size: int, shuffle: bool, num_workers: int
+) -> "DataLoader":
+    import torch
     from torch.utils.data import DataLoader
 
     return DataLoader(
@@ -159,19 +167,20 @@ def _make_loader(ds: Dataset, *, batch_size: int, shuffle: bool, num_workers: in
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
 
 
-def get_datasets(
+def get_datasets(  # noqa: PLR0913 - public dataset loading options.
     dataset_name: str = "m-forestnet",
     partition_name: str = "default",
     batch_size: int = 32,
+    *,
     return_val: bool = False,
     num_workers: int = 8,
     image_size: int | None = None,
     interpolation: str = "bilinear",
-    bands: str | Iterable[str] | None = "rgb",
+    bands: "str | Iterable[str] | None" = "rgb",
     time_steps: int | None = None,
 ) -> tuple:
     """Load benchmark dataset splits and dataloaders.
@@ -188,7 +197,7 @@ def get_datasets(
         num_workers: Number of dataloader worker processes.
         image_size: If set, resize images (and masks, with nearest) to this
             square size at sample time.
-        interpolation: Resize interpolation for images (``"bicubic"``,
+        interpolation: Resize interpolation for images (``"area"``, ``"bicubic"``,
             ``"bilinear"``, ``"nearest"``).
         bands: ``"rgb"`` (use the dataset's ``rgb_bands``), ``"all"`` /
             ``None`` (load all bands), or an explicit iterable of band names.
@@ -203,7 +212,10 @@ def get_datasets(
 
     Raises:
         KeyError: If ``dataset_name`` is not registered.
+        FileNotFoundError: If a required dataset file is missing.
     """
+    from torchgeo.datasets import DatasetNotFoundError
+
     cls = get_bench_dataset_class(dataset_name)
     bench = cls()
 
@@ -227,17 +239,24 @@ def get_datasets(
     else:
         bands_tuple = tuple(bands)
 
-    transform = _make_resize_transform(image_size, interpolation)
+    transform = _ResizeTransform(image_size, interpolation) if image_size is not None else None
     train_partition = partition_name if bench.supports_partitions else "default"
 
     common: dict = {"bands": bands_tuple, "transform": transform}
     if time_steps is not None:
-        # Only multi-temporal wrappers accept this; others would not know what
-        # to do with a time axis, so passing it to them is a config error.
+        # Only multi-temporal wrappers accept a time axis.
         common["time_steps"] = time_steps
-    train_ds = bench.get_dataset("train", partition=train_partition, **common)
-    val_ds = bench.get_dataset("val", partition="default", **common)
-    test_ds = bench.get_dataset("test", partition="default", **common)
+    try:
+        train_ds = bench.get_dataset("train", partition=train_partition, **common)
+        val_ds = bench.get_dataset("val", partition="default", **common)
+        test_ds = bench.get_dataset("test", partition="default", **common)
+    except (
+        FileNotFoundError,
+        DatasetNotFoundError,
+    ) as error:  # allow-except: add download command.
+        raise FileNotFoundError(
+            f"Required files for {dataset_name!r} are missing. Run `{download_command(dataset_name)}`."
+        ) from error
 
     train_loader = _make_loader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers
@@ -254,6 +273,7 @@ def get_datasets(
 
 __all__ = [
     "get_bench_dataset_class",
+    "get_dataset_task",
     "get_datasets",
     "list_datasets",
 ]

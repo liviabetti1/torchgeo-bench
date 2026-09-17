@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-"""CLS-token vs spatial-average sweep for ViT/DeiT models.
+"""Compare a transformer's classification token with averaged image-patch features.
 
-Each ViT/DeiT model is evaluated twice per dataset — once with
-``model.use_cls_token=false`` (spatial average) and once with
-``model.use_cls_token=true`` (CLS token). Swin models are excluded (no CLS
-token).
+Compare the ``use_cls_token`` constructor option for ViT/DeiT.
+
+Swin has no classification token and is excluded.
 
 Usage:
     python experiments/run_cls_token_experiment.py
@@ -15,6 +14,10 @@ import argparse
 import sys
 
 from _runner import Job, add_devices_argument, default_output, run_jobs
+
+from torchgeo_bench.config.presets import resolve_run_config
+from torchgeo_bench.config.run import RunConfig
+from torchgeo_bench.config.schema import InputConfig, ModelConfig
 
 OUTPUT = default_output(__file__)
 
@@ -34,26 +37,30 @@ MODELS = [
 
 
 def build_jobs() -> list[Job]:
-    """Build dataset × model × use_cls_token jobs."""
+    """Create runs for classification-token and averaged-patch features."""
     jobs: list[Job] = []
     for dataset in DATASETS:
         for model in MODELS:
             short = model.removeprefix("timm/vit/")
             for use_cls in (False, True):
                 tag = "cls" if use_cls else "avg"
-                overrides = [
-                    f"model={model}",
-                    f"model.use_cls_token={'true' if use_cls else 'false'}",
-                    f"model.name={short}_{tag}",
-                    f"dataset.names=[{dataset}]",
-                    "dataset.partition=default",
-                ]
-                jobs.append(Job(label=f"{dataset} {short} {tag}", overrides=overrides))
+                config, preset = resolve_run_config(
+                    RunConfig(
+                        model=ModelConfig(name=model, kwargs={"use_cls_token": use_cls}),
+                        datasets=[dataset],
+                        input=InputConfig(partition="default"),
+                    ),
+                    dataset,
+                )
+                config.model = ModelConfig(
+                    name=f"{short}_{tag}", target=preset.target, kwargs=preset.kwargs
+                )
+                jobs.append(Job(label=f"{dataset} {short} {tag}", config=config))
     return jobs
 
 
 def main() -> int:
-    """Entry point."""
+    """Run the classification-token comparison on the selected GPUs."""
     parser = argparse.ArgumentParser(description=__doc__)
     add_devices_argument(parser)
     args = parser.parse_args()

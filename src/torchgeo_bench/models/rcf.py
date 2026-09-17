@@ -1,13 +1,16 @@
-# The RCF nn.Module is adapted from torchgeo (MIT); see LICENSE-THIRDPARTY.
+# The RCF nn.Module is adapted from torchgeo.
+# Copyright (c) TorchGeo Contributors. All rights reserved.
 
 """Random Convolutional Features (RCF) BenchModel and its underlying nn.Module.
 
-The :class:`RCF` ``nn.Module`` is a vendored copy of the MOSAIKS-style
-random / empirical convolutional feature extractor (originally adapted from
-``torchgeo.models.RCF``) with an added ``stats_mode`` knob for choosing
-which pooling statistics to concatenate.  It is module-private:
-:class:`RCFBench` is the only consumer.
+The MOSAIKS-style extractor is adapted from ``torchgeo.models.RCF``.
+``stats_mode`` selects which pooling statistics to concatenate.
+:class:`RCFBench` exposes it through the benchmark interface.
 """
+
+from collections.abc import Sized
+from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import torch
@@ -15,7 +18,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import Dataset
-from torchgeo.datasets import NonGeoDataset
 
 from torchgeo_bench.datasets.base import BandSpec
 
@@ -45,7 +47,7 @@ class RCF(nn.Module):
     weights: Tensor
     biases: Tensor
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - public YAML options
         self,
         in_channels: int = 4,
         features: int = 16,
@@ -54,12 +56,9 @@ class RCF(nn.Module):
         seed: int | None = None,
         mode: str = "gaussian",
         stats_mode: str = "mean",
-        dataset: NonGeoDataset | None = None,
+        dataset: Dataset | None = None,
     ) -> None:
         """Initializes the RCF model.
-
-        This is a static model that serves to extract fixed length feature vectors from
-        input patches.
 
         Args:
             in_channels: number of input channels
@@ -69,7 +68,7 @@ class RCF(nn.Module):
             seed: random seed used to initialize the convolutional layer
             mode: "empirical" or "gaussian"
             stats_mode: "mean", "stdev", or "all" — controls pooling statistics
-            dataset: a NonGeoDataset to sample from when mode is "empirical"
+            dataset: a Dataset to sample from when mode is "empirical"
         """
         super().__init__()
         assert mode in ["empirical", "gaussian"]
@@ -83,10 +82,7 @@ class RCF(nn.Module):
         if seed:
             generator = generator.manual_seed(seed)
 
-        # We register the weight and bias tensors as "buffers". This does two things:
-        # makes them behave correctly when we call .to(...) on the module, and makes
-        # them explicitly _not_ Parameters of the model (which might get updated) if
-        # a user tries to train with this model.
+        # Buffers move with the model but stay outside its trainable parameters.
         self.register_buffer(
             "weights",
             torch.randn(
@@ -107,13 +103,15 @@ class RCF(nn.Module):
             patches = np.zeros(
                 (num_patches, num_channels, kernel_size, kernel_size), dtype=np.float32
             )
-            idxs = torch.randint(0, len(dataset), (num_patches,), generator=generator).tolist()
+            idxs = torch.randint(
+                0, len(cast(Sized, dataset)), (num_patches,), generator=generator
+            ).tolist()
             ys = torch.randint(
                 0, height - kernel_size, (num_patches,), generator=generator
             ).tolist()
             xs = torch.randint(0, width - kernel_size, (num_patches,), generator=generator).tolist()
 
-            for i, (di, y, x) in enumerate(zip(idxs, ys, xs)):
+            for i, (di, y, x) in enumerate(zip(idxs, ys, xs, strict=True)):
                 img = dataset[di]["image"]
                 patches[i] = img[:, y : y + kernel_size, x : x + kernel_size]
 
@@ -142,16 +140,13 @@ class RCF(nn.Module):
         orig_shape = patches.shape
         patches = patches.reshape(patches.shape[0], -1)
 
-        # Zero mean every feature
         patches = patches - np.mean(patches, axis=1, keepdims=True)
 
-        # Normalize
         patch_norms = np.linalg.norm(patches, axis=1)
 
-        # Get rid of really small norms
+        # Avoid amplifying near-zero patches.
         patch_norms[np.where(patch_norms < min_divisor)] = 1
 
-        # Make features unit norm
         patches = patches / patch_norms[:, np.newaxis]
 
         patches_cov = 1.0 / n_patches * patches.T.dot(patches)
@@ -194,7 +189,7 @@ class RCF(nn.Module):
 
             output = torch.cat((x1a_mean, x1b_mean, x1a_std, x1b_std), dim=1)
             return output
-        elif self.stats_mode == "all":
+        if self.stats_mode == "all":
             x1a_std = torch.std(x1a, dim=(2, 3), keepdim=False)
             x1b_std = torch.std(x1b, dim=(2, 3), keepdim=False)
             x1a_max = torch.amax(x1a, dim=(2, 3), keepdim=False)
@@ -206,11 +201,10 @@ class RCF(nn.Module):
                 (x1a_mean, x1b_mean, x1a_std, x1b_std, x1a_max, x1b_max, x1a_min, x1b_min), dim=1
             )
             return output
-        elif self.stats_mode == "mean":
+        if self.stats_mode == "mean":
             output = torch.cat((x1a_mean, x1b_mean), dim=1)
             return output
-        else:
-            raise ValueError(f"Unknown stats_mode: {self.stats_mode}")
+        raise ValueError(f"Unknown stats_mode: {self.stats_mode}")
 
 
 class _NormalizingDatasetView(Dataset):
@@ -223,15 +217,14 @@ class _NormalizingDatasetView(Dataset):
 
     def __init__(self, base: Dataset, mean: torch.Tensor, std: torch.Tensor) -> None:
         self._base = base
-        # Per-channel (C, 1, 1) tensors for sample-level normalization.
         self._mean = mean.detach().view(-1, 1, 1).cpu().float()
         self._std = std.detach().clamp_min(1e-8).view(-1, 1, 1).cpu().float()
 
     def __len__(self) -> int:
-        return len(self._base)  # type: ignore[arg-type]
+        return len(cast(Sized, self._base))
 
-    def __getitem__(self, idx: int) -> dict:
-        sample = self._base[idx]
+    def __getitem__(self, index: int) -> dict:
+        sample = self._base[index]
         img = sample["image"].float()
         sample = dict(sample)
         sample["image"] = (img - self._mean) / self._std
@@ -252,7 +245,7 @@ class RCFBench(BenchModel):
       same per-channel z-score this :class:`RCFBench` will use at inference.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - public YAML options
         self,
         bands: list[BandSpec],
         features: int = 512,
@@ -260,7 +253,7 @@ class RCFBench(BenchModel):
         mode: str = "gaussian",
         stats_mode: str = "mean",
         seed: int | None = None,
-        dataset: NonGeoDataset | None = None,
+        dataset: Dataset | None = None,
         **_kwargs,
     ) -> None:
         super().__init__(bands=bands, **_kwargs)
@@ -284,3 +277,37 @@ class RCFBench(BenchModel):
     ) -> torch.Tensor:
         """Return RCF embeddings for already-normalized images."""
         return self.rcf(images)
+
+
+@dataclass(frozen=True)
+class RCFModelSettings:
+    """Validated constructor settings for :class:`RCFBench`."""
+
+    features: int = 512
+    kernel_size: int = 3
+    mode: str = "gaussian"
+    stats_mode: str = "mean"
+    seed: int | None = None
+    dataset: Dataset | None = None
+
+    def __post_init__(self) -> None:
+        """Validate settings before constructing the filter bank."""
+        if not isinstance(self.features, int) or not isinstance(self.kernel_size, int):
+            raise TypeError("features and kernel_size must be integers")
+        if self.features <= 0 or self.features % 2:
+            raise ValueError("features must be a positive even number")
+        if self.kernel_size <= 0:
+            raise ValueError("kernel_size must be positive")
+        if self.mode not in ("gaussian", "empirical"):
+            raise ValueError("mode must be 'gaussian' or 'empirical'")
+        if self.stats_mode not in ("mean", "stdev", "all"):
+            raise ValueError("stats_mode must be 'mean', 'stdev', or 'all'")
+        if self.mode == "empirical" and self.dataset is None:
+            raise ValueError("dataset must be provided for empirical mode")
+
+    def build(self, bands: list[BandSpec], *, normalization: str = "bandspec_zscore") -> RCFBench:
+        """Construct the wrapper these settings describe."""
+        return RCFBench(bands=bands, normalization=normalization, **vars(self))
+
+
+RCFBench.validated_settings = RCFModelSettings

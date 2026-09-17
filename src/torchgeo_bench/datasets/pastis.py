@@ -1,12 +1,9 @@
 """PASTIS (GeoBench V2) benchmark dataset."""
 
-from collections.abc import Callable
-
-import torch.nn as nn
-from torch.utils.data import Dataset
+from typing import ClassVar
 
 from .base import BandSpec
-from .geobench_v2 import GeoBenchv2, _V2Dataset
+from .geobench_v2 import _V2Dataset
 
 
 class PASTIS(_V2Dataset):
@@ -16,16 +13,17 @@ class PASTIS(_V2Dataset):
     """
 
     band_order_strategy = "by_sensor"
+    multi_temporal = True
 
     name = "pastis"
     task = "segmentation"
     num_classes = 20
     multilabel = False
-    rgb_bands = ["b04", "b03", "b02"]
-    split_sizes = {"train": 1455, "val": 482, "test": 496}
+    rgb_bands: ClassVar[list[str]] = ["b04", "b03", "b02"]
+    split_sizes: ClassVar[dict[str, int]] = {"train": 1455, "val": 482, "test": 496}
 
     # fmt: off
-    bands = [
+    bands: ClassVar[list[BandSpec]] = [
         BandSpec("s2", "b02", "B02", mean=982.691, std=1778.79, min=-951, max=15720, wavelength_um=0.49),
         BandSpec("s2", "b03", "B03", mean=1200.18, std=1748.09, min=0, max=15300, wavelength_um=0.56),
         BandSpec("s2", "b04", "B04", mean=1279.17, std=1815.64, min=-847, max=14267, wavelength_um=0.665),
@@ -44,36 +42,3 @@ class PASTIS(_V2Dataset):
         BandSpec("s1_desc", "vv_vh_desc", "VV/VH_desc", mean=6.189, std=3.2708, min=-21.0469, max=44.75),
     ]
     # fmt: on
-
-    def get_dataset(
-        self,
-        split: str,
-        *,
-        partition: str = "default",
-        bands: tuple[str, ...] | None = None,
-        transform: Callable | None = None,
-        time_steps: int | None = None,
-    ) -> Dataset:
-        """Return a :class:`GeoBenchv2` split, optionally as a time series.
-
-        PASTIS is multi-temporal and upstream defaults to ``num_time_steps=1``,
-        i.e. the last acquisition only.  Crop type is a phenological signal, so
-        a single date discards most of what separates the classes; request more
-        dates and let the probe pool over them.  ``time_steps=None`` keeps the
-        single-date behaviour so existing results stay comparable.
-        """
-        del partition
-        band_order = self.build_band_order(bands)
-        extra: dict = {}
-        if time_steps is not None:
-            extra["num_time_steps"] = int(time_steps)
-            extra["temporal_output_format"] = "TCHW"
-        return GeoBenchv2(
-            root=self.data_root(),
-            dataset_name=self.name,
-            split=split,
-            band_order=band_order,
-            transforms=transform,
-            data_normalizer=nn.Identity,
-            **extra,
-        )
