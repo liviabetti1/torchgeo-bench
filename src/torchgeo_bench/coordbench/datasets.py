@@ -254,7 +254,11 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     """Data.gov electrical demand profiles for each county in the contiguous USA.
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
-    counties_path = "INSERT_COUNTIES_GEOPARQUET_PATH_HERE" #TODO: after uploading parquet files to huggingface
+    from huggingface_hub import hf_hub_download
+    import pyarrow.parquet as pq
+    counties_path = hf_hub_download(
+        COORDBENCH_EXTENSION_REPO, "data/electrical_load_usa_2016_2023/counties.parquet", repo_type="dataset"
+    )
     df = load_config("usa_electric_usage")
     counties = gpd.read_file(counties_path)
 
@@ -473,16 +477,9 @@ def load_soilgrids() -> list[CoordBenchmark]:
 
 def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    from huggingface_hub import hf_hub_download
-    import pyarrow.parquet as pq
-
-    path = hf_hub_download(
-        COORDBENCH_EXTENSION_REPO, "data/era5_ecmwf_2017_daily/data.parquet", repo_type="dataset"
-    )
-    schema_cols = set(pq.ParquetFile(path).schema.names)
-    task_cols = [v for v in ERA5_ECMWF_LABELS if v in schema_cols]
-
-    df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
+    df = load_config_extended("era5_ecmwf_2017_daily")
+    task_cols = [v for v in ERA5_ECMWF_LABELS if v in df.columns]
+    df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
         pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
         df = df.merge(pool, on=["lat", "lon"])
@@ -501,16 +498,9 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
 
 def load_chelsa(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    from huggingface_hub import hf_hub_download
-    import pyarrow.parquet as pq
-
-    path = hf_hub_download(
-        COORDBENCH_EXTENSION_REPO, "data/chelsa_2017/data.parquet", repo_type="dataset"
-    )
-    schema_cols = set(pq.ParquetFile(path).schema.names)
-    task_cols = [v for v in CHELSA_LABELS if v in schema_cols]
-
-    df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", *task_cols])
+    df = load_config_extended("chelsa_2017")
+    task_cols = [v for v in CHELSA_LABELS if v in df.columns]
+    df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
         pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
         df = df.merge(pool, on=["lat", "lon"])

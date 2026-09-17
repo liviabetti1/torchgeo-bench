@@ -3,8 +3,6 @@
 set -euo pipefail
 export CUDA_VISIBLE_DEVICES=2
 #for model in sincos mind mind-small geoclip satclip sinr climplicit gtloc t_satclip; do
-# TODO: --aggregate-embeddings/--temporal-aggregation-methods have no CLI/CoordConfig
-# equivalent yet; add them back once coordbench/run.py's merge conflicts are resolved.
 for model in geoclip satclip sinr; do
   torchgeo-bench coord --device cuda:0 --model "$model" --dataset era5_ecmwf --split both \
     --temporal-aggregation-methods 1_week 2_week 4_week 13_week 52_week \
