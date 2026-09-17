@@ -24,7 +24,10 @@ import geopandas as gpd
 <<<<<<< HEAD
 from torchgeo_bench.coordbench.catalog import (
     CDC_PLACES_MEASURES,
+    CHELSA_LABELS,
     DEEPMIND_EVAL_CONFIGS,
+    ELECTRIC_LOAD_VARIABLES,
+    ERA5_ECMWF_LABELS,
     FAMILY_BENCHMARKS,
     SUSTAINBENCH_TASKS,
     USAVARS_LABELS,
@@ -72,6 +75,7 @@ PDFM_NON_TASK = frozenset(
     }
 )
 
+# move into catalog
 SUSTAINBENCH_TASKS = {
     "asset": "asset_index",
     "water": "water_index",
@@ -81,6 +85,7 @@ SUSTAINBENCH_TASKS = {
     "women_bmi": "women_bmi",
 }
 
+# move into catalog
 CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = crude prevalence %)
     "phys_health": "PHLTH",
     "diabetes": "DIABETES",
@@ -96,6 +101,7 @@ CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = 
     "high_chol": "HIGHCHOL",
 }
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 ERA5_ECMWF_LABELS = (
     'd2m', 
@@ -141,6 +147,8 @@ CHELSA_LABELS = (
     'we'
 )
 
+=======
+>>>>>>> a56e307 (fixed run after merge)
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
     from huggingface_hub import hf_hub_download
@@ -639,9 +647,11 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "deepmind": load_deepmind,
     "era5_ecmwf": load_era5_ecmwf,
     "chelsa": load_chelsa,
+    "usa_electric_usage": load_usa_electric_usage,
 }
 
 
+<<<<<<< HEAD
 # Benchmark names each family emits; lets a selection load only the needed family,
 # and lets callers enumerate the suite without a download.
 FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
@@ -675,6 +685,8 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "chelsa": ("chelsa",),
 }
 
+=======
+>>>>>>> a56e307 (fixed run after merge)
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
 }

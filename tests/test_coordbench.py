@@ -218,6 +218,7 @@ def _coord_cfg(tmp_path: Path, **coord_overrides: object) -> CoordConfig:
         "folds": 5,
         "cell_deg": 10.0,
         "knn_k": 5,
+        "skip_no_timestamp": False,
     }
     coord.update(coord_overrides)
     return CoordConfig.model_validate(

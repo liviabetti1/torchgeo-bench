@@ -10,11 +10,16 @@ to the resolved output path via the shared atomic writer, with resume support.
 import logging
 import os
 <<<<<<< HEAD
+<<<<<<< HEAD
 from collections.abc import Iterator, Sequence
 =======
 import time
 from collections.abc import Sequence
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+import time
+from collections.abc import Sequence
+>>>>>>> a56e307 (fixed run after merge)
 from dataclasses import dataclass
 from typing import Any
 import time
@@ -22,12 +27,17 @@ import time
 import numpy as np
 import pandas as pd
 <<<<<<< HEAD
+<<<<<<< HEAD
 import torch
 from tqdm.auto import tqdm
 =======
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import Progress
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+from rich.progress import Progress
+import torch
+>>>>>>> a56e307 (fixed run after merge)
 
 from torchgeo_bench.config.presets import ModelPreset, build_model
 from torchgeo_bench.config.schema import resolve_output_path
@@ -44,11 +54,17 @@ from torchgeo_bench.coordbench.probe import (
     linear_probe_score
 )
 <<<<<<< HEAD
+<<<<<<< HEAD
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.results import append_rows_atomic
 =======
 from torchgeo_bench.coordbench.splits import spatial_fold_ids
 >>>>>>> 645e398 (fixed era5 load)
+=======
+from torchgeo_bench.coordbench.splits import spatial_fold_ids
+from torchgeo_bench.devices import resolve_device
+from torchgeo_bench.results import append_rows_atomic
+>>>>>>> a56e307 (fixed run after merge)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +145,44 @@ def _methods_for(task_type: str, requested: Sequence[str], knn_k: int) -> list[t
     return methods
 
 
+def _score_one(
+    kind: str,
+    features: np.ndarray,
+    labels: np.ndarray,
+    task_type: str,
+    *,
+    folds: int,
+    seed: int,
+    device: str,
+    knn_device: str,
+    knn_k: int,
+    test_mask: np.ndarray | None,
+    fold_assign: np.ndarray | None,
+) -> tuple[float, list[float]]:
+    """KNN or linear probe for one (dataset, task, method) combination."""
+    if kind == "knn":
+        return knn_probe_score(
+            features,
+            labels,
+            folds=folds,
+            seed=seed,
+            k=knn_k,
+            device=knn_device,
+            test_mask=test_mask,
+            fold_assign=fold_assign,
+        )
+    return linear_probe_score(
+        features,
+        labels,
+        task_type,
+        folds=folds,
+        seed=seed,
+        device=device,
+        test_mask=test_mask,
+        fold_assign=fold_assign,
+    )
+
+
 def _evaluation_split(
     bench: CoordBenchmark, split: str, coord: CoordEvaluationConfig, seed: int
 ) -> tuple[np.ndarray | None, np.ndarray | None, str]:
@@ -142,8 +196,11 @@ def _evaluation_split(
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 def run_coordbench(cfg: CoordConfig) -> None:
 =======
+=======
+>>>>>>> a56e307 (fixed run after merge)
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     methods: Sequence[str],
@@ -163,8 +220,12 @@ def _expand_temporal(
     return expanded
 
 
+<<<<<<< HEAD
 def run_coordbench(cfg: DictConfig) -> None:
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+def run_coordbench(cfg: CoordConfig) -> None:
+>>>>>>> a56e307 (fixed run after merge)
     """Run the CoordBench location-encoder benchmark for the configured model."""
     preset = resolve_coord_preset(cfg)
     device = str(resolve_device(cfg.runtime.device))
@@ -174,6 +235,9 @@ def run_coordbench(cfg: DictConfig) -> None:
     splits = _resolve_splits(cfg.evaluation.split)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> a56e307 (fixed run after merge)
     coord = cfg.evaluation
     seed = cfg.runtime.seed
     folds = coord.folds
@@ -181,6 +245,7 @@ def run_coordbench(cfg: DictConfig) -> None:
     knn_k = coord.knn_k
     knn_device = coord.knn_device
     methods = coord.methods
+<<<<<<< HEAD
     temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
     aggregate_embeddings = coord.temporally_aggregate_embeddings
     from_polygon = coord.from_polygon
@@ -206,6 +271,12 @@ def run_coordbench(cfg: DictConfig) -> None:
 >>>>>>> 511ea8b (added embedding aggregation)
 =======
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+    temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
+    aggregate_embeddings = coord.aggregate_embeddings
+    model_name = preset.name
+    model_target = preset.target
+>>>>>>> a56e307 (fixed run after merge)
 
     output_path = cfg.output.file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -219,6 +290,7 @@ def run_coordbench(cfg: DictConfig) -> None:
 
     t0 = time.perf_counter()
 <<<<<<< HEAD
+<<<<<<< HEAD
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
     benchmarks = load_benchmarks(names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
@@ -226,6 +298,10 @@ def run_coordbench(cfg: DictConfig) -> None:
 <<<<<<< HEAD
 =======
     benchmarks = load_benchmarks(coord.names)
+=======
+    names = "all" if cfg.datasets == ["all"] else cfg.datasets
+    benchmarks = load_benchmarks(names)
+>>>>>>> a56e307 (fixed run after merge)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
 >>>>>>> 88edec7 (reorganized temporal aggregation)
@@ -299,10 +375,14 @@ def run_coordbench(cfg: DictConfig) -> None:
                 model_name=model_name,
                 model_target=model_target,
 <<<<<<< HEAD
+<<<<<<< HEAD
                 completed=completed if cfg.output.resume else None,
 =======
                 completed=completed if cfg.resume else None,
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+                completed=completed if cfg.output.resume else None,
+>>>>>>> a56e307 (fixed run after merge)
                 precomputed_features=emb,
             )
             if rows:
@@ -316,6 +396,7 @@ def run_coordbench(cfg: DictConfig) -> None:
                 len(rows),
             )
             progress.advance(task_id)
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
     for bench in track(benchmarks, description="CoordBench"):
@@ -343,6 +424,8 @@ def run_coordbench(cfg: DictConfig) -> None:
 >>>>>>> 511ea8b (added embedding aggregation)
 =======
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+>>>>>>> a56e307 (fixed run after merge)
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
 
@@ -360,11 +443,14 @@ def _evaluate_benchmark(
     bench: CoordBenchmark,
     encoder: LocationEncoder,
 <<<<<<< HEAD
+<<<<<<< HEAD
     cfg: CoordConfig,
     preset: ModelPreset,
     completed: set[tuple[str, ...]],
 ) -> Iterator[dict[str, Any]]:
 =======
+=======
+>>>>>>> a56e307 (fixed run after merge)
     *,
     methods: Sequence[str],
     splits: Sequence[str],
@@ -397,13 +483,19 @@ def _evaluate_benchmark(
     Returns ``(rows, encode_seconds, probe_seconds)`` so the caller can log where
     time went for this benchmark.
     """
+<<<<<<< HEAD
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+>>>>>>> a56e307 (fixed run after merge)
     metric_name = "r2" if bench.task_type == "regression" else "accuracy"
-    method_kinds = _methods_for(bench.task_type, coord.methods, knn_k)
+    method_kinds = _methods_for(bench.task_type, methods, knn_k)
     if not method_kinds:
+<<<<<<< HEAD
 <<<<<<< HEAD
         return
 =======
+=======
+>>>>>>> a56e307 (fixed run after merge)
         return [], 0.0, 0.0
 >>>>>>> 88edec7 (reorganized temporal aggregation)
 
@@ -498,6 +590,7 @@ def _evaluate_benchmark(
 >>>>>>> 88edec7 (reorganized temporal aggregation)
                         seed=seed,
 <<<<<<< HEAD
+<<<<<<< HEAD
                         k=knn_k,
                         device=coord.knn_device,
                         test_mask=test_mask,
@@ -538,12 +631,15 @@ def _evaluate_benchmark(
                 ).to_row()
         # An official test set is evaluated once, even when both CV modes were requested.
 =======
+=======
+>>>>>>> a56e307 (fixed run after merge)
                         model_name=model_name,
                         model_target=model_target,
                         embedding_aggregation=embedding_aggregation,
                     ).to_row()
                 )
         # A benchmark with an official split is split-invariant; don't re-run per CV mode.
+<<<<<<< HEAD
 >>>>>>> 511ea8b (added embedding aggregation)
         if bench.test_mask is not None:
             break
@@ -551,3 +647,8 @@ def _evaluate_benchmark(
 =======
     return rows, encode_s, probe_s
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+        if bench.test_mask is not None:
+            break
+    return rows, encode_s, probe_s
+>>>>>>> a56e307 (fixed run after merge)

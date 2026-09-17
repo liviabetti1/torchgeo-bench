@@ -47,6 +47,9 @@ class CoordEvaluationConfig(StrictModel):
     ridge_alphas: list[Annotated[StrictFloat, Field(gt=0)]] = Field(
         default_factory=lambda: list(RIDGE_ALPHAS), min_length=1
     )
+    skip_no_timestamp: StrictBool = True
+    temporal_aggregation_methods: list[StrictStr] = Field(default_factory=list)
+    aggregate_embeddings: StrictBool = True
 
 
 class CoordConfig(StrictModel):

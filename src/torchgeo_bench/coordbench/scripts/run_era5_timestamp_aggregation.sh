@@ -3,9 +3,11 @@
 set -euo pipefail
 export CUDA_VISIBLE_DEVICES=2
 #for model in sincos mind mind-small geoclip satclip sinr climplicit gtloc t_satclip; do
+# TODO: --aggregate-embeddings/--temporal-aggregation-methods have no CLI/CoordConfig
+# equivalent yet; add them back once coordbench/run.py's merge conflicts are resolved.
 for model in geoclip satclip sinr; do
-  torchgeo-bench run device=cuda:0 mode=coord model="$model" coord.names=era5_ecmwf coord.split=both \
-    coord.temporal_aggregation_methods=[1_week,2_week,4_week,13_week,52_week] \
-    coord.aggregate_embeddings=false \
-    coord.output=results/coordbench_era5_spatiotemporal_encoders.csv "$@"
+  torchgeo-bench coord --device cuda:0 --model "$model" --dataset era5_ecmwf --split both \
+    --temporal-aggregation-methods 1_week 2_week 4_week 13_week 52_week \
+    --no-aggregate-embeddings \
+    --output results/coordbench_era5_spatiotemporal_encoders.csv "$@"
 done

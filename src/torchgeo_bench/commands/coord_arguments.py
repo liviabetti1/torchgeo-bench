@@ -31,6 +31,19 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--knn-k", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--knn-device", default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--skip-no-timestamps",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--temporal-aggregation-methods", nargs="+", default=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--aggregate-embeddings",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--device", default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     add_output_arguments(parser)

@@ -37,6 +37,48 @@ SUSTAINBENCH_TASKS = {
     "women_bmi": "women_bmi",
 }
 
+ERA5_ECMWF_LABELS = (
+    "d2m",
+    "t2m",
+    "stl1",
+    "stl2",
+    "stl3",
+    "stl4",
+    "swvl1",
+    "swvl2",
+    "swvl3",
+    "swvl4",
+    "ssrd",
+    "strd",
+    "sde",
+    "snowc",
+    "u10",
+    "v10",
+    "sp",
+    "tp",
+    "skt",
+)
+
+CHELSA_LABELS = (
+    "hurs",
+    "pr",
+    "ps",
+    "rsds",
+    "sfcWind",
+    "tas",
+    "tasmin",
+    "tasmax",
+    "tz",
+    "we",
+)
+
+ELECTRIC_LOAD_VARIABLES = (
+    "mean",
+    "min",
+    "max",
+    "median",
+)
+
 CDC_PLACES_MEASURES = {
     "phys_health": "PHLTH",
     "diabetes": "DIABETES",
@@ -79,4 +121,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "worldclim": ("worldclim-bio1", "worldclim-bio12"),
     "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
+    "era5_ecmwf": ("era5_ecmwf",),
+    "chelsa": ("chelsa",),
+    "usa_electric_usage": tuple(f"usa_electric_usage-{col}" for col in ELECTRIC_LOAD_VARIABLES),
 }

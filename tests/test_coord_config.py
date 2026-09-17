@@ -141,6 +141,9 @@ def test_all_typed_flags() -> None:
         "ridge_alphas": [0.1, 1.0, 10.0],
         "knn_k": 7,
         "knn_device": "cpu",
+        "skip_no_timestamp": True,
+        "temporal_aggregation_methods": [],
+        "aggregate_embeddings": True,
     }
     assert config.runtime.model_dump() == {"device": "cpu", "seed": 42}
     assert config.output.model_dump() == {

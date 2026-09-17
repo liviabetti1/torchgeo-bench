@@ -1,9 +1,6 @@
 """Coordinate-only encoders for the CoordBench location-encoder track.
 
-A :class:`LocationEncoder` maps points ``(lon, lat[, posix_timestamp])`` to a fixed-length
-feature vector, one row per point; the probes and cross-validation live downstream.
-Add a model by subclassing :class:`LocationEncoder`, implementing :meth:`_encode`,
-and pointing a Hydra ``model`` config's ``_target_`` at it.
+A :class:`LocationEncoder` maps ``(lon, lat[, timestamp])`` to one feature vector per point.
 
 Add models by implementing :meth:`LocationEncoder._encode` and selecting their config target.
 
