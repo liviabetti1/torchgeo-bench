@@ -129,10 +129,13 @@ def _ridge_solve_score(
 
 
 def _cv_alpha_scores(
-    data: RidgeData,
+    feats: torch.Tensor,
+    targets: torch.Tensor,
+    class_idx: torch.Tensor | None,
     fold_ids: list[torch.Tensor],
     alphas: tuple[float, ...],
-    *,
+    task_type: str,
+    dev: torch.device,
     standardize: bool,
 ) -> tuple[float, list[float]]:
     """Pick the alpha with the best mean CV score; return it plus its per-fold scores.
@@ -162,7 +165,7 @@ def _cv_alpha_scores(
     return best_alpha, best_scores
 
 
-def linear_probe_score(  # noqa: PLR0913 - public probe options.
+def linear_probe_score(
     features: np.ndarray,
     labels: np.ndarray,
     task_type: str,
@@ -172,7 +175,6 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
     alphas: tuple[float, ...] = RIDGE_ALPHAS,
     test_mask: np.ndarray | None = None,
     fold_assign: np.ndarray | None = None,
-    *,
     standardize: bool = True,
 ) -> tuple[float, list[float]]:
     """Closed-form ridge linear probe (regression R^2 / one-hot-ridge accuracy).
@@ -184,9 +186,9 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
         features: Feature matrix ``(N, D)``.
         labels: Per-point labels ``(N,)``.
         task_type: ``"regression"`` or ``"classification"``.
-        folds: CV folds; with ``test_mask``, tune alpha on train data and score the holdout once.
+        folds: Number of CV folds (ignored under ``test_mask``).
         seed: RNG seed.
-        device: Torch device or ``auto`` for current CUDA when available, otherwise CPU.
+        device: Torch device for the solve.
         alphas: L2 grid to CV-select from.
         test_mask: Official held-out boolean mask; takes precedence over CV.
         fold_assign: Per-point fold ids for spatial-block CV; else random k-fold.
@@ -195,11 +197,8 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
     Returns:
         ``(score, fold_scores)`` — the reported metric and the per-fold scores it
         was averaged over (a single element under ``test_mask``).
-
-    Raises:
-        ValueError: If the device is invalid, or explicit CUDA is unavailable or out of range.
     """
-    dev = resolve_device(device)
+    dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
     valid = _valid_mask(features, labels, task_type)
     feats = torch.as_tensor(features[valid], dtype=torch.float32, device=dev)
     class_idx: torch.Tensor | None = None
@@ -211,7 +210,6 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
         class_idx = torch.as_tensor(inverse, device=dev)
         targets = torch.nn.functional.one_hot(class_idx).float()
 
-    data = RidgeData(feats, targets, class_idx)
     all_idx = torch.arange(feats.shape[0], device=dev)
     if test_mask is not None:
         is_test = torch.as_tensor(np.asarray(test_mask)[valid], device=dev, dtype=torch.bool)
@@ -228,11 +226,13 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
     fold_ids = [
         torch.as_tensor(idx, device=dev) for idx in _fold_indices(feats.shape[0], folds, seed, fa)
     ]
-    _, fold_scores = _cv_alpha_scores(data, fold_ids, alphas, standardize=standardize)
+    _, fold_scores = _cv_alpha_scores(
+        feats, targets, class_idx, fold_ids, alphas, task_type, dev, standardize
+    )
     return float(np.mean(fold_scores)), fold_scores
 
 
-def knn_probe_score(  # noqa: PLR0913 - public probe options.
+def knn_probe_score(
     features: np.ndarray,
     labels: np.ndarray,
     folds: int = 5,
@@ -253,7 +253,7 @@ def knn_probe_score(  # noqa: PLR0913 - public probe options.
     """
     valid = _valid_mask(features, labels, "classification")
     features, labels = features[valid], labels[valid]
-    _, y = np.unique(labels, return_inverse=True)  # contiguous int class ids
+    classes, y = np.unique(labels, return_inverse=True)  # contiguous int class ids
 
     def _eval(train_idx: np.ndarray, test_idx: np.ndarray) -> float:
         scaler = StandardScaler().fit(features[train_idx])
