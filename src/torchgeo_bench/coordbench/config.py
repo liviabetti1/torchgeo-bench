@@ -43,6 +43,9 @@ class CoordEvaluationConfig(StrictModel):
     cell_deg: StrictFloat = Field(default=10.0, gt=0)
     knn_k: StrictInt = Field(default=5, gt=0)
     knn_device: KnnDevice = "cpu"
+    skip_no_timestamp: StrictBool = True
+    temporal_aggregation_methods: list[StrictStr] = Field(default_factory=list)
+    aggregate_embeddings: StrictBool = True
 
 
 class CoordConfig(StrictModel):

@@ -103,11 +103,7 @@ class ReSIRENLocationEncoder(nn.Module):
         return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
 
     def forward(
-<<<<<<< HEAD
         self, latlon: Tensor, posix_timestamp: Tensor | None = None, return_features: bool = False
-=======
-        self, latlon: Tensor, year: Tensor | None = None, *, return_features: bool = False
->>>>>>> origin/main
     ) -> Tensor:
         """Encode ``(lat, lon)`` degrees to trunk features or head output."""
         loc = equal_earth_projection(latlon)

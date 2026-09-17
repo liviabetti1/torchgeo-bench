@@ -1,13 +1,6 @@
 """Coordinate-only encoders for the CoordBench location-encoder track.
 
-<<<<<<< HEAD
-A :class:`LocationEncoder` maps points ``(lon, lat[, posix_timestamp])`` to a fixed-length
-feature vector, one row per point; the probes and cross-validation live downstream.
-Add a model by subclassing :class:`LocationEncoder`, implementing :meth:`_encode`,
-and pointing a Hydra ``model`` config's ``_target_`` at it.
-=======
-A :class:`LocationEncoder` maps ``(lon, lat[, year])`` to one feature vector per point.
->>>>>>> origin/main
+A :class:`LocationEncoder` maps ``(lon, lat[, timestamp])`` to one feature vector per point.
 
 Add models by implementing :meth:`LocationEncoder._encode` and selecting their config target.
 
@@ -93,12 +86,7 @@ class SinCosLocationEncoder(LocationEncoder):
 
     name = "sincos"
 
-<<<<<<< HEAD
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
-=======
-    @override
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
->>>>>>> origin/main
         lat_r, lon_r = np.deg2rad(lat), np.deg2rad(lon)
         return np.stack(
             [np.sin(lat_r), np.cos(lat_r), np.sin(lon_r), np.cos(lon_r)], axis=1
@@ -201,11 +189,7 @@ class _RSHFEncoder(LocationEncoder):
 
     @override
     @torch.no_grad()
-<<<<<<< HEAD
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
-=======
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
->>>>>>> origin/main
         first, second = (lon, lat) if self.coord_order == "lonlat" else (lat, lon)
         x = torch.stack([torch.as_tensor(first), torch.as_tensor(second)], dim=1).to(
             self.device, self.dtype
@@ -288,11 +272,7 @@ class SINRLocationEncoder(_RSHFEncoder):
 
     @override
     @torch.no_grad()
-<<<<<<< HEAD
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
-=======
-    def _encode(self, lon: np.ndarray, lat: np.ndarray, year: np.ndarray | None) -> np.ndarray:
->>>>>>> origin/main
         from rshf.sinr import preprocess_locs
 
         x = torch.stack([torch.as_tensor(lon), torch.as_tensor(lat)], dim=1).float().to(self.device)

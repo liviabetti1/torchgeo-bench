@@ -38,7 +38,7 @@ from .probe import (
 from .probe import (
     linear_probe_score as linear_probe_score,
 )
-from .probe import (
+from .splits import (
     spatial_fold_ids as spatial_fold_ids,
 )
 from .run import CoordResult as CoordResult

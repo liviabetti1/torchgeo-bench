@@ -9,24 +9,15 @@ to ``output.file`` via the shared atomic writer, with resume support.
 
 import logging
 import os
-<<<<<<< HEAD
 import time
 from collections.abc import Sequence
-=======
-from collections.abc import Iterator, Sequence
->>>>>>> origin/main
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pandas as pd
-<<<<<<< HEAD
-from omegaconf import DictConfig, OmegaConf
 from rich.progress import Progress
-=======
 import torch
-from tqdm.auto import tqdm
->>>>>>> origin/main
 
 from torchgeo_bench.config.presets import ModelPreset, build_model
 from torchgeo_bench.coordbench.config import (
@@ -41,12 +32,9 @@ from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
     linear_probe_score
 )
-<<<<<<< HEAD
 from torchgeo_bench.coordbench.splits import spatial_fold_ids
-=======
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.results import append_rows_atomic
->>>>>>> origin/main
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +115,44 @@ def _methods_for(task_type: str, requested: Sequence[str], knn_k: int) -> list[t
     return methods
 
 
+def _score_one(
+    kind: str,
+    features: np.ndarray,
+    labels: np.ndarray,
+    task_type: str,
+    *,
+    folds: int,
+    seed: int,
+    device: str,
+    knn_device: str,
+    knn_k: int,
+    test_mask: np.ndarray | None,
+    fold_assign: np.ndarray | None,
+) -> tuple[float, list[float]]:
+    """KNN or linear probe for one (dataset, task, method) combination."""
+    if kind == "knn":
+        return knn_probe_score(
+            features,
+            labels,
+            folds=folds,
+            seed=seed,
+            k=knn_k,
+            device=knn_device,
+            test_mask=test_mask,
+            fold_assign=fold_assign,
+        )
+    return linear_probe_score(
+        features,
+        labels,
+        task_type,
+        folds=folds,
+        seed=seed,
+        device=device,
+        test_mask=test_mask,
+        fold_assign=fold_assign,
+    )
+
+
 def _evaluation_split(
     bench: CoordBenchmark, split: str, coord: CoordEvaluationConfig, seed: int
 ) -> tuple[np.ndarray | None, np.ndarray | None, str]:
@@ -139,7 +165,6 @@ def _evaluation_split(
     return None, None, "random"
 
 
-<<<<<<< HEAD
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     methods: Sequence[str],
@@ -159,10 +184,7 @@ def _expand_temporal(
     return expanded
 
 
-def run_coordbench(cfg: DictConfig) -> None:
-=======
 def run_coordbench(cfg: CoordConfig) -> None:
->>>>>>> origin/main
     """Run the CoordBench location-encoder benchmark for the configured model."""
     preset = resolve_coord_preset(cfg)
     device = str(resolve_device(cfg.runtime.device))
@@ -171,23 +193,19 @@ def run_coordbench(cfg: CoordConfig) -> None:
         cfg = cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"device": device})})
     splits = _resolve_splits(cfg.evaluation.split)
 
-<<<<<<< HEAD
-    coord = cfg.coord
-    device = str(cfg.device)
-    seed = int(cfg.seed)
-    folds = int(coord.folds)
-    cell_deg = float(coord.cell_deg)
-    knn_k = int(coord.knn_k)
-    knn_device = str(coord.get("knn_device") or "cpu")
-    methods = list(coord.methods)
-    splits = _resolve_splits(str(coord.split))
+    coord = cfg.evaluation
+    seed = cfg.runtime.seed
+    folds = coord.folds
+    cell_deg = coord.cell_deg
+    knn_k = coord.knn_k
+    knn_device = coord.knn_device
+    methods = coord.methods
     temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
-    aggregate_embeddings = bool(coord.aggregate_embeddings)
+    aggregate_embeddings = coord.aggregate_embeddings
+    model_name = preset.name
+    model_target = preset.target
 
-    output_path = str(coord.output)
-=======
     output_path = cfg.output.file
->>>>>>> origin/main
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     encoder = _instantiate_encoder(preset, device)
@@ -197,9 +215,9 @@ def run_coordbench(cfg: CoordConfig) -> None:
     if completed:
         logger.info("Resume mode: %d existing coord results in %s", len(completed), output_path)
 
-<<<<<<< HEAD
     t0 = time.perf_counter()
-    benchmarks = load_benchmarks(coord.names)
+    names = "all" if cfg.datasets == ["all"] else cfg.datasets
+    benchmarks = load_benchmarks(names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
     t0 = time.perf_counter()
@@ -241,7 +259,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 device=device,
                 model_name=model_name,
                 model_target=model_target,
-                completed=completed if cfg.resume else None,
+                completed=completed if cfg.output.resume else None,
                 precomputed_features=emb,
             )
             if rows:
@@ -255,16 +273,6 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 len(rows),
             )
             progress.advance(task_id)
-=======
-    names = "all" if cfg.datasets == ["all"] else cfg.datasets
-    benchmarks = load_benchmarks(names)
-    logger.info("CoordBench: %d benchmarks selected", len(benchmarks))
-
-    for bench in tqdm(benchmarks, desc="CoordBench"):
-        for row in _evaluate_benchmark(bench, encoder, cfg, preset, completed):
-            append_rows_atomic(output_path, [row])
-            completed.add(tuple(str(row[col]) for col in RESUME_KEY_COLS))
->>>>>>> origin/main
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
 
@@ -281,7 +289,6 @@ def test_sample_count(labels: np.ndarray, task_type: str, test_mask: np.ndarray 
 def _evaluate_benchmark(
     bench: CoordBenchmark,
     encoder: LocationEncoder,
-<<<<<<< HEAD
     *,
     methods: Sequence[str],
     splits: Sequence[str],
@@ -301,21 +308,9 @@ def _evaluate_benchmark(
     Returns ``(rows, encode_seconds, probe_seconds)`` so the caller can log where
     time went for this benchmark.
     """
-=======
-    cfg: CoordConfig,
-    preset: ModelPreset,
-    completed: set[tuple[str, ...]],
-) -> Iterator[dict[str, Any]]:
-    """Embed one benchmark once and probe every (task, method, split) combination."""
-    coord = cfg.evaluation
-    seed = cfg.runtime.seed
-    folds = coord.folds
-    knn_k = coord.knn_k
->>>>>>> origin/main
     metric_name = "r2" if bench.task_type == "regression" else "accuracy"
-    method_kinds = _methods_for(bench.task_type, coord.methods, knn_k)
+    method_kinds = _methods_for(bench.task_type, methods, knn_k)
     if not method_kinds:
-<<<<<<< HEAD
         return [], 0.0, 0.0
 
     t0 = time.perf_counter()
@@ -397,65 +392,3 @@ def _evaluate_benchmark(
         if bench.test_mask is not None:
             break
     return rows, encode_s, probe_s
-=======
-        return
-
-    features = None
-
-    for split in _resolve_splits(coord.split):
-        test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)
-
-        for task, labels in bench.tasks.items():
-            for method_label, kind in method_kinds:
-                key = (bench.name, task, method_label, preset.name, split_label)
-                if key in completed:
-                    continue
-                if features is None:
-                    features = encoder.encode(bench.lon, bench.lat, bench.year)
-                if kind == "knn":
-                    score, fold_scores = knn_probe_score(
-                        features,
-                        np.asarray(labels),
-                        folds=folds,
-                        seed=seed,
-                        k=knn_k,
-                        device=coord.knn_device,
-                        test_mask=test_mask,
-                        fold_assign=fold_assign,
-                    )
-                else:
-                    score, fold_scores = linear_probe_score(
-                        features,
-                        np.asarray(labels),
-                        bench.task_type,
-                        folds=folds,
-                        seed=seed,
-                        device=cfg.runtime.device,
-                        test_mask=test_mask,
-                        fold_assign=fold_assign,
-                    )
-                std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
-                n_test = test_sample_count(labels, bench.task_type, test_mask)
-                yield CoordResult(
-                    dataset=bench.name,
-                    task=task,
-                    task_type=bench.task_type,
-                    method=method_label,
-                    split=split_label,
-                    metric_name=metric_name,
-                    metric_value=score,
-                    ci_lower=score - std,
-                    ci_upper=score + std,
-                    n_folds=1 if split_label == "official" else folds,
-                    cell_deg=coord.cell_deg,
-                    feature_dim=int(features.shape[1]),
-                    n_samples=len(labels),
-                    n_test=n_test,
-                    seed=seed,
-                    model_name=preset.name,
-                    model_target=preset.target,
-                ).to_row()
-        # An official test set is evaluated once, even when both CV modes were requested.
-        if bench.test_mask is not None:
-            break
->>>>>>> origin/main
