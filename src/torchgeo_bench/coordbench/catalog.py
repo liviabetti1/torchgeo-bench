@@ -94,6 +94,15 @@ CDC_PLACES_MEASURES = {
     "high_chol": "HIGHCHOL",
 }
 
+SUSTAINBENCH_TASKS = {
+    "asset": "asset_index",
+    "water": "water_index",
+    "sanitation": "sanitation_index",
+    "child_mortality": "under5_mort",
+    "women_edu": "women_edu",
+    "women_bmi": "women_bmi",
+}
+
 FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "pdfm": ("pdfm-conus27",),
     "air_temp": ("satclip-air-temp",),

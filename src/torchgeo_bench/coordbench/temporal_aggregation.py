@@ -32,7 +32,8 @@ TEMPORAL_AGGREGATION_METHODS = {
               "2_week",
               "4_week",
               "13_week",
-              "52_week"],
+              "annual",
+              "concat_four_seasons"],
     "none": ["annual",
              "summer",
              "default_date_winter",
@@ -61,7 +62,7 @@ def method_to_windows(method: str, year: int = 2021) -> list[tuple[pd.Timestamp,
     "annual" returns a single window spanning the full year; "summer" returns a single window
     spanning June-August (JJA).
     """
-    if method == "annual":
+    if method in ("annual", "concat_four_seasons"):
         return [(pd.Timestamp(f"{year}-01-01", tz="UTC"), pd.Timestamp(f"{year}-12-31", tz="UTC"))]
     if method == "summer":
         return [(pd.Timestamp(f"{year}-06-01", tz="UTC"), pd.Timestamp(f"{year}-08-31", tz="UTC"))]
@@ -144,7 +145,25 @@ def _nonstatic_aggregation(
         labels = g.agg(label_agg).reset_index()
         all_labels.append(labels)
 
-        if encoder is not None:
+        if method == "concat_four_seasons":
+            assert encoder is not None, (
+                f"{method!r} requires an encoder to synthesize embeddings for {dataset.name!r}."
+            )
+            lon_l, lat_l = labels["lon"].to_numpy(), labels["lat"].to_numpy()
+            if encoder.name == "climplicit":
+                # Climplicit's native no-month call already concatenates months 3/6/9/12.
+                all_embs.append(encoder.encode(lon_l, lat_l, None))
+            else:
+                embs = [
+                    encoder.encode(
+                        lon_l,
+                        lat_l,
+                        np.full(len(labels), pd.Timestamp(f"{dataset.year}-{date}", tz="UTC").timestamp()),
+                    )
+                    for date in track(SEASON_REPRESENTATIVE_DATES.values(), description="concat_four_seasons")
+                ]
+                all_embs.append(np.concatenate(embs, axis=1))
+        elif encoder is not None:
             days = pd.date_range(start, end, freq="D")
             all_embs.append(np.mean(
                 [

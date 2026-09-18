@@ -228,9 +228,11 @@ class ClimplicitLocationEncoder(_RSHFEncoder):
 
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
-        if posix_timestamp is None:
-            raise ValueError("Climplicit requires per-point posix_timestamp for temporal features")
         lonlat = torch.stack([torch.as_tensor(lon), torch.as_tensor(lat)], dim=1).float()
+
+        if posix_timestamp is None:
+            # Native time-invariant embedding: concat of months 3/6/9/12 -> 1024-d.
+            return self.model(lonlat.to(self.device)).float().cpu().numpy()
 
         ts = pd.to_datetime(np.asarray(posix_timestamp), unit="s")
         month = torch.as_tensor(ts.month.to_numpy().copy(), dtype=torch.float32)
