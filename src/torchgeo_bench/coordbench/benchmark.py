@@ -1,8 +1,4 @@
 """The :class:`CoordBenchmark` data model, shared by dataset loaders and transforms.
-
-Split out from ``datasets.py`` so that modules which transform an existing
-benchmark (e.g. ``aggregation.py``, ``splits.py``) can import the type without
-importing the dataset loaders (and vice versa), avoiding a circular import.
 """
 
 from dataclasses import dataclass, field

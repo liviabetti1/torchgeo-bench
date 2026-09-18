@@ -25,6 +25,33 @@ from torchgeo_bench.knn import KNNClassifier
 logger = logging.getLogger(__name__)
 
 
+def spatial_fold_ids(
+    lat: np.ndarray, lon: np.ndarray, folds: int = 5, cell_deg: float = 10.0, seed: int = 0
+) -> np.ndarray:
+    """Assign each point a fold by its lat/lon grid cell (blockCV-style holdout).
+
+    All points in a ``cell_deg`` block share a fold, so train and test sets are
+    spatially disjoint.
+
+    Args:
+        lat: Latitudes, shape ``(N,)``.
+        lon: Longitudes, shape ``(N,)``.
+        folds: Number of folds.
+        cell_deg: Grid-cell size in degrees.
+        seed: RNG seed for the cell -> fold assignment.
+
+    Returns:
+        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
+    """
+    cell = np.floor(np.asarray(lat) / cell_deg).astype(np.int64) * 100003 + np.floor(
+        np.asarray(lon) / cell_deg
+    ).astype(np.int64)
+    uniq = np.unique(cell)
+    order = np.random.default_rng(seed).permutation(len(uniq))
+    fold_of = {int(c): int(order[i] % folds) for i, c in enumerate(uniq)}
+    return np.array([fold_of[int(c)] for c in cell], dtype=np.int64)
+
+
 def _valid_mask(features: np.ndarray, labels: np.ndarray, task_type: str) -> np.ndarray:
     """Rows with a finite label and no non-finite feature (drops nodata/NaN)."""
     if task_type == "regression":
@@ -104,47 +131,36 @@ def ridge_scores(
     return [float((pred.argmax(1) == class_indices).float().mean()) for pred in predictions]
 
 
-def _ridge_solve_score(
+def _ridge_eval(
     gram: torch.Tensor,
     xty: torch.Tensor,
     x_te: torch.Tensor,
-    targets: torch.Tensor,
-    class_idx: torch.Tensor | None,
-    test_idx: torch.Tensor,
-    alpha: float,
-    task_type: str,
+    y_te: torch.Tensor,
     eye: torch.Tensor,
+    alpha: float,
+    class_indices: torch.Tensor | None,
+    test_idx: torch.Tensor
 ) -> float:
-    """Solve + score one alpha given a fold's precomputed Gram matrix (cheap: O(D^3)).
-    Added implementation by Livia -- needs checking, but to speed up computation"""
-    weight = torch.linalg.solve(gram + alpha * eye, xty)
+    """Fit closed-form ridge on ``train_idx``, score on ``test_idx`` (R^2 or accuracy)."""
+    weight = torch.linalg.solve(
+        gram + alpha * eye, xty
+    )
     pred = x_te @ weight
-    if task_type == "regression":
-        y_te = targets[test_idx]
+    if class_indices is None:
         ss_res = ((y_te - pred) ** 2).sum()
         ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
         return float(1.0 - ss_res / ss_tot)
-    assert class_idx is not None
-    return float((pred.argmax(1) == class_idx[test_idx]).float().mean())
+    return float((pred.argmax(1) == class_indices[test_idx]).float().mean())
 
 
 def _cv_alpha_scores(
-    feats: torch.Tensor,
-    targets: torch.Tensor,
-    class_idx: torch.Tensor | None,
+    data: RidgeData,
     fold_ids: list[torch.Tensor],
     alphas: tuple[float, ...],
-    task_type: str,
-    dev: torch.device,
+    *,
     standardize: bool,
 ) -> tuple[float, list[float]]:
-    """Pick the alpha with the best mean CV score; return it plus its per-fold scores.
-
-    The O(N*D^2) Gram matrix (``x_tr.T @ x_tr``) doesn't depend on alpha, so it's
-    built once per fold and reused across the whole alpha grid instead of being
-    recomputed per (fold, alpha) pair — the dominant cost otherwise.
-    ^^ Livia made this change -- double check
-    """
+    """Pick the alpha with the best mean CV score; return it plus its per-fold scores."""
     nf = len(fold_ids)
     scores_by_alpha: list[list[float]] = [[] for _ in alphas]
     for f, test_idx in enumerate(fold_ids):
@@ -162,10 +178,10 @@ def _cv_alpha_scores(
             f"ridge alpha selected at grid edge ({best_alpha:g}); widen RIDGE_ALPHAS",
             stacklevel=2,
         )
-    return best_alpha, best_scores
+    return best_alpha, scores[best_alpha]
 
 
-def linear_probe_score(
+def linear_probe_score(  # noqa: PLR0913 - public probe options.
     features: np.ndarray,
     labels: np.ndarray,
     task_type: str,
@@ -175,6 +191,7 @@ def linear_probe_score(
     alphas: tuple[float, ...] = RIDGE_ALPHAS,
     test_mask: np.ndarray | None = None,
     fold_assign: np.ndarray | None = None,
+    *,
     standardize: bool = True,
 ) -> tuple[float, list[float]]:
     """Closed-form ridge linear probe (regression R^2 / one-hot-ridge accuracy).
@@ -186,9 +203,9 @@ def linear_probe_score(
         features: Feature matrix ``(N, D)``.
         labels: Per-point labels ``(N,)``.
         task_type: ``"regression"`` or ``"classification"``.
-        folds: Number of CV folds (ignored under ``test_mask``).
+        folds: CV folds; with ``test_mask``, tune alpha on train data and score the holdout once.
         seed: RNG seed.
-        device: Torch device for the solve.
+        device: Torch device or ``auto`` for current CUDA when available, otherwise CPU.
         alphas: L2 grid to CV-select from.
         test_mask: Official held-out boolean mask; takes precedence over CV.
         fold_assign: Per-point fold ids for spatial-block CV; else random k-fold.
@@ -197,8 +214,11 @@ def linear_probe_score(
     Returns:
         ``(score, fold_scores)`` — the reported metric and the per-fold scores it
         was averaged over (a single element under ``test_mask``).
+
+    Raises:
+        ValueError: If the device is invalid, or explicit CUDA is unavailable or out of range.
     """
-    dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
+    dev = resolve_device(device)
     valid = _valid_mask(features, labels, task_type)
     feats = torch.as_tensor(features[valid], dtype=torch.float32, device=dev)
     class_idx: torch.Tensor | None = None
@@ -210,29 +230,33 @@ def linear_probe_score(
         class_idx = torch.as_tensor(inverse, device=dev)
         targets = torch.nn.functional.one_hot(class_idx).float()
 
+    data = RidgeData(feats, targets, class_idx)
     all_idx = torch.arange(feats.shape[0], device=dev)
     if test_mask is not None:
         is_test = torch.as_tensor(np.asarray(test_mask)[valid], device=dev, dtype=torch.bool)
         train_pool, test_idx = all_idx[~is_test], all_idx[is_test]
         tp = train_pool.cpu().numpy()
         inner = [torch.as_tensor(tp[i::folds], device=dev) for i in range(folds)]
+<<<<<<< HEAD
         best_alpha = alphas[0]
         if len(alphas) > 1:
             best_alpha, _ = _cv_alpha_scores(data, inner, alphas, standardize=standardize)
         score = ridge_scores(data, train_pool, test_idx, (best_alpha,), standardize=standardize)[0]
+=======
+        best_alpha, _ = _cv_alpha_scores(data, inner, alphas, standardize=standardize)
+        score = _ridge_eval(data, train_pool, test_idx, best_alpha, standardize=standardize)
+>>>>>>> c05710d (cleaned up optimized probe file (compute gram matrix outside))
         return score, [score]
 
     fa = None if fold_assign is None else np.asarray(fold_assign)[valid]
     fold_ids = [
         torch.as_tensor(idx, device=dev) for idx in _fold_indices(feats.shape[0], folds, seed, fa)
     ]
-    _, fold_scores = _cv_alpha_scores(
-        feats, targets, class_idx, fold_ids, alphas, task_type, dev, standardize
-    )
+    _, fold_scores = _cv_alpha_scores(data, fold_ids, alphas, standardize=standardize)
     return float(np.mean(fold_scores)), fold_scores
 
 
-def knn_probe_score(
+def knn_probe_score(  # noqa: PLR0913 - public probe options.
     features: np.ndarray,
     labels: np.ndarray,
     folds: int = 5,
@@ -253,7 +277,7 @@ def knn_probe_score(
     """
     valid = _valid_mask(features, labels, "classification")
     features, labels = features[valid], labels[valid]
-    classes, y = np.unique(labels, return_inverse=True)  # contiguous int class ids
+    _, y = np.unique(labels, return_inverse=True)  # contiguous int class ids
 
     def _eval(train_idx: np.ndarray, test_idx: np.ndarray) -> float:
         scaler = StandardScaler().fit(features[train_idx])

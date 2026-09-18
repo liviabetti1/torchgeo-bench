@@ -3,6 +3,6 @@
 set -euo pipefail
 for model in climplicit t_satclip/t_satclip_doy_1M gtloc; do
   torchgeo-bench coord --model "$model" --dataset chelsa --split both \
-    --temporal-aggregation-methods 1_week 2_week 4_week 13_week 52_week \
+    --temporal-aggregation-methods 1_week 2_week 4_week 13_week annual concat_four_seasons \
     --output results/coordbench_chelsa_spatiotemporal_encoders_aggregated_embeddings.csv "$@"
 done

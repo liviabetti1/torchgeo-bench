@@ -75,6 +75,7 @@ PDFM_NON_TASK = frozenset(
     }
 )
 
+<<<<<<< HEAD
 # move into catalog
 SUSTAINBENCH_TASKS = {
     "asset": "asset_index",
@@ -149,6 +150,8 @@ CHELSA_LABELS = (
 
 =======
 >>>>>>> a56e307 (fixed run after merge)
+=======
+>>>>>>> c05710d (cleaned up optimized probe file (compute gram matrix outside))
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
     from huggingface_hub import hf_hub_download
@@ -322,23 +325,36 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     counties_path = hf_hub_download(
         COORDBENCH_EXTENSION_REPO, "data/electrical_load_usa_2016_2023/counties.parquet", repo_type="dataset"
     )
-    df = load_config("usa_electric_usage")
-    counties = gpd.read_file(counties_path)
+    df = load_config_extended("electrical_load_usa_2016_2023")
+    counties = gpd.read_parquet(counties_path)
 
     finalized_df = df.merge(counties, on="county", how="left")
+    task_cols = [v for v in ELECTRIC_LOAD_VARIABLES if v in finalized_df.columns]
 
-    out: list[CoordBenchmark] = []
-    for col in ELECTRIC_LOAD_VARIABLES:
-        out.append(
-            CoordBenchmark(
-                name=f"usa_electric_usage-{col}",
-                lat=finalized_df["lat"].to_numpy(np.float64),
-                lon=finalized_df["lon"].to_numpy(np.float64),
-                tasks={col: finalized_df[col].to_numpy(np.float64)},
-            )
-        )
+    # out: list[CoordBenchmark] = []
+    # for col in ELECTRIC_LOAD_VARIABLES:
+    #     out.append(
+    #         CoordBenchmark(
+    #             name=f"usa_electric_usage-{col}",
+    #             lat=finalized_df["lat"].to_numpy(np.float64),
+    #             lon=finalized_df["lon"].to_numpy(np.float64),
+    #             tasks={col: finalized_df[col].to_numpy(np.float64)},
+    #         )
+    #     )
 
-    return out
+    # return out
+    from IPython import embed; embed()
+
+    ds = CoordBenchmark(
+        name="usa_electric_usage",
+        lat=finalized_df["lat"].to_numpy(np.float64),
+        lon=finalized_df["lon"].to_numpy(np.float64),
+        tasks={v: finalized_df[v].to_numpy(np.float64) for v in task_cols},
+        # kept float64 for posix since it will lose second-level precision in float32
+        posix_timestamp=finalized_df["posix_timestamp"].to_numpy(np.float64),
+        temporal_resolution="daily",
+    )
+    return [ds]
 
 
 def load_better_together() -> list[CoordBenchmark]:
