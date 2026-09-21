@@ -82,15 +82,15 @@ class RidgeData:
     class_indices: torch.Tensor | None
 
 
-def _ridge_eval(
+def compute_gram_matrix(
     data: RidgeData,
     train_idx: torch.Tensor,
     test_idx: torch.Tensor,
-    alpha: float,
     *,
     standardize: bool,
-) -> float:
-    """Fit closed-form ridge on ``train_idx``, score on ``test_idx`` (R^2 or accuracy)."""
+) -> dict[str, torch.Tensor]:
+    """Compute Gram matrix and such outside of ridge eval, to not have to compute every time...
+    Added by Livia, double check"""
     x_tr, x_te = data.features[train_idx], data.features[test_idx]
     if standardize:
         mean, std = x_tr.mean(0, keepdim=True), x_tr.std(0, keepdim=True).clamp_min(1e-6)
@@ -100,16 +100,38 @@ def _ridge_eval(
     x_tr = torch.cat([x_tr, torch.ones(x_tr.shape[0], 1, device=x_tr.device)], dim=1).double()
     x_te = torch.cat([x_te, torch.ones(x_te.shape[0], 1, device=x_te.device)], dim=1).double()
     eye = torch.eye(x_tr.shape[1], device=x_tr.device, dtype=torch.float64)
+    eye[-1, -1] = 0.0  # don't penalize the bias term
+    gram = x_tr.T @ x_tr
+    xty = x_tr.T @ data.targets[train_idx].double()
+
+    return {
+        'gram': gram,
+        'eye': eye,
+        'xty': xty,
+        'x_te': x_te
+    }
+
+
+def _ridge_eval(
+    gram: torch.Tensor,
+    xty: torch.Tensor,
+    x_te: torch.Tensor,
+    y_te: torch.Tensor,
+    eye: torch.Tensor,
+    alpha: float,
+    class_indices: torch.Tensor | None,
+    test_idx: torch.Tensor
+) -> float:
+    """Fit closed-form ridge on ``train_idx``, score on ``test_idx`` (R^2 or accuracy)."""
     weight = torch.linalg.solve(
-        x_tr.T @ x_tr + alpha * eye, x_tr.T @ data.targets[train_idx].double()
+        gram + alpha * eye, xty
     )
     pred = x_te @ weight
-    if data.class_indices is None:
-        y_te = data.targets[test_idx]
+    if class_indices is None:
         ss_res = ((y_te - pred) ** 2).sum()
         ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
         return float(1.0 - ss_res / ss_tot)
-    return float((pred.argmax(1) == data.class_indices[test_idx]).float().mean())
+    return float((pred.argmax(1) == class_indices[test_idx]).float().mean())
 
 
 def _cv_alpha_scores(
@@ -121,27 +143,42 @@ def _cv_alpha_scores(
 ) -> tuple[float, list[float]]:
     """Pick the alpha with the best mean CV score; return it plus its per-fold scores."""
     nf = len(fold_ids)
-    best_alpha, best_mean, best_scores = alphas[0], -1e30, []
-    for a in alphas:
-        scores = [
-            _ridge_eval(
-                data,
-                torch.cat([fold_ids[j] for j in range(nf) if j != f]),
-                fold_ids[f],
-                a,
-                standardize=standardize,
+
+    scores: dict[float, list[float]] = {a: [] for a in alphas}
+
+    for f in range(nf):
+        train_indices = torch.cat([fold_ids[j] for j in range(nf) if j != f])
+        test_indices = fold_ids[f]
+
+        matrices = compute_gram_matrix(
+            data,
+            train_indices,
+            test_indices,
+            standardize=standardize,
+        )
+
+        for a in alphas:
+            scores[a].append(
+                _ridge_eval(
+                    gram = matrices['gram'],
+                    xty = matrices['xty'],
+                    x_te = matrices['x_te'],
+                    y_te = data.targets[test_indices],
+                    eye = matrices['eye'],
+                    alpha = a,
+                    class_indices = data.class_indices,
+                    test_idx = test_indices
+                )
             )
-            for f in range(nf)
-        ]
-        mean_score = float(np.mean(scores))
-        if mean_score > best_mean:
-            best_mean, best_alpha, best_scores = mean_score, a, scores
+
+    mean_by_alpha = {a: float(np.mean(s)) for a, s in scores.items()}
+    best_alpha = max(mean_by_alpha, key=mean_by_alpha.get)
     if len(alphas) > 1 and best_alpha in (alphas[0], alphas[-1]):
         warnings.warn(
             f"ridge alpha selected at grid edge ({best_alpha:g}); widen RIDGE_ALPHAS",
             stacklevel=2,
         )
-    return best_alpha, best_scores
+    return best_alpha, scores[best_alpha]
 
 
 def linear_probe_score(  # noqa: PLR0913 - public probe options.
@@ -198,7 +235,17 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
         tp = train_pool.cpu().numpy()
         inner = [torch.as_tensor(tp[i::folds], device=dev) for i in range(folds)]
         best_alpha, _ = _cv_alpha_scores(data, inner, alphas, standardize=standardize)
-        score = _ridge_eval(data, train_pool, test_idx, best_alpha, standardize=standardize)
+        m = compute_gram_matrix(data, train_pool, test_idx, standardize=standardize)
+        score = _ridge_eval(
+            gram=m["gram"],
+            xty=m["xty"],
+            x_te=m["x_te"],
+            y_te=data.targets[test_idx],
+            eye=m["eye"],
+            alpha=best_alpha,
+            class_indices=data.class_indices,
+            test_idx=test_idx,
+        )
         return score, [score]
 
     fa = None if fold_assign is None else np.asarray(fold_assign)[valid]
