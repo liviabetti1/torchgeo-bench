@@ -45,7 +45,9 @@ class CoordEvaluationConfig(StrictModel):
     knn_device: KnnDevice = "cpu"
     skip_no_timestamp: StrictBool = True
     temporal_aggregation_methods: list[StrictStr] = Field(default_factory=list)
-    aggregate_embeddings: StrictBool = True
+    temporally_aggregate_embeddings: StrictBool = True
+    from_polygon: StrictBool = False
+    spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
 
 
 class CoordConfig(StrictModel):
