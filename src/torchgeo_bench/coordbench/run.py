@@ -47,6 +47,7 @@ from torchgeo_bench.coordbench.config import (
     resolve_coord_preset,
 )
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
+from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import TEMPORAL_AGGREGATION_METHODS, temporal_aggregation
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
@@ -221,9 +222,27 @@ def _expand_temporal(
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 def run_coordbench(cfg: DictConfig) -> None:
 >>>>>>> 88edec7 (reorganized temporal aggregation)
 =======
+=======
+def _expand_spatial(
+        benchmarks: Sequence[tuple[CoordBenchmark, np.ndarray]],
+        methods: Sequence[str],
+        encoder: LocationEncoder | None = None,
+) -> list[tuple[CoordBenchmark, np.ndarray]]:
+    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+    for bench, embeddings in benchmarks:
+        applicable_methods = [m for m in methods if m in SPATIAL_AGGREGATION_METHODS]
+        for method in applicable_methods:
+            windowed, emb = spatial_aggregation(bench, method, embeddings, encoder=encoder)
+            windowed.name = f"{bench.name}-{method}"
+            expanded.append((windowed, emb))
+    return expanded
+
+
+>>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
 def run_coordbench(cfg: CoordConfig) -> None:
 >>>>>>> a56e307 (fixed run after merge)
     """Run the CoordBench location-encoder benchmark for the configured model."""
@@ -273,7 +292,9 @@ def run_coordbench(cfg: CoordConfig) -> None:
 >>>>>>> 88edec7 (reorganized temporal aggregation)
 =======
     temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
-    aggregate_embeddings = coord.aggregate_embeddings
+    aggregate_embeddings = coord.temporally_aggregate_embeddings
+    from_polygon = coord.from_polygon
+    spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
     model_target = preset.target
 >>>>>>> a56e307 (fixed run after merge)
@@ -315,6 +336,9 @@ def run_coordbench(cfg: CoordConfig) -> None:
     else:
         all_benchmarks = [(b, None) for b in benchmarks]
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
 
     t1 = time.perf_counter()
 
@@ -326,17 +350,25 @@ def run_coordbench(cfg: CoordConfig) -> None:
         )
     t2 = time.perf_counter()
 
+<<<<<<< HEAD
     logger.info(
         "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
         len(all_benchmarks),
         t1 - t0,
         t2 - t1,
 =======
+=======
+>>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
     logger.info(
-        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs)",
+        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
         len(all_benchmarks),
+<<<<<<< HEAD
         time.perf_counter() - t0,
 >>>>>>> 88edec7 (reorganized temporal aggregation)
+=======
+        t1 - t0,
+        t2 - t1,
+>>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
     )
 
     if bool(coord.skip_no_timestamp):

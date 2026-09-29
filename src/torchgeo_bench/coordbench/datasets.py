@@ -159,6 +159,12 @@ def load_config(config: str) -> pd.DataFrame:
     path = hf_hub_download(COORDBENCH_REPO, f"data/{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
+def load_config_gdf(config: str, base_repo) -> gpd.GeoDataFrame:
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(base_repo, filename=f"data/{config}/data.parquet", repo_type="dataset")
+    return gpd.read_parquet(path)
+
 def load_config_extended(config: str, columns: list[str] | None = None) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace (specifically, the extended repo).
     Remove this if/when these datasets are integrated with Coordbench.
@@ -320,30 +326,20 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     """Data.gov electrical demand profiles for each county in the contiguous USA.
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
-    from huggingface_hub import hf_hub_download
 
-    counties_path = hf_hub_download(
-        COORDBENCH_EXTENSION_REPO, "data/electrical_load_usa_2016_2023/counties.parquet", repo_type="dataset"
-    )
-    df = load_config_extended("electrical_load_usa_2016_2023")
-    counties = gpd.read_parquet(counties_path)
+    counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
+    electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
-    finalized_df = df.merge(counties, on="county", how="left")
+    combined_df = electrical_load.merge(counties, on="county", how="left")
+    combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+    combined_df.drop("samples", axis=1, inplace=True)
+
+    finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
+    finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0]) # isolate lon/lat columns
+    finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
+    finalized_df.drop("sub_sampled", axis=1, inplace=True)
+
     task_cols = [v for v in ELECTRIC_LOAD_VARIABLES if v in finalized_df.columns]
-
-    # out: list[CoordBenchmark] = []
-    # for col in ELECTRIC_LOAD_VARIABLES:
-    #     out.append(
-    #         CoordBenchmark(
-    #             name=f"usa_electric_usage-{col}",
-    #             lat=finalized_df["lat"].to_numpy(np.float64),
-    #             lon=finalized_df["lon"].to_numpy(np.float64),
-    #             tasks={col: finalized_df[col].to_numpy(np.float64)},
-    #         )
-    #     )
-
-    # return out
-    from IPython import embed; embed()
 
     ds = CoordBenchmark(
         name="usa_electric_usage",
