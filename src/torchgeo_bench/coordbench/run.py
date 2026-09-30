@@ -4,43 +4,22 @@ Driven by a :class:`CoordConfig`: instantiate a coordinate encoder from its
 model preset, embed each benchmark's points once, then probe
 with KNN and/or a ridge linear head under random and/or spatial-block
 cross-validation. One CSV row per (benchmark, task, method, split) is appended
-to the resolved output path via the shared atomic writer, with resume support.
+to ``output.file`` via the shared atomic writer, with resume support.
 """
 
 import logging
 import os
-<<<<<<< HEAD
-<<<<<<< HEAD
-from collections.abc import Iterator, Sequence
-=======
 import time
 from collections.abc import Sequence
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
-import time
-from collections.abc import Sequence
->>>>>>> a56e307 (fixed run after merge)
 from dataclasses import dataclass
 from typing import Any
-import time
 
 import numpy as np
 import pandas as pd
-<<<<<<< HEAD
-<<<<<<< HEAD
-import torch
-from tqdm.auto import tqdm
-=======
-from omegaconf import DictConfig, OmegaConf
-from rich.progress import Progress
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
 from rich.progress import Progress
 import torch
->>>>>>> a56e307 (fixed run after merge)
 
 from torchgeo_bench.config.presets import ModelPreset, build_model
-from torchgeo_bench.config.schema import resolve_output_path
 from torchgeo_bench.coordbench.config import (
     CoordConfig,
     CoordEvaluationConfig,
@@ -54,18 +33,9 @@ from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
     linear_probe_score
 )
-<<<<<<< HEAD
-<<<<<<< HEAD
-from torchgeo_bench.devices import resolve_device
-from torchgeo_bench.results import append_rows_atomic
-=======
-from torchgeo_bench.coordbench.splits import spatial_fold_ids
->>>>>>> 645e398 (fixed era5 load)
-=======
 from torchgeo_bench.coordbench.splits import spatial_fold_ids
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.results import append_rows_atomic
->>>>>>> a56e307 (fixed run after merge)
 
 logger = logging.getLogger(__name__)
 
@@ -196,12 +166,6 @@ def _evaluation_split(
     return None, None, "random"
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-def run_coordbench(cfg: CoordConfig) -> None:
-=======
-=======
->>>>>>> a56e307 (fixed run after merge)
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     methods: Sequence[str],
@@ -221,12 +185,6 @@ def _expand_temporal(
     return expanded
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-def run_coordbench(cfg: DictConfig) -> None:
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
-=======
 def _expand_spatial(
         benchmarks: Sequence[tuple[CoordBenchmark, np.ndarray]],
         methods: Sequence[str],
@@ -242,9 +200,7 @@ def _expand_spatial(
     return expanded
 
 
->>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
 def run_coordbench(cfg: CoordConfig) -> None:
->>>>>>> a56e307 (fixed run after merge)
     """Run the CoordBench location-encoder benchmark for the configured model."""
     preset = resolve_coord_preset(cfg)
     device = str(resolve_device(cfg.runtime.device))
@@ -253,10 +209,6 @@ def run_coordbench(cfg: CoordConfig) -> None:
         cfg = cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"device": device})})
     splits = _resolve_splits(cfg.evaluation.split)
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> a56e307 (fixed run after merge)
     coord = cfg.evaluation
     seed = cfg.runtime.seed
     folds = coord.folds
@@ -264,40 +216,12 @@ def run_coordbench(cfg: CoordConfig) -> None:
     knn_k = coord.knn_k
     knn_device = coord.knn_device
     methods = coord.methods
-<<<<<<< HEAD
     temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
     aggregate_embeddings = coord.temporally_aggregate_embeddings
     from_polygon = coord.from_polygon
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
     model_target = preset.target
-=======
-    coord = cfg.coord
-    device = str(cfg.device)
-    seed = int(cfg.seed)
-    folds = int(coord.folds)
-    cell_deg = float(coord.cell_deg)
-    knn_k = int(coord.knn_k)
-    knn_device = str(coord.get("knn_device") or "cpu")
-    methods = list(coord.methods)
-    splits = _resolve_splits(str(coord.split))
-    temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
-    aggregate_embeddings = bool(coord.aggregate_embeddings)
-<<<<<<< HEAD
-    aggregate_embeddings_year = int(coord.aggregate_embeddings_year)
-    aggregate_embeddings_freq = str(coord.aggregate_embeddings_freq)
-    aggregate_embeddings_summer = bool(coord.aggregate_embeddings_summer)
->>>>>>> 511ea8b (added embedding aggregation)
-=======
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
-    temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
-    aggregate_embeddings = coord.temporally_aggregate_embeddings
-    from_polygon = coord.from_polygon
-    spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
-    model_name = preset.name
-    model_target = preset.target
->>>>>>> a56e307 (fixed run after merge)
 
     output_path = cfg.output.file
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -310,22 +234,10 @@ def run_coordbench(cfg: CoordConfig) -> None:
         logger.info("Resume mode: %d existing coord results in %s", len(completed), output_path)
 
     t0 = time.perf_counter()
-<<<<<<< HEAD
-<<<<<<< HEAD
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
     benchmarks = load_benchmarks(names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
-<<<<<<< HEAD
-=======
-    benchmarks = load_benchmarks(coord.names)
-=======
-    names = "all" if cfg.datasets == ["all"] else cfg.datasets
-    benchmarks = load_benchmarks(names)
->>>>>>> a56e307 (fixed run after merge)
-    logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
-
->>>>>>> 88edec7 (reorganized temporal aggregation)
     t0 = time.perf_counter()
     if temporal_aggregation_methods:
         all_benchmarks = _expand_temporal(
@@ -335,10 +247,6 @@ def run_coordbench(cfg: CoordConfig) -> None:
         )
     else:
         all_benchmarks = [(b, None) for b in benchmarks]
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
 
     t1 = time.perf_counter()
 
@@ -350,44 +258,19 @@ def run_coordbench(cfg: CoordConfig) -> None:
         )
     t2 = time.perf_counter()
 
-<<<<<<< HEAD
     logger.info(
         "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
         len(all_benchmarks),
         t1 - t0,
         t2 - t1,
-=======
-=======
->>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
-    logger.info(
-        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
-        len(all_benchmarks),
-<<<<<<< HEAD
-        time.perf_counter() - t0,
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
-        t1 - t0,
-        t2 - t1,
->>>>>>> 4139d3d (Initial pass at adding polygon based files to coordbench; needs testing)
     )
 
     if bool(coord.skip_no_timestamp):
         skipped = [b.name for b, emb in all_benchmarks if b.posix_timestamp is None and emb is None]
-<<<<<<< HEAD
-=======
-    if bool(coord.get("skip_no_timestamp", False)) and not aggregate_embeddings:
-        skipped = [b.name for b in benchmarks if b.posix_timestamp is None]
->>>>>>> 511ea8b (added embedding aggregation)
-=======
->>>>>>> 88edec7 (reorganized temporal aggregation)
         if skipped:
             logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
         all_benchmarks = [(b, emb) for b, emb in all_benchmarks if b.posix_timestamp is not None or emb is not None]
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 88edec7 (reorganized temporal aggregation)
     with Progress() as progress:
         task_id = progress.add_task("CoordBench", total=len(all_benchmarks))
         for bench, emb in all_benchmarks:
@@ -406,15 +289,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 device=device,
                 model_name=model_name,
                 model_target=model_target,
-<<<<<<< HEAD
-<<<<<<< HEAD
                 completed=completed if cfg.output.resume else None,
-=======
-                completed=completed if cfg.resume else None,
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
-                completed=completed if cfg.output.resume else None,
->>>>>>> a56e307 (fixed run after merge)
                 precomputed_features=emb,
             )
             if rows:
@@ -428,36 +303,6 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 len(rows),
             )
             progress.advance(task_id)
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-    for bench in track(benchmarks, description="CoordBench"):
-        rows = _evaluate_benchmark(
-            bench,
-            encoder,
-            methods=methods,
-            splits=splits,
-            folds=folds,
-            cell_deg=cell_deg,
-            knn_k=knn_k,
-            knn_device=knn_device,
-            seed=seed,
-            device=device,
-            model_name=model_name,
-            model_target=model_target,
-            completed=completed if cfg.resume else None,
-            aggregate_embeddings=aggregate_embeddings,
-            aggregate_embeddings_year=aggregate_embeddings_year,
-            aggregate_embeddings_freq=aggregate_embeddings_freq,
-            aggregate_embeddings_summer=aggregate_embeddings_summer,
-        )
-        if rows:
-            append_rows_atomic(output_path, rows)
->>>>>>> 511ea8b (added embedding aggregation)
-=======
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
->>>>>>> a56e307 (fixed run after merge)
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
 
@@ -474,15 +319,6 @@ def test_sample_count(labels: np.ndarray, task_type: str, test_mask: np.ndarray 
 def _evaluate_benchmark(
     bench: CoordBenchmark,
     encoder: LocationEncoder,
-<<<<<<< HEAD
-<<<<<<< HEAD
-    cfg: CoordConfig,
-    preset: ModelPreset,
-    completed: set[tuple[str, ...]],
-) -> Iterator[dict[str, Any]]:
-=======
-=======
->>>>>>> a56e307 (fixed run after merge)
     *,
     methods: Sequence[str],
     splits: Sequence[str],
@@ -495,19 +331,6 @@ def _evaluate_benchmark(
     model_name: str,
     model_target: str,
     completed: set[tuple[str, ...]] | None,
-<<<<<<< HEAD
-    aggregate_embeddings: bool,
-    aggregate_embeddings_year: int,
-    aggregate_embeddings_freq: str,
-    aggregate_embeddings_summer: bool = False,
-) -> list[dict]:
->>>>>>> 511ea8b (added embedding aggregation)
-    """Embed one benchmark once and probe every (task, method, split) combination."""
-    coord = cfg.evaluation
-    seed = cfg.runtime.seed
-    folds = coord.folds
-    knn_k = coord.knn_k
-=======
     precomputed_features: np.ndarray | None = None,
 ) -> tuple[list[dict], float, float]:
     """Embed one benchmark once and probe every (task, method, split) combination.
@@ -515,21 +338,10 @@ def _evaluate_benchmark(
     Returns ``(rows, encode_seconds, probe_seconds)`` so the caller can log where
     time went for this benchmark.
     """
-<<<<<<< HEAD
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
->>>>>>> a56e307 (fixed run after merge)
     metric_name = "r2" if bench.task_type == "regression" else "accuracy"
     method_kinds = _methods_for(bench.task_type, methods, knn_k)
     if not method_kinds:
-<<<<<<< HEAD
-<<<<<<< HEAD
-        return
-=======
-=======
->>>>>>> a56e307 (fixed run after merge)
         return [], 0.0, 0.0
->>>>>>> 88edec7 (reorganized temporal aggregation)
 
     t0 = time.perf_counter()
     if precomputed_features is not None:
@@ -542,10 +354,6 @@ def _evaluate_benchmark(
 
     feature_dim = int(features.shape[1])
 
-<<<<<<< HEAD
-    for split in _resolve_splits(coord.split):
-        test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)
-=======
     probe_s = 0.0
     rows: list[dict] = []
     for split in splits:
@@ -560,27 +368,12 @@ def _evaluate_benchmark(
             )
         else:
             test_mask, fold_assign, split_label = None, None, "random"
->>>>>>> 88edec7 (reorganized temporal aggregation)
 
         for task, labels in bench.tasks.items():
             for method_label, kind in method_kinds:
-<<<<<<< HEAD
-                key = (bench.name, task, method_label, preset.name, split_label)
-                if key in completed:
-=======
                 key = (bench.name, task, method_label, model_name, split_label, embedding_aggregation)
                 if completed is not None and tuple(map(str, key)) in completed:
->>>>>>> 511ea8b (added embedding aggregation)
                     continue
-<<<<<<< HEAD
-                if features is None:
-                    features = encoder.encode(bench.lon, bench.lat, bench.year)
-                if kind == "knn":
-                    score, fold_scores = knn_probe_score(
-                        features,
-                        np.asarray(labels),
-                        folds=folds,
-=======
                 probe_t0 = time.perf_counter()
                 score, fold_scores = _score_one(
                     kind,
@@ -619,68 +412,13 @@ def _evaluate_benchmark(
                         feature_dim=feature_dim,
                         n_samples=len(labels),
                         n_test=n_test,
->>>>>>> 88edec7 (reorganized temporal aggregation)
                         seed=seed,
-<<<<<<< HEAD
-<<<<<<< HEAD
-                        k=knn_k,
-                        device=coord.knn_device,
-                        test_mask=test_mask,
-                        fold_assign=fold_assign,
-                    )
-                else:
-                    score, fold_scores = linear_probe_score(
-                        features,
-                        np.asarray(labels),
-                        bench.task_type,
-                        folds=folds,
-                        seed=seed,
-                        device=cfg.runtime.device,
-                        alphas=tuple(coord.ridge_alphas),
-                        test_mask=test_mask,
-                        fold_assign=fold_assign,
-                    )
-                std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
-                n_test = test_sample_count(labels, bench.task_type, test_mask)
-                yield CoordResult(
-                    dataset=bench.name,
-                    task=task,
-                    task_type=bench.task_type,
-                    method=method_label,
-                    split=split_label,
-                    metric_name=metric_name,
-                    metric_value=score,
-                    ci_lower=score - std,
-                    ci_upper=score + std,
-                    n_folds=1 if split_label == "official" else folds,
-                    cell_deg=coord.cell_deg,
-                    feature_dim=int(features.shape[1]),
-                    n_samples=len(labels),
-                    n_test=n_test,
-                    seed=seed,
-                    model_name=preset.name,
-                    model_target=preset.target,
-                ).to_row()
-        # An official test set is evaluated once, even when both CV modes were requested.
-=======
-=======
->>>>>>> a56e307 (fixed run after merge)
                         model_name=model_name,
                         model_target=model_target,
                         embedding_aggregation=embedding_aggregation,
                     ).to_row()
                 )
         # A benchmark with an official split is split-invariant; don't re-run per CV mode.
-<<<<<<< HEAD
->>>>>>> 511ea8b (added embedding aggregation)
-        if bench.test_mask is not None:
-            break
-<<<<<<< HEAD
-=======
-    return rows, encode_s, probe_s
->>>>>>> 88edec7 (reorganized temporal aggregation)
-=======
         if bench.test_mask is not None:
             break
     return rows, encode_s, probe_s
->>>>>>> a56e307 (fixed run after merge)
