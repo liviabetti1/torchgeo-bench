@@ -127,6 +127,21 @@ CHELSA_LABELS = (
     'we'
 )
 
+CHELSA_MONTHLY_LABELS = (
+    'hurs',
+    'tas',
+    'tasmin',
+    'tasmax',
+    'rsds',
+    'vpd',
+    'pr',
+    'pet',
+    'cmi',
+    # 'sfcWind', Flatlined values regardless of time; indices that appear to be broken
+    # 'spi12',
+    # 'spei12',
+)
+
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
     from huggingface_hub import hf_hub_download
@@ -297,22 +312,28 @@ def load_sustainbench() -> list[CoordBenchmark]:
         )
     return out
 
-def load_usa_electric_usage() -> list[CoordBenchmark]:
+def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     """Data.gov electrical demand profiles for each county in the contiguous USA.
-    Data is hourly and aggregated to a vector of daily mean/min/max/median.
+    Data is hourly and aggregated to a vector of daily mean/min/max/median.  Polygons are county-level.
     """
 
     counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
     electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
     combined_df = electrical_load.merge(counties, on="county", how="left")
-    combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
-    combined_df.drop("samples", axis=1, inplace=True)
+    if subsample_locations:
+        combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+        combined_df.drop("samples", axis=1, inplace=True)
 
-    finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
-    finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0]) # isolate lon/lat columns
-    finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
-    finalized_df.drop("sub_sampled", axis=1, inplace=True)
+        finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
+        finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0]) # isolate lon/lat columns
+        finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
+        finalized_df.drop("sub_sampled", axis=1, inplace=True)
+    else:
+        finalized_df = combined_df.explode("samples")  # results in a column of [lon, lat]
+        finalized_df['lon'] = finalized_df.samples.apply(lambda x: x[0])  # isolate lon/lat columns
+        finalized_df['lat'] = finalized_df.samples.apply(lambda x: x[1])
+        finalized_df.drop("samples", axis=1, inplace=True)
 
     task_cols = [v for v in ELECTRIC_LOAD_VARIABLES if v in finalized_df.columns]
 
@@ -326,6 +347,86 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
         temporal_resolution="daily",
     )
     return [ds]
+
+
+def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmark]:
+    counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
+    census_data = load_config_extended("usa_census_data_2010_2025") #TODO check that path is correct
+
+    combined_df = census_data.merge(counties, on="county", how="left")
+
+    if subsample_locations:
+        combined_df["sub_sampled"] = combined_df["samples"][
+            :100]  # hard-coded, but we can go up to 1k for num samples per county
+        combined_df.drop("samples", axis=1, inplace=True)
+
+        finalized_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
+        finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0])  # isolate lon/lat columns
+        finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
+        finalized_df.drop("sub_sampled", axis=1, inplace=True)
+    else:
+        finalized_df = combined_df.explode("samples")
+        finalized_df['lon'] = finalized_df.samples.apply(lambda x: x[0])
+        finalized_df['lat'] = finalized_df.samples.apply(lambda x: x[1])
+        finalized_df.drop("samples", axis=1, inplace=True)
+
+    ds = CoordBenchmark(
+        name="usa_census_data",
+        lat=finalized_df["lat"].to_numpy(np.float64),
+        lon=finalized_df["lon"].to_numpy(np.float64),
+        tasks={"population": finalized_df["population"].to_numpy(np.float64)},
+        # kept float64 for posix since it will lose second-level precision in float32
+        posix_timestamp=finalized_df["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=finalized_df["end_timestamp"].to_numpy(np.float64),
+        temporal_resolution="yearly",
+    )
+    return [ds]
+
+def load_global_population(subsample_locations: bool = True) -> list[CoordBenchmark]:
+    df = load_config_extended("global_population") #TODO check path
+
+    if subsample_locations:
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
+        df = df.merge(pool, on=["lat", "lon"])
+
+    result = CoordBenchmark(
+        name="global_population",
+        lat=df["lat"].to_numpy(np.float64),
+        lon=df["lon"].to_numpy(np.float64),
+        tasks={"population": df["population"].to_numpy(np.float64)},
+        posix_timestamp=df["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=df["end_timestamp"].to_numpy(np.float64),
+        temporal_resolution="yearly",
+    )
+
+    return [result]
+
+
+def load_chelsa_monthly(subsample_locations: bool = True) -> list[CoordBenchmark]:
+    """Monthly CHELSA 1km resolution climate data from 2011 to 2018"""
+    df = load_config_extended("chelsa_monthly") #TODO ensure path is correct
+
+    task_cols = [v for v in CHELSA_MONTHLY_LABELS if v in df.columns]
+    df = df[["lat", "lon", "start_timestamp", "end_timestamp", *task_cols]]
+    if subsample_locations:
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
+        df = df.merge(pool, on=["lat", "lon"])
+
+    #TODO: determine what level of standardization/normalization we want per variable
+    # initially leaning min/max norm for vpd and pr
+    # log for pet and cmi
+    # . . . but we might want to normalize everything (not just these) into [0, 1] range
+    daily = CoordBenchmark(
+        name="chelsa",
+        lat=df["lat"].to_numpy(np.float32),
+        lon=df["lon"].to_numpy(np.float32),
+        tasks={v: df[v].to_numpy(np.float32) for v in task_cols},
+        # kept float64 for posix since it will lose second-level precision in float32
+        posix_timestamp=df["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=df["end_timestamp"].to_numpy(np.float64),
+        temporal_resolution="monthly", #TODO is this an allowed resolution?
+    )
+    return [daily]
 
 
 def load_better_together() -> list[CoordBenchmark]:
