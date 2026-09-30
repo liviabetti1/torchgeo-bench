@@ -19,6 +19,7 @@ class CoordBenchmark:
         posix_timestamp: Optional per-point POSIX timestamp for time-conditioned encoders (Used to be year: Optional per-point year for year-conditioned encoders.)
         test_mask: Optional boolean held-out test mask (official split); when
             ``None`` the probe uses k-fold cross-validation.
+        spatial_aggregation_key: Optional for polygon-based datasets, where many lon/lat pairs relate to the same entity.  Column name for grouping lon/lat pairs in aggregation
     """
 
     name: str
@@ -30,3 +31,4 @@ class CoordBenchmark:
     year: int | None = None
     posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None
+    spatial_aggregation_key: tuple[str, np.ndarray] = None

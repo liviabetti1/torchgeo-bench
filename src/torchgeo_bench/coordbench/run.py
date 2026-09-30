@@ -26,6 +26,7 @@ from torchgeo_bench.coordbench.config import (
     resolve_coord_preset,
 )
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
+from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import TEMPORAL_AGGREGATION_METHODS, temporal_aggregation
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
@@ -184,6 +185,21 @@ def _expand_temporal(
     return expanded
 
 
+def _expand_spatial(
+        benchmarks: Sequence[tuple[CoordBenchmark, np.ndarray]],
+        methods: Sequence[str],
+        encoder: LocationEncoder | None = None,
+) -> list[tuple[CoordBenchmark, np.ndarray]]:
+    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+    for bench, embeddings in benchmarks:
+        applicable_methods = [m for m in methods if m in SPATIAL_AGGREGATION_METHODS]
+        for method in applicable_methods:
+            windowed, emb = spatial_aggregation(bench, method, embeddings, encoder=encoder)
+            windowed.name = f"{bench.name}-{method}"
+            expanded.append((windowed, emb))
+    return expanded
+
+
 def run_coordbench(cfg: CoordConfig) -> None:
     """Run the CoordBench location-encoder benchmark for the configured model."""
     preset = resolve_coord_preset(cfg)
@@ -201,7 +217,9 @@ def run_coordbench(cfg: CoordConfig) -> None:
     knn_device = coord.knn_device
     methods = coord.methods
     temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
-    aggregate_embeddings = coord.aggregate_embeddings
+    aggregate_embeddings = coord.temporally_aggregate_embeddings
+    from_polygon = coord.from_polygon
+    spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
     model_target = preset.target
 
@@ -229,10 +247,22 @@ def run_coordbench(cfg: CoordConfig) -> None:
         )
     else:
         all_benchmarks = [(b, None) for b in benchmarks]
+
+    t1 = time.perf_counter()
+
+    if from_polygon:
+        all_benchmarks = _expand_spatial(
+            all_benchmarks,
+            spatial_aggregation_methods,
+            encoder=encoder
+        )
+    t2 = time.perf_counter()
+
     logger.info(
-        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs)",
+        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
         len(all_benchmarks),
-        time.perf_counter() - t0,
+        t1 - t0,
+        t2 - t1,
     )
 
     if bool(coord.skip_no_timestamp):
