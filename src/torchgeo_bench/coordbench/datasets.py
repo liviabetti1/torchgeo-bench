@@ -19,33 +19,23 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
 from torchgeo_bench.coordbench.catalog import (
     CDC_PLACES_MEASURES,
     CHELSA_LABELS,
     DEEPMIND_EVAL_CONFIGS,
     ELECTRIC_LOAD_VARIABLES,
-    ERA5_ECMWF_LABELS,
     FAMILY_BENCHMARKS,
     SUSTAINBENCH_TASKS,
     USAVARS_LABELS,
 )
-=======
-from torchgeo_bench.coordbench.aggregation import (
-=======
-from torchgeo_bench.coordbench.dataset_aggregation import (
->>>>>>> 511ea8b (added embedding aggregation)
+
+from torchgeo_bench.coordbench.temporal_aggregation import (
     TEMPORAL_AGGREGATION_METHODS,
     load_temporal_aggregation_cache,
     save_temporal_aggregation_cache,
     temporal_aggregation_all,
 )
-=======
->>>>>>> 88edec7 (reorganized temporal aggregation)
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
->>>>>>> 645e398 (fixed era5 load)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +65,6 @@ PDFM_NON_TASK = frozenset(
     }
 )
 
-<<<<<<< HEAD
 # move into catalog
 SUSTAINBENCH_TASKS = {
     "asset": "asset_index",
@@ -102,8 +91,6 @@ CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = 
     "high_chol": "HIGHCHOL",
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 ERA5_ECMWF_LABELS = (
     'd2m', 
     't2m', 
@@ -125,7 +112,6 @@ ERA5_ECMWF_LABELS = (
     'tp', 
     'skt'
 )
-=======
 ELECTRIC_LOAD_VARIABLES = [
     "mean",
     "min",
@@ -133,7 +119,6 @@ ELECTRIC_LOAD_VARIABLES = [
     "median",
 ]
 
->>>>>>> e892e5f (add usa county electrical load data)
 
 CHELSA_LABELS = (
     'hurs',
@@ -148,10 +133,6 @@ CHELSA_LABELS = (
     'we'
 )
 
-=======
->>>>>>> a56e307 (fixed run after merge)
-=======
->>>>>>> c05710d (cleaned up optimized probe file (compute gram matrix outside))
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
     from huggingface_hub import hf_hub_download
@@ -653,7 +634,6 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
 }
 
 
-<<<<<<< HEAD
 # Benchmark names each family emits; lets a selection load only the needed family,
 # and lets callers enumerate the suite without a download.
 FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
@@ -687,8 +667,6 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "chelsa": ("chelsa",),
 }
 
-=======
->>>>>>> a56e307 (fixed run after merge)
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
 }
