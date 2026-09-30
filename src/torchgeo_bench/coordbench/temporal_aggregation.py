@@ -5,8 +5,6 @@ Labels/timestamps aggregate by mean (regression) or mode (classification).
 If an `encoder` is passed, embeddings are computed per-day and mean-pooled over the same windows.
 """
 
-import os
-
 import numpy as np
 import pandas as pd
 from rich.progress import track
