@@ -8,6 +8,8 @@ If an `encoder` is passed, embeddings are computed per-day and mean-pooled over 
 import numpy as np
 import pandas as pd
 from rich.progress import track
+from multiprocessing import Pool
+from functools import partial
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 from torchgeo_bench.coordbench.models import LocationEncoder
@@ -91,19 +93,31 @@ def _static_aggregation(
     )
     lon, lat = dataset.lon, dataset.lat
 
+    # nested for easy access to function-level lat/lon details
+    def encode_helper(timestamp: float):
+        return encoder.encode(lon, lat, np.full(len(lon), timestamp))
+
+    pool = Pool()
+
     if method == "concat_four_seasons":
-        embs = [
-            encoder.encode(lon, lat, np.full(len(lon), pd.Timestamp(f"{year}-{date}", tz="UTC").timestamp()))
-            for date in track(SEASON_REPRESENTATIVE_DATES.values(), description="concat_four_seasons")
-        ] # another option here is to get averaged over months...
+        dates = [pd.Timestamp(f"{year}-{date}", tz="UTC").timestamp() for date in
+                 track(SEASON_REPRESENTATIVE_DATES.values(), description="concat_four_seasons")]
+
+        embs = pool.map(encode_helper, dates)
         emb = np.concatenate(embs, axis=1)
+
     else:
         start, end = method_to_windows(method, year)[0]
         days = pd.date_range(start, end, freq="D")
-        emb = np.mean(
-            [encoder.encode(lon, lat, np.full(len(lon), d.timestamp())) for d in track(days, description=method)],
-            axis=0,
+        timestamps = [d.timestamp() for d in track(days, description=method)]
+
+        embs = pool.map(encode_helper, timestamps)
+        emb = np.mean(embs, axis=0,
         )
+
+    # needed to avoid locking issues for multithreading
+    pool.close()
+    pool.join()
 
     bench = CoordBenchmark(
         name=f"{dataset.name}-windowed",
@@ -136,12 +150,18 @@ def _nonstatic_aggregation(
         else {c: "mean" for c in task_cols}
     )
 
+    def encode_helper(lon: np.ndarray, lat: np.ndarray, timestamp: float):
+        encoder.encode(lon, lat, np.full(len(lon), timestamp))
+
+
     all_labels, all_embs, all_ts = [], [], []
     list_of_windows = method_to_windows(method, dataset.year)
     for start, end in track(list_of_windows, description="temporal_aggregation_by_windows"):
         g = df[df["timestamp"].between(start, end)].groupby(["lat", "lon"])
         labels = g.agg(label_agg).reset_index()
         all_labels.append(labels)
+
+        pool = Pool()
 
         if method == "concat_four_seasons":
             assert encoder is not None, (
@@ -152,26 +172,30 @@ def _nonstatic_aggregation(
                 # Climplicit's native no-month call already concatenates months 3/6/9/12.
                 all_embs.append(encoder.encode(lon_l, lat_l, None))
             else:
-                embs = [
-                    encoder.encode(
-                        lon_l,
-                        lat_l,
-                        np.full(len(labels), pd.Timestamp(f"{dataset.year}-{date}", tz="UTC").timestamp()),
-                    )
-                    for date in track(SEASON_REPRESENTATIVE_DATES.values(), description="concat_four_seasons")
-                ]
+
+                dates = [pd.Timestamp(f"{dataset.year}-{date}", tz="UTC").timestamp() for date in
+                         track(SEASON_REPRESENTATIVE_DATES.values(), description="concat_four_seasons")]
+
+                # generate a partial to avoid defining encoder helper function within a loop
+                func = partial(encode_helper, lon_l, lat_l)
+                embs = pool.map(func, dates)
                 all_embs.append(np.concatenate(embs, axis=1))
+
         elif encoder is not None:
             days = pd.date_range(start, end, freq="D")
-            all_embs.append(np.mean(
-                [
-                    encoder.encode(labels["lon"].to_numpy(), labels["lat"].to_numpy(), np.full(len(labels), d.timestamp()))
-                    for d in days
-                ],
-                axis=0,
-            ))
+            timestamps = [d.timestamp() for d in days] #Note: should this be in track(d, methods)
+
+            func = partial(encode_helper, labels["lon"], labels["lat"])
+            embs = pool.map(func, timestamps)
+            all_embs.append(np.mean(embs, axis=0))
+
         else:
             all_ts.append((g["timestamp"].mean().astype("int64")).to_numpy())
+
+        pool.close()
+        pool.join()
+
+
 
     labels = pd.concat(all_labels, ignore_index=True)
     emb = np.concatenate(all_embs) if encoder is not None else None

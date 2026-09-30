@@ -79,9 +79,12 @@ def spatial_aggregation(bench: CoordBenchmark,
 
         return row
 
+    pool = Pool() # dynamically assigns one process per available core; could update to pass in num cores as a config
 
-    with Pool() as P: # dynamically assigns one process per available core; could update to pass in num cores as a config
-        finalized_df = pd.DataFrame(P.map(_aggregate_helper, grouped_by)) #TODO: needs testing.  Could be a simple loop, but worth exploring for efficiency's sake
+    finalized_df = pd.DataFrame(pool.map(_aggregate_helper, grouped_by)) #TODO: needs testing.  Could be a simple loop, but worth exploring for efficiency's sake
+
+    pool.close()
+    pool.join()
 
     # need to grab single label per group for each task to ensure shape match
     grouped_tasks = {}
