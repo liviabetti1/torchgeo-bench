@@ -29,12 +29,6 @@ from torchgeo_bench.coordbench.catalog import (
     USAVARS_LABELS,
 )
 
-from torchgeo_bench.coordbench.temporal_aggregation import (
-    TEMPORAL_AGGREGATION_METHODS,
-    load_temporal_aggregation_cache,
-    save_temporal_aggregation_cache,
-    temporal_aggregation_all,
-)
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 
 logger = logging.getLogger(__name__)
