@@ -44,7 +44,7 @@ TEMPORAL_AGGREGATION_METHODS = {
 encoder_for_parallel = None
 
 def encode_helper(lon: np.ndarray, lat: np.ndarray, timestamp: float):
-    encoder_for_parallel.encode(lon, lat, np.full(len(lon), timestamp))
+    return encoder_for_parallel.encode(lon, lat, np.full(len(lon), timestamp))
 
 
 def _check_temporal_resolution(dataset: CoordBenchmark) -> str:
