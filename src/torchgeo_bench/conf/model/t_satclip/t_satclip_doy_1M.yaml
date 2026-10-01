@@ -2,6 +2,6 @@ name: t_satclip_doy_1M
 target: torchgeo_bench.coordbench.models.TemporalSatCLIPEncoder
 track: coord
 kwargs:
-  repo_path: /home/libe2152/projects/temporal-satclip
-  ckpt_path: /projects/bgtj/t_satclip/ckpts/t_satclip-ckpts/tsatclip-doy-1M.ckpt # EDIT THIS TO LOCAL T-SATCLIP CKPT PATH
+  repo_path: /u/projects/temporal-satclip/ # EDIT THIS TO LOCAL SATCLIP REPO PATH
+  ckpt_path: /projects/bgtj/t_satclip/test/ckpts/tsatclip-doy-1M.ckpt # EDIT THIS TO CKPT PATH
   model_name: tsatclip/doy

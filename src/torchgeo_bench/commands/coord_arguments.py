@@ -40,10 +40,19 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
         "--temporal-aggregation-methods", nargs="+", default=argparse.SUPPRESS
     )
     parser.add_argument(
-        "--aggregate-embeddings",
+        "--temporally-aggregate-embeddings",
         action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--from-polygon",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--spatial-aggregation-methods", nargs="+", default=argparse.SUPPRESS
+    )
+
     parser.add_argument("--device", default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     add_output_arguments(parser)
