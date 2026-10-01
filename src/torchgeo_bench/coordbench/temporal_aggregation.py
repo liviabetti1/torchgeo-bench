@@ -105,7 +105,7 @@ def _static_aggregation(
     def encode_helper(timestamp: float):
         return encoder.encode(lon, lat, np.full(len(lon), timestamp))
 
-    pool = Pool()
+    pool = Pool(processes=2)
 
     if method == "concat_four_seasons":
         dates = [pd.Timestamp(f"{year}-{date}", tz="UTC").timestamp() for date in
@@ -170,7 +170,7 @@ def _nonstatic_aggregation(
         labels = g.agg(label_agg).reset_index()
         all_labels.append(labels)
 
-        pool = Pool()
+        pool = Pool(processes=2)
 
         if method == "concat_four_seasons":
             assert encoder is not None, (
