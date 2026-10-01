@@ -41,6 +41,11 @@ TEMPORAL_AGGREGATION_METHODS = {
              "concat_four_seasons"],
 }
 
+encoder_for_parallel = None
+
+def encode_helper(lon: np.ndarray, lat: np.ndarray, timestamp: float):
+    encoder_for_parallel.encode(lon, lat, np.full(len(lon), timestamp))
+
 
 def _check_temporal_resolution(dataset: CoordBenchmark) -> str:
     """Infer the temporal resolution of a dataset from its timestamps."""
@@ -91,6 +96,9 @@ def _static_aggregation(
         f"{method!r} requires an encoder to synthesize embeddings for {dataset.name!r} "
         "(it has no timestamp of its own)."
     )
+    global encoder_for_parallel
+    encoder_for_parallel = encoder
+
     lon, lat = dataset.lon, dataset.lat
 
     # nested for easy access to function-level lat/lon details
@@ -103,7 +111,8 @@ def _static_aggregation(
         dates = [pd.Timestamp(f"{year}-{date}", tz="UTC").timestamp() for date in
                  track(SEASON_REPRESENTATIVE_DATES.values(), description="concat_four_seasons")]
 
-        embs = pool.map(encode_helper, dates)
+        func = partial(encode_helper, lon, lat)
+        embs = pool.map(func, dates)
         emb = np.concatenate(embs, axis=1)
 
     else:
@@ -111,7 +120,8 @@ def _static_aggregation(
         days = pd.date_range(start, end, freq="D")
         timestamps = [d.timestamp() for d in track(days, description=method)]
 
-        embs = pool.map(encode_helper, timestamps)
+        func = partial(encode_helper, lon, lat)
+        embs = pool.map(func, timestamps)
         emb = np.mean(embs, axis=0,
         )
 
@@ -136,6 +146,9 @@ def _nonstatic_aggregation(
 ) -> tuple[CoordBenchmark, np.ndarray | None]:
     """Aggregate a dataset with a per-point (daily) timestamp into windows.
     """
+    global encoder_for_parallel
+    encoder_for_parallel = encoder
+
     task_cols = list(dataset.tasks)
     df = pd.DataFrame({
         "lat": dataset.lat,
@@ -149,10 +162,6 @@ def _nonstatic_aggregation(
         if dataset.task_type == "classification"
         else {c: "mean" for c in task_cols}
     )
-
-    def encode_helper(lon: np.ndarray, lat: np.ndarray, timestamp: float):
-        encoder.encode(lon, lat, np.full(len(lon), timestamp))
-
 
     all_labels, all_embs, all_ts = [], [], []
     list_of_windows = method_to_windows(method, dataset.year)
