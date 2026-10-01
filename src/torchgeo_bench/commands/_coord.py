@@ -52,7 +52,7 @@ def run(args: argparse.Namespace) -> None:
         return
     from torchgeo_bench.coordbench.run import run_coordbench
 
-    setup_logging(verbose=True)
+    #setup_logging(verbose=True)
     run_coordbench(config)
 
 
