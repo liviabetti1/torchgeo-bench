@@ -310,8 +310,8 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     combined_df.drop("samples", axis=1, inplace=True)
 
     finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
-    finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0]) # isolate lon/lat columns
-    finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
+    finalized_df['lon'] = finalized_df["sub_sampled"].str[0].astype("float32") # isolate lon/lat columns
+    finalized_df['lat'] = finalized_df["sub_sampled"].str[1].astype("float32")
     finalized_df.drop("sub_sampled", axis=1, inplace=True)
 
     task_cols = [v for v in ELECTRIC_LOAD_VARIABLES if v in finalized_df.columns]
