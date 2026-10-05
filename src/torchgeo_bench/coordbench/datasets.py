@@ -108,9 +108,9 @@ ERA5_ECMWF_LABELS = (
 )
 ELECTRIC_LOAD_VARIABLES = [
     "mean",
-    "min",
-    "max",
-    "median",
+    # "min",
+    # "max",
+    # "median",
 ]
 
 
