@@ -305,8 +305,9 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
     electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
+    #TODO update temporal aggregation to go beyond just a year
     combined_df = electrical_load.merge(counties, on="county", how="left")
-    combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+    combined_df["sub_sampled"] = combined_df["samples"][:10] #1k samples means 936.6M datapoints total . . . reduce down to 936k
     combined_df.drop("samples", axis=1, inplace=True)
 
     finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
