@@ -170,7 +170,6 @@ def _nonstatic_aggregation(
         labels = g.agg(label_agg).reset_index()
         all_labels.append(labels)
 
-        pool = Pool(processes=2)
 
         if method == "concat_four_seasons":
             assert encoder is not None, (
@@ -187,22 +186,21 @@ def _nonstatic_aggregation(
 
                 # generate a partial to avoid defining encoder helper function within a loop
                 func = partial(encode_helper, lon_l, lat_l)
-                embs = pool.map(func, dates)
-                all_embs.append(np.concatenate(embs, axis=1))
+                with Pool() as pool:
+                    embs = pool.map(func, dates)
+                    all_embs.append(np.concatenate(embs, axis=1))
 
         elif encoder is not None:
             days = pd.date_range(start, end, freq="D")
             timestamps = [d.timestamp() for d in days] #Note: should this be in track(d, methods)
 
             func = partial(encode_helper, labels["lon"], labels["lat"])
-            embs = pool.map(func, timestamps)
-            all_embs.append(np.mean(embs, axis=0))
+            with Pool() as pool:
+                embs = pool.map(func, timestamps)
+                all_embs.append(np.mean(embs, axis=0))
 
         else:
             all_ts.append((g["timestamp"].mean().astype("int64")).to_numpy())
-
-        pool.close()
-        pool.join()
 
 
 
