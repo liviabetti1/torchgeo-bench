@@ -302,7 +302,7 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
 
-    counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
+    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
     electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
     combined_df = electrical_load.merge(counties, on="county", how="left")
