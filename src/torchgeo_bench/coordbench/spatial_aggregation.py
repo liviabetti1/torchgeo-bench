@@ -58,7 +58,7 @@ def spatial_aggregation(bench: CoordBenchmark,
         df["emb"] = embeddings
     else:
         assert encoder is not None, "Need encoder if embeddings are not pre-computed"
-        embeddings = encoder.encode(df["lon"], df["lat"], df["timestamp"])
+        embeddings = encoder.encode(df["lon"], df["lat"], df["posix_timestamp"])
         df["emb"] = embeddings
 
     if method == "mean":
