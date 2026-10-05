@@ -324,6 +324,7 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
         # kept float64 for posix since it will lose second-level precision in float32
         posix_timestamp=finalized_df["timestamp"].to_numpy(np.float64),
         temporal_resolution="daily",
+        spatial_aggregation_key=("county", finalized_df["county"])
     )
     return [ds]
 
