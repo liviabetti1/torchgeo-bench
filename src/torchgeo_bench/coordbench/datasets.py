@@ -322,7 +322,7 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
         lon=finalized_df["lon"].to_numpy(np.float64),
         tasks={v: finalized_df[v].to_numpy(np.float64) for v in task_cols},
         # kept float64 for posix since it will lose second-level precision in float32
-        posix_timestamp=finalized_df["posix_timestamp"].to_numpy(np.float64),
+        posix_timestamp=finalized_df["timestamp"].to_numpy(np.float64),
         temporal_resolution="daily",
     )
     return [ds]
