@@ -317,22 +317,23 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.  Polygons are county-level.
     """
 
-    counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
+    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
     electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
+    #TODO update temporal aggregation to go beyond just a year
     combined_df = electrical_load.merge(counties, on="county", how="left")
     if subsample_locations:
         combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
         combined_df.drop("samples", axis=1, inplace=True)
 
         finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
-        finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0]) # isolate lon/lat columns
-        finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
+        finalized_df['lon'] = finalized_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
+        finalized_df['lat'] = finalized_df["sub_sampled"].str[1].astype("float32")
         finalized_df.drop("sub_sampled", axis=1, inplace=True)
     else:
         finalized_df = combined_df.explode("samples")  # results in a column of [lon, lat]
-        finalized_df['lon'] = finalized_df.samples.apply(lambda x: x[0])  # isolate lon/lat columns
-        finalized_df['lat'] = finalized_df.samples.apply(lambda x: x[1])
+        finalized_df['lon'] = finalized_df["samples"].str[0].astype("float32")  # isolate lon/lat columns
+        finalized_df['lat'] = finalized_df["samples"].str[1].astype("float32")
         finalized_df.drop("samples", axis=1, inplace=True)
 
     task_cols = [v for v in ELECTRIC_LOAD_VARIABLES if v in finalized_df.columns]
@@ -343,8 +344,9 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
         lon=finalized_df["lon"].to_numpy(np.float64),
         tasks={v: finalized_df[v].to_numpy(np.float64) for v in task_cols},
         # kept float64 for posix since it will lose second-level precision in float32
-        posix_timestamp=finalized_df["posix_timestamp"].to_numpy(np.float64),
+        posix_timestamp=finalized_df["timestamp"].to_numpy(np.float64),
         temporal_resolution="daily",
+        spatial_aggregation_key=("county", finalized_df["county"])
     )
     return [ds]
 

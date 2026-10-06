@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from multiprocessing import Pool
 
 from torchgeo_bench.coordbench import CoordBenchmark, LocationEncoder
 
@@ -11,6 +10,31 @@ SPATIAL_AGGREGATION_METHODS = [
     "covariance",
     "statistical"
 ]
+
+method_parallelized = None
+
+def median_and_iqr(series):
+    median = np.median(series, axis=0)
+    q1 = np.percentile(series, 25, axis=0)
+    q3 = np.percentile(series, 75, axis=0)
+    iqr = q3 - q1
+    aggregated = np.concatenate([median, iqr],
+                                axis=0)
+    return aggregated
+
+def covariance(series):
+    return np.cov(series, rowvar=True)
+
+def statistical(series):
+    min = np.min(series, axis=0)
+    max = np.max(series, axis=0)
+    mean = np.mean(series, axis=0)
+    std = np.std(series, axis=0)
+    return np.concatenate([min, max, mean, std],
+                                axis=0)
+
+def mean(series):
+    return np.mean(series, axis=0)
 
 
 def spatial_aggregation(bench: CoordBenchmark,
@@ -34,62 +58,25 @@ def spatial_aggregation(bench: CoordBenchmark,
         df["emb"] = embeddings
     else:
         assert encoder is not None, "Need encoder if embeddings are not pre-computed"
-        embeddings = encoder.encode(df["lon"], df["lat"], df["timestamp"])
+        embeddings = encoder.encode(df["lon"], df["lat"], df["posix_timestamp"])
         df["emb"] = embeddings
 
-    grouped_by = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"])
+    if method == "mean":
+        emb_agg_func = mean
+    elif method == "median_and_iqr":
+        emb_agg_func = median_and_iqr
+    elif method == "covariance":
+        emb_agg_func = covariance
+    elif method == "statistical":
+        emb_agg_func = statistical
+    else:
+        raise NotImplementedError
 
-    # for parallel processing; needs to be nested for efficient access to global method
-    def _aggregate_helper(spatial_key, timestamp: float, group_df: pd.DataFrame):
-        lon = group_df["lon"].mean() # generate rough centroid for polygon if visual becomes necessary
-        lat = group_df["lat"].mean()
-
-        emb = group_df["emb"]
-        if method == "mean":
-            aggregated = np.mean(emb, axis=0)
-
-        elif method == "median_and_iqr":
-            median = np.median(emb, axis=0)
-            q1 = np.percentile(emb, 25, axis=0)
-            q3 = np.percentile(emb, 75, axis=0)
-            iqr = q3 - q1
-            aggregated = np.concatenate([median, iqr],
-                                        axis=0)
-
-        elif method == "covariance":
-            aggregated = np.cov(emb, rowvar=True)
-
-        elif method == "statistical":
-            min = np.min(emb, axis=0)
-            max = np.max(emb, axis=0)
-            mean = np.mean(emb, axis=0)
-            std = np.std(emb, axis=0)
-            aggregated = np.concatenate([min, max, mean, std],
-                                        axis=0)  # TODO: test how shape is handled downstream.  SHOULD be fine, but tbd, as this and median_and_iqr both change the feature shape
-        else:
-            raise NotImplementedError
-
-        row = {"lon": lon, "lat": lat, "posix_timestamp": timestamp, bench.spatial_aggregation_key[0]: spatial_key, "emb": aggregated}
-
-        # each of these will have the same value across every row of the group
-        for task_name, _ in bench.tasks:
-            row[task_name] = group_df[task_name].iloc[0]
-
-        row['test_mask'] = group_df["test_mask"].iloc[0]
-
-        return row
-
-    pool = Pool() # dynamically assigns one process per available core; could update to pass in num cores as a config
-
-    finalized_df = pd.DataFrame(pool.map(_aggregate_helper, grouped_by)) #TODO: needs testing.  Could be a simple loop, but worth exploring for efficiency's sake
-
-    pool.close()
-    pool.join()
-
-    # need to grab single label per group for each task to ensure shape match
-    grouped_tasks = {}
+    agg_dictionary = {"lon": "mean", "lat": "mean", "posix_timestamp": "first", "emb": emb_agg_func}
     for task, _ in bench.tasks:
-        grouped_tasks[task] = finalized_df[task]
+        agg_dictionary[task[0]] = "first"
+
+    finalized_df = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"]).agg(agg_dictionary)
 
     updated_benchmark = CoordBenchmark(
         name=f"{bench.name}-spatial-{method}",
