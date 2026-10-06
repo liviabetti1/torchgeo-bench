@@ -320,10 +320,10 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
     electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
-    #TODO update temporal aggregation to go beyond just a year
+    #TODO update temporal aggregation to go beyond just a year?
     combined_df = electrical_load.merge(counties, on="county", how="left")
     if subsample_locations:
-        combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+        combined_df["sub_sampled"] = combined_df["samples"][:10] #hard-coded, but we can go up to 1k for num samples per county
         combined_df.drop("samples", axis=1, inplace=True)
 
         finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
@@ -649,7 +649,7 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     )
     return [daily]
 
-def load_chelsa(subsample_locations: bool = True) -> list[CoordBenchmark]:
+def load_chelsa_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
     df = load_config_extended("chelsa_2017")
     task_cols = [v for v in CHELSA_LABELS if v in df.columns]
@@ -726,8 +726,11 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "soilgrids": load_soilgrids,
     "deepmind": load_deepmind,
     "era5_ecmwf": load_era5_ecmwf,
-    "chelsa": load_chelsa,
+    "chelsa_daily": load_chelsa_daily,
     "usa_electric_usage": load_usa_electric_usage,
+    "chelsa_monthly": load_chelsa_monthly,
+    "usa_census": load_usa_census_data,
+    "global_population": load_global_population,
 }
 
 
