@@ -2,5 +2,5 @@ name: gtloc
 target: torchgeo_bench.coordbench.models.GTLocEncoder
 track: coord
 kwargs:
-  ckpt_path: /home/libe2152/projects/gtloc/ckpts/gtloc.pt # EDIT THIS TO LOCAL GTLOC PATH
+  ckpt_path: /projects/bgtj/t_satclip/ckpts/gtloc/gtloc.pt
   dim: 1024

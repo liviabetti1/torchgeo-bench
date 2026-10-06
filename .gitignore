@@ -78,8 +78,11 @@ env/
 .DS_Store
 
 # Jupyter
-.ipynb_checkpoints
+.ipynb_checkpoints/
 *.ipynb
+
+# Keep notebooks under any debugging directory
+!**/debugging/*.ipynb
 
 # Testing
 .pytest_cache/
@@ -155,4 +158,5 @@ Desktop.ini
 # tracked benchmark results
 !coordbench-results.csv
 !results/
-!*.lock
+*.lock
+!uv.lock
