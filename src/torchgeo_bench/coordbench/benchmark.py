@@ -31,4 +31,5 @@ class CoordBenchmark:
     year: int | None = None
     posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None
-    spatial_aggregation_key: tuple[str, np.ndarray] = None
+    spatial_aggregation_key: tuple[str, np.ndarray] | None = None
+

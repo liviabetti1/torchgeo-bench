@@ -29,15 +29,6 @@ coord:
   cell_deg: 10.0           # spatial-block grid-cell size in degrees
   knn_k: 5
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
-  skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)
-  temporal_aggregation_methods: []  # replace each benchmark with one variant per applicable method (see
-                                     # TEMPORAL_AGGREGATION_METHODS in temporal_aggregation.py):
-                                     #   daily-resolution benchmarks (e.g. era5_ecmwf): 1_week, 2_week, 4_week,
-                                     #     13_week, 52_week (windowed label mean/mode + timestamp)
-                                     #   no-timestamp benchmarks (e.g. elevation): annual, summer,
-                                     #     default_date_winter, default_date_summer, concat_four_seasons
-                                     #     (labels unchanged; only the embedding varies by synthetic date)
-  aggregate_embeddings: true
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers

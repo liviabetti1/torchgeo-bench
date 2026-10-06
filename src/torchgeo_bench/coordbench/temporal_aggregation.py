@@ -30,8 +30,7 @@ TEMPORAL_AGGREGATION_METHODS = {
               "2_week",
               "4_week",
               "13_week",
-              "annual",
-              "concat_four_seasons"],
+              "annual"],
     "none": ["annual",
              "summer",
              "default_date_winter",
@@ -57,8 +56,7 @@ def _check_temporal_resolution(dataset: CoordBenchmark) -> str:
 def method_to_windows(method: str, year: int = 2021) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """Split a calendar year into consecutive (start, end) windows of the method's length (e.g. "2_week").
 
-    "annual" returns a single window spanning the full year; "summer" returns a single window
-    spanning June-August (JJA).
+    "annual" returns a single window spanning the full year; "summer" returns a single window spanning June-August.
     """
     if method in ("annual", "concat_four_seasons"):
         return [(pd.Timestamp(f"{year}-01-01", tz="UTC"), pd.Timestamp(f"{year}-12-31", tz="UTC"))]

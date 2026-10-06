@@ -302,11 +302,12 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
 
-    counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
+    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
     electrical_load = load_config_extended("electrical_load_usa_2016_2023")
 
     combined_df = electrical_load.merge(counties, on="county", how="left")
-    combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+    #combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+    combined_df["sub_sampled"] = combined_df["samples"].apply(lambda s: s[:100])
     combined_df.drop("samples", axis=1, inplace=True)
 
     finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
@@ -322,8 +323,40 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
         lon=finalized_df["lon"].to_numpy(np.float64),
         tasks={v: finalized_df[v].to_numpy(np.float64) for v in task_cols},
         # kept float64 for posix since it will lose second-level precision in float32
+        posix_timestamp=finalized_df["timestamp"].to_numpy(np.float64),
+        temporal_resolution="daily",
+        spatial_aggregation_key=("county", finalized_df["county"].to_numpy()),
+    )
+    return [ds]
+
+def load_usa_population_yearly() -> list[CoordBenchmark]:
+    """ Coninual USA county-level yearly census data 2010-2025
+    """
+
+    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
+    population_data = load_config_extended("usa_population_yearly_2010_2025")
+
+    combined_df = population_data.merge(counties, on="county", how="left")
+    #combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+    combined_df["sub_sampled"] = combined_df["samples"].apply(lambda s: s[:100])
+    combined_df.drop("samples", axis=1, inplace=True)
+
+    finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
+    finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0]) # isolate lon/lat columns
+    finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
+    finalized_df.drop("sub_sampled", axis=1, inplace=True)
+
+    from IPython import embed; embed(header="Figure out what the task column is (population)?")
+
+    ds = CoordBenchmark(
+        name="usa_population",
+        lat=finalized_df["lat"].to_numpy(np.float64),
+        lon=finalized_df["lon"].to_numpy(np.float64),
+        tasks={v: finalized_df[v].to_numpy(np.float64) for v in task_cols},
+        # kept float64 for posix since it will lose second-level precision in float32
         posix_timestamp=finalized_df["posix_timestamp"].to_numpy(np.float64),
         temporal_resolution="daily",
+        spatial_aggregation_key=("county", finalized_df["county"].to_numpy()),
     )
     return [ds]
 
@@ -625,40 +658,6 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "era5_ecmwf": load_era5_ecmwf,
     "chelsa": load_chelsa,
     "usa_electric_usage": load_usa_electric_usage,
-}
-
-
-# Benchmark names each family emits; lets a selection load only the needed family,
-# and lets callers enumerate the suite without a download.
-FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
-    "pdfm": ("pdfm-conus27",),
-    "air_temp": ("satclip-air-temp",),
-    "california_housing": ("california-housing",),
-    "satclip": (
-        "satclip-country",
-        "satclip-ecoregion",
-        "satclip-biome",
-        "satclip-population",
-        "satclip-elevation",
-    ),
-    "sustainbench": tuple(f"sustainbench-{k}" for k in SUSTAINBENCH_TASKS),
-    "better_together": (
-        "bt-cropharvest",
-        "bt-biomass",
-        "bt-landcover",
-        "bt-bioclim",
-        "bt-population",
-        "bt-distroad",
-    ),
-    "cdc_places": tuple(f"places-{k}" for k in CDC_PLACES_MEASURES),
-    "usavars": tuple(f"mosaiks-{label}" for label in USAVARS_LABELS),
-    "country": ("country",),
-    "ecoregions": ("ecoregions",),
-    "worldclim": ("worldclim-bio1", "worldclim-bio12"),
-    "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
-    "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
-    "era5_ecmwf": ("era5_ecmwf",),
-    "chelsa": ("chelsa",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {

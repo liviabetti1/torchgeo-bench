@@ -141,10 +141,13 @@ def test_all_typed_flags() -> None:
         "ridge_alphas": [0.1, 1.0, 10.0],
         "knn_k": 7,
         "knn_device": "cpu",
-        "skip_no_timestamp": True,
-        "temporal_aggregation_methods": [],
-        "aggregate_embeddings": True,
+        "skip_no_timestamp": True, # new config addition for temporal tasks
+        "temporal_aggregation_methods": [], # new config addition for temporal tasks
+        "temporally_aggregate_embeddings": True, # new config addition for temporal tasks
+        "from_polygon": False, # new config addition for spatial aggregation
+        "spatial_aggregation_methods": [], # new config addition for spatial aggregation
     }
+
     assert config.runtime.model_dump() == {"device": "cpu", "seed": 42}
     assert config.output.model_dump() == {
         "directory": "results",

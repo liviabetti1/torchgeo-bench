@@ -17,6 +17,7 @@ def spatial_aggregation(bench: CoordBenchmark,
                         method: str,
                         embeddings: np.ndarray | None,
                         encoder: LocationEncoder|None = None) ->  tuple[CoordBenchmark, np.ndarray]:
+    from IPython import embed; embed()
 
     #basic columns that will be present regardless of pre-processing steps
     df = pd.DataFrame({"lat": bench.lat,
@@ -26,17 +27,18 @@ def spatial_aggregation(bench: CoordBenchmark,
                        "test_mask": bench.test_mask,
                        })
 
-    for task in bench.tasks:
-        df[task[0]] = task[1] # task is tuple of col_name, column
+    for task, labels in bench.tasks.items():
+        df[task] = labels # get the labels for this task
 
     # if temporally aggregated already (or pre-computed), use existing embeddings
     if embeddings is not None:
         df["emb"] = embeddings
     else:
         assert encoder is not None, "Need encoder if embeddings are not pre-computed"
-        embeddings = encoder.encode(df["lon"], df["lat"], df["timestamp"])
+        embeddings = encoder.encode(df["lon"], df["lat"], df["posix_timestamp"])
         df["emb"] = embeddings
 
+    # Note that groupby will drop rows with key None
     grouped_by = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"])
 
     # for parallel processing; needs to be nested for efficient access to global method
