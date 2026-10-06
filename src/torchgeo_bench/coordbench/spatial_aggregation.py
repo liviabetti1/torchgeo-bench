@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from rich.progress import track
 
 from torchgeo_bench.coordbench import CoordBenchmark, LocationEncoder
 
@@ -76,14 +77,21 @@ def spatial_aggregation(bench: CoordBenchmark,
     for task, _ in bench.tasks:
         agg_dictionary[task[0]] = "first"
 
-    finalized_df = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"]).agg(agg_dictionary)
+    groups = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"])
+    finalized = []
+    for group in track(groups, f"spatial_aggregation_{method}"):
+        finalized.append(group.agg(agg_dictionary))
+
+    finalized_df = pd.DataFrame(finalized)
+
+    because_we_dont_pass_around_dfs_for_some_reason = {task: finalized_df[task] for task, _ in bench.tasks}
 
     updated_benchmark = CoordBenchmark(
         name=f"{bench.name}-spatial-{method}",
         lat=finalized_df["lat"],
         lon=finalized_df["lon"],
         posix_timestamp=finalized_df["posix_timestamp"],
-        tasks=grouped_tasks,
+        tasks= because_we_dont_pass_around_dfs_for_some_reason,
         task_type=bench.task_type,
         test_mask=bench.test_mask,
     )
