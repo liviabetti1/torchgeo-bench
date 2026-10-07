@@ -84,7 +84,7 @@ def spatial_aggregation(bench: CoordBenchmark,
             non_emb[spatial_key] = row_of_non_emb
 
         else:
-            spatial_agg_map[spatial_key]=np.concatenate([spatial_agg_map[spatial_key], embedding], axis=0)
+            spatial_agg_map[spatial_key]=np.concatenate([spatial_agg_map[spatial_key], embedding], axis=1)
 
     emb = []
     lon = []
