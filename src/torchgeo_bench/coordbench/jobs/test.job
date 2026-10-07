@@ -17,7 +17,7 @@ set -x
 export OMP_NUM_THREADS=1
 
 cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
-source /u/kplane19/torchgeo-benc/.venv/bin/activate
+source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
 torchgeo-bench coord --model climplicit --dataset usa_electric_usage --split both --device cuda:0 \
 --from-polygon --spatial-aggregation-methods median_and_iqr \
