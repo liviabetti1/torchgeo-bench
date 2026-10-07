@@ -20,7 +20,7 @@ def median_and_iqr(series):
     q3 = np.percentile(series, 75, axis=0)
     iqr = q3 - q1
     aggregated = np.concatenate([median, iqr],
-                                axis=0)
+                                axis=1)
     return aggregated
 
 def covariance(series):
@@ -32,7 +32,7 @@ def statistical(series):
     mean = np.mean(series, axis=0)
     std = np.std(series, axis=0)
     return np.concatenate([min, max, mean, std],
-                                axis=0)
+                                axis=1)
 
 def mean(series):
     return np.mean(series, axis=0)
