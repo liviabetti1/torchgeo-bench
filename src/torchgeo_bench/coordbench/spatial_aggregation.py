@@ -107,6 +107,7 @@ def spatial_aggregation(bench: CoordBenchmark,
 
     np_emb = np.array(emb)
     print("shape of final", np_emb.shape)
+    print(tasks)
 
 
     updated_benchmark = CoordBenchmark(
