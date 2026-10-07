@@ -31,10 +31,11 @@ def statistical(series):
     max = np.max(series, axis=0)
     mean = np.mean(series, axis=0)
     std = np.std(series, axis=0)
-    print("min", min)
-    print("max", max)
-    return np.concatenate([min, max, mean, std],
-                                axis=1)
+    print("min", mean.shape)
+    print("max", max.shape)
+    combined = np.concatenate([min, max, mean, std], axis=0)
+    print("combined", combined.shape)
+    return combined
 
 def mean(series):
     return np.mean(series, axis=0)
@@ -95,8 +96,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     for spatial_key in track(spatial_agg_map.keys(), "aggregating by spatial key"):
         # group = np.concatenate(spatial_agg_map[spatial_key], axis=1)
         group = np.array(spatial_agg_map[spatial_key])
-        print("group", group)
-        print(group.shape)
+        print("group shape", group.shape)
         agg = emb_agg_func(group)
         emb.append(agg)
 
