@@ -4,6 +4,7 @@
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
 
 
 @dataclass
@@ -31,5 +32,5 @@ class CoordBenchmark:
     year: int | None = None
     posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None
-    spatial_aggregation_key: tuple[str, np.ndarray] = None
+    spatial_aggregation_key: tuple[str, pd.Series] = None
     end_timestamp: np.ndarray | None = None

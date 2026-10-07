@@ -64,10 +64,10 @@ def spatial_aggregation(bench: CoordBenchmark,
     non_emb = {}
     # embedding grouping and get one-off values
     for i in track(range(len(bench.lon)), "grouping by spatial key"):
-        spatial_key = bench.spatial_aggregation_key[1][i]
+        spatial_key = bench.spatial_aggregation_key[1].iloc[i]
         embedding = embeddings[i]
 
-        if spatial_key not in spatial_agg_map:
+        if spatial_key not in spatial_agg_map.keys():
             spatial_agg_map[spatial_key] = np.array(embedding)
 
             # get first value of non-embedding columns: tasks, lon, lat, timestamp, spatial key
