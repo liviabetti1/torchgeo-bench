@@ -113,5 +113,5 @@ def spatial_aggregation(bench: CoordBenchmark,
         test_mask=bench.test_mask,
     )
 
-    return updated_benchmark, emb
+    return updated_benchmark, np_emb
 
