@@ -72,7 +72,7 @@ def spatial_aggregation(bench: CoordBenchmark,
         embedding = embeddings[i]
 
         if spatial_key not in spatial_agg_map.keys():
-            spatial_agg_map[spatial_key] = np.array(embedding)
+            spatial_agg_map[spatial_key] = [embedding]
 
             # get first value of non-embedding columns: tasks, lon, lat, timestamp, spatial key
             row_of_non_emb = {}
@@ -84,7 +84,7 @@ def spatial_aggregation(bench: CoordBenchmark,
             non_emb[spatial_key] = row_of_non_emb
 
         else:
-            spatial_agg_map[spatial_key]=np.concatenate([spatial_agg_map[spatial_key], embedding], axis=1)
+            spatial_agg_map[spatial_key].append(embedding)
 
     emb = []
     lon = []
@@ -93,7 +93,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     tasks = {}
     # aggregation
     for spatial_key in track(spatial_agg_map.keys(), "aggregating by spatial key"):
-        group = np.array(spatial_agg_map[spatial_key])
+        group = np.concatenate(spatial_agg_map[spatial_key], axis=0)
         print("group", group)
         print(group.shape)
         agg = emb_agg_func(group)
