@@ -91,6 +91,8 @@ def spatial_aggregation(bench: CoordBenchmark,
     # aggregation
     for spatial_key in track(spatial_agg_map.keys(), "aggregating by spatial key"):
         group = spatial_agg_map[spatial_key]
+        print(group)
+        print(group.shape())
         agg = emb_agg_func(group)
         emb.append(agg)
 
