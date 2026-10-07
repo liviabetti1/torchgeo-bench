@@ -103,7 +103,7 @@ def spatial_aggregation(bench: CoordBenchmark,
         for task_name, values in bench.tasks.items():
             tasks[task_name] = non_emb[spatial_key][task_name]
 
-    np_emb = np.concatenate(emb, axis=1)
+    np_emb = np.array(emb)
     print("shape of final", np_emb.shape)
 
 
