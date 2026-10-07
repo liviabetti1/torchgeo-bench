@@ -67,10 +67,13 @@ def spatial_aggregation(bench: CoordBenchmark,
     # embedding grouping and get one-off values
     for i in track(range(len(bench.lon)), "grouping by spatial key"):
         spatial_key = bench.spatial_aggregation_key[1].iloc[i]
+        timestamp = bench.posix_timestamp[i]
         embedding = embeddings[i]
 
-        if spatial_key not in spatial_agg_map.keys():
-            spatial_agg_map[spatial_key] = [embedding]
+        key = (spatial_key, timestamp)
+
+        if key not in spatial_agg_map.keys():
+            spatial_agg_map[key] = [embedding]
 
             # get first value of non-embedding columns: tasks, lon, lat, timestamp, spatial key
             row_of_non_emb = {}
@@ -78,11 +81,10 @@ def spatial_aggregation(bench: CoordBenchmark,
                 row_of_non_emb[task_name] = values[i]
             row_of_non_emb["lon"] = bench.lon[i]
             row_of_non_emb["lat"] = bench.lat[i]
-            row_of_non_emb["timestamp"] = bench.posix_timestamp[i]
             non_emb[spatial_key] = row_of_non_emb
 
         else:
-            spatial_agg_map[spatial_key].append(embedding)
+            spatial_agg_map[key].append(embedding)
 
     emb = []
     lon = []
@@ -90,16 +92,16 @@ def spatial_aggregation(bench: CoordBenchmark,
     timestamp = []
     tasks = {}
     # aggregation
-    for spatial_key in track(spatial_agg_map.keys(), "aggregating by spatial key"):
+    for spatial_key, timestamp in track(spatial_agg_map.keys(), "aggregating by spatial key"):
         # group = np.concatenate(spatial_agg_map[spatial_key], axis=1)
-        group = np.array(spatial_agg_map[spatial_key])
+        group = np.array(spatial_agg_map[(spatial_key, timestamp)])
         agg = emb_agg_func(group)
         emb.append(agg)
 
         # non-embedding aggregation to maintain proper ordering
         lon.append(non_emb[spatial_key]["lon"])
         lat.append(non_emb[spatial_key]["lat"])
-        timestamp.append(non_emb[spatial_key]["timestamp"])
+        timestamp.append(timestamp)
         for task_name, values in bench.tasks.items():
             tasks[task_name] = non_emb[spatial_key][task_name]
 
