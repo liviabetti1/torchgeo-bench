@@ -8,11 +8,10 @@
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bgtj-tgirails
 #SBATCH --time=1:00:00      # hh:mm:ss for the job
-##SBATCH --mail-user=leca5365@colorado.edu
+##SBATCH --mail-user=kevin.lane@colorado.edu
 ##SBATCH --mail-type="BEGIN,END" See sbatch or srun man pages for more email options
 #SBATCH --output=slurm_logs/%x_%A_%a.out
 #SBATCH --job-name=chelsa-runs
-#SBATCH --array=0-11 #<==== CHANGE THIS TO THE APPROPRIATE RANGE
 
 set -x
 export OMP_NUM_THREADS=1
