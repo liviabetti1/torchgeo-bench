@@ -89,7 +89,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     emb = []
     lon = []
     lat = []
-    timestamp = []
+    timestamps = []
     tasks = {}
     # aggregation
     for spatial_key, timestamp in track(spatial_agg_map.keys(), "aggregating by spatial key"):
@@ -101,7 +101,7 @@ def spatial_aggregation(bench: CoordBenchmark,
         # non-embedding aggregation to maintain proper ordering
         lon.append(non_emb[spatial_key]["lon"])
         lat.append(non_emb[spatial_key]["lat"])
-        timestamp.append(timestamp)
+        timestamps.append(timestamp)
         for task_name, values in bench.tasks.items():
             tasks[task_name] = non_emb[spatial_key][task_name]
 
@@ -113,10 +113,9 @@ def spatial_aggregation(bench: CoordBenchmark,
         name=f"{bench.name}-spatial-{method}",
         lat=np.array(lat),
         lon=np.array(lon),
-        posix_timestamp=np.array(timestamp),
+        posix_timestamp=np.array(timestamps),
         tasks= tasks,
         task_type=bench.task_type,
-        test_mask=bench.test_mask,
     )
 
     return updated_benchmark, np_emb
