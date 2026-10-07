@@ -24,7 +24,7 @@ def median_and_iqr(series):
     return aggregated
 
 def covariance(series):
-    return np.cov(series, rowvar=True)
+    return np.cov(series, rowvar=False)
 
 def statistical(series):
     min = np.min(series, axis=0)
