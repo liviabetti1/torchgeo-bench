@@ -86,6 +86,8 @@ def spatial_aggregation(bench: CoordBenchmark,
         else:
             spatial_agg_map[spatial_key].append(embedding)
 
+        print(spatial_agg_map[spatial_key])
+
     emb = []
     lon = []
     lat = []
