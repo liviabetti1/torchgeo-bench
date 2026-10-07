@@ -107,7 +107,7 @@ ERA5_ECMWF_LABELS = (
     'skt'
 )
 ELECTRIC_LOAD_VARIABLES = [
-    "mean",
+    "average",
     "min",
     "max",
     "median",
