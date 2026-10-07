@@ -43,24 +43,10 @@ def spatial_aggregation(bench: CoordBenchmark,
                         embeddings: np.ndarray | None,
                         encoder: LocationEncoder|None = None) ->  tuple[CoordBenchmark, np.ndarray]:
 
-    #basic columns that will be present regardless of pre-processing steps
-    df = pd.DataFrame({"lat": bench.lat,
-                       "lon": bench.lon,
-                       "posix_timestamp": bench.posix_timestamp,
-                       bench.spatial_aggregation_key[0]: bench.spatial_aggregation_key[1], # tuple of column for spatial aggregation and column values; ex: county zipcode
-                       "test_mask": bench.test_mask,
-                       })
-
-    for task in bench.tasks:
-        df[task[0]] = task[1] # task is tuple of col_name, column
-
     # if temporally aggregated already (or pre-computed), use existing embeddings
-    if embeddings is not None:
-        df["emb"] = embeddings
-    else:
+    if embeddings is None:
         assert encoder is not None, "Need encoder if embeddings are not pre-computed"
-        embeddings = encoder.encode(df["lon"], df["lat"], df["posix_timestamp"])
-        df["emb"] = embeddings
+        embeddings = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
 
     if method == "mean":
         emb_agg_func = mean
@@ -73,28 +59,59 @@ def spatial_aggregation(bench: CoordBenchmark,
     else:
         raise NotImplementedError
 
-    agg_dictionary = {"lon": "mean", "lat": "mean", "posix_timestamp": "first", "emb": emb_agg_func}
-    for task, _ in bench.tasks:
-        agg_dictionary[task[0]] = "first"
+    spatial_agg_map = {}
 
-    groups = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"])
-    finalized = []
-    for group in track(groups, f"spatial_aggregation_{method}"):
-        finalized.append(group.agg(agg_dictionary))
+    non_emb = {}
+    # embedding grouping and get one-off values
+    for i in track(range(len(bench.lon)), "grouping by spatial key"):
+        spatial_key = bench.spatial_aggregation_key[1][i]
+        embedding = embeddings[i]
 
-    finalized_df = pd.DataFrame(finalized)
+        if spatial_key not in spatial_agg_map:
+            spatial_agg_map[spatial_key] = np.array(embedding)
 
-    because_we_dont_pass_around_dfs_for_some_reason = {task: finalized_df[task] for task, _ in bench.tasks}
+            # get first value of non-embedding columns: tasks, lon, lat, timestamp, spatial key
+            row_of_non_emb = {}
+            for task_name, values in bench.tasks.items():
+                row_of_non_emb[task_name] = values[i]
+            row_of_non_emb["lon"] = bench.lon[i]
+            row_of_non_emb["lat"] = bench.lat[i]
+            row_of_non_emb["timestamp"] = bench.posix_timestamp[i]
+            non_emb[spatial_key] = row_of_non_emb
+
+        else:
+            spatial_agg_map[spatial_key]=np.concatenate([spatial_agg_map[spatial_key], embedding], axis=0)
+
+    emb = []
+    lon = []
+    lat = []
+    timestamp = []
+    tasks = {}
+    # aggregation
+    for spatial_key in track(spatial_agg_map.keys(), "aggregating by spatial key"):
+        group = spatial_agg_map[spatial_key]
+        agg = emb_agg_func(group)
+        emb.append(agg)
+
+        # non-embedding aggregation to maintain proper ordering
+        lon.append(non_emb[spatial_key]["lon"])
+        lat.append(non_emb[spatial_key]["lat"])
+        timestamp.append(non_emb[spatial_key]["timestamp"])
+        for task_name, _ in bench.tasks:
+            tasks[task_name] = non_emb[spatial_key][task_name]
+
+    np_emb = np.concatenate([emb], axis=0)
+
 
     updated_benchmark = CoordBenchmark(
         name=f"{bench.name}-spatial-{method}",
-        lat=finalized_df["lat"],
-        lon=finalized_df["lon"],
-        posix_timestamp=finalized_df["posix_timestamp"],
-        tasks= because_we_dont_pass_around_dfs_for_some_reason,
+        lat=np.ndarray(lat),
+        lon=np.ndarray(lon),
+        posix_timestamp=np.ndarray(timestamp),
+        tasks= tasks,
         task_type=bench.task_type,
         test_mask=bench.test_mask,
     )
 
-    return updated_benchmark, finalized_df["emb"].astype(np.float32)
+    return updated_benchmark, emb
 
