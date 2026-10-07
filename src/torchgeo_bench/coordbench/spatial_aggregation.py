@@ -60,7 +60,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     else:
         raise NotImplementedError
 
-    embeddings = np.ndarray(embeddings)
+    embeddings = np.array(embeddings)
 
     spatial_agg_map = {}
 
