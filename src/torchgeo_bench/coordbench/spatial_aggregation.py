@@ -60,6 +60,8 @@ def spatial_aggregation(bench: CoordBenchmark,
     else:
         raise NotImplementedError
 
+    embeddings = np.ndarray(embeddings)
+
     spatial_agg_map = {}
 
     non_emb = {}
@@ -67,6 +69,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     for i in track(range(len(bench.lon)), "grouping by spatial key"):
         spatial_key = bench.spatial_aggregation_key[1].iloc[i]
         embedding = embeddings[i]
+        print(embeddings)
 
         if spatial_key not in spatial_agg_map.keys():
             spatial_agg_map[spatial_key] = np.array(embedding)
@@ -91,8 +94,6 @@ def spatial_aggregation(bench: CoordBenchmark,
     # aggregation
     for spatial_key in track(spatial_agg_map.keys(), "aggregating by spatial key"):
         group = spatial_agg_map[spatial_key]
-        print(group)
-        print(group.shape())
         agg = emb_agg_func(group)
         emb.append(agg)
 
