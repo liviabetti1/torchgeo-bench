@@ -31,6 +31,7 @@ def statistical(series):
     max = np.max(series, axis=0)
     mean = np.mean(series, axis=0)
     std = np.std(series, axis=0)
+    print(min, max, mean, std)
     return np.concatenate([min, max, mean, std],
                                 axis=1)
 
