@@ -103,14 +103,15 @@ def spatial_aggregation(bench: CoordBenchmark,
         for task_name, values in bench.tasks.items():
             tasks[task_name] = non_emb[spatial_key][task_name]
 
-    np_emb = np.concatenate([emb], axis=0)
+    np_emb = np.concatenate(emb, axis=1)
+    print("shape of final", np_emb.shape)
 
 
     updated_benchmark = CoordBenchmark(
         name=f"{bench.name}-spatial-{method}",
-        lat=np.ndarray(lat),
-        lon=np.ndarray(lon),
-        posix_timestamp=np.ndarray(timestamp),
+        lat=np.array(lat),
+        lon=np.array(lon),
+        posix_timestamp=np.array(timestamp),
         tasks= tasks,
         task_type=bench.task_type,
         test_mask=bench.test_mask,
