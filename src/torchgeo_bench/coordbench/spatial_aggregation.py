@@ -65,7 +65,7 @@ def spatial_aggregation(bench: CoordBenchmark,
 
     non_emb = {}
     # embedding grouping and get one-off values
-    for i in track(range(len(bench.lon)), "grouping by spatial key"):
+    for i in track(range(len(bench.lon)), f"{method} grouping by spatial key"):
         spatial_key = bench.spatial_aggregation_key[1].iloc[i]
         timestamp = bench.posix_timestamp[i]
         embedding = embeddings[i]
@@ -92,7 +92,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     timestamps = []
     tasks = {}
     # aggregation
-    for spatial_key, timestamp in track(spatial_agg_map.keys(), "aggregating by spatial key"):
+    for spatial_key, timestamp in track(spatial_agg_map.keys(), f"{method} aggregating by spatial key"):
         key = (spatial_key, timestamp)
         group = np.array(spatial_agg_map[key])
         agg = emb_agg_func(group)

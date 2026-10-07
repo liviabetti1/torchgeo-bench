@@ -20,5 +20,5 @@ cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
 source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
 torchgeo-bench coord --model climplicit --dataset usa_electric_usage --split both --device cuda:0 \
---from-polygon --spatial-aggregation-methods covariance \
+--from-polygon --spatial-aggregation-methods stastical median_and_iqr mean \
 --output results/coordbench_electric_load_polygon_test.csv "$@"
