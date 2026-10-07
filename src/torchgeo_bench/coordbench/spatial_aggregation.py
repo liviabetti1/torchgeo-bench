@@ -103,7 +103,7 @@ def spatial_aggregation(bench: CoordBenchmark,
         lat.append(non_emb[key]["lat"])
         timestamps.append(timestamp)
         for task_name, values in bench.tasks.items():
-            task_value = non_emb[spatial_key][task_name]
+            task_value = non_emb[key][task_name]
             if task_name in tasks:
                 tasks[task_name].append(task_value)
             else:
