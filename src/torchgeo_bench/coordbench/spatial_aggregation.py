@@ -81,7 +81,7 @@ def spatial_aggregation(bench: CoordBenchmark,
                 row_of_non_emb[task_name] = values[i]
             row_of_non_emb["lon"] = bench.lon[i]
             row_of_non_emb["lat"] = bench.lat[i]
-            non_emb[spatial_key] = row_of_non_emb
+            non_emb[key] = row_of_non_emb
 
         else:
             spatial_agg_map[key].append(embedding)
@@ -93,17 +93,24 @@ def spatial_aggregation(bench: CoordBenchmark,
     tasks = {}
     # aggregation
     for spatial_key, timestamp in track(spatial_agg_map.keys(), "aggregating by spatial key"):
-        # group = np.concatenate(spatial_agg_map[spatial_key], axis=1)
-        group = np.array(spatial_agg_map[(spatial_key, timestamp)])
+        key = (spatial_key, timestamp)
+        group = np.array(spatial_agg_map[key])
         agg = emb_agg_func(group)
         emb.append(agg)
 
         # non-embedding aggregation to maintain proper ordering
-        lon.append(non_emb[spatial_key]["lon"])
-        lat.append(non_emb[spatial_key]["lat"])
+        lon.append(non_emb[key]["lon"])
+        lat.append(non_emb[key]["lat"])
         timestamps.append(timestamp)
         for task_name, values in bench.tasks.items():
-            tasks[task_name] = non_emb[spatial_key][task_name]
+            task_value = non_emb[spatial_key][task_name]
+            if task_name in tasks:
+                tasks[task_name].append(task_value)
+            else:
+                tasks[task_name] = [task_value]
+
+    for task, values in bench.tasks.items():
+        tasks[task] = np.array(tasks[task])
 
     np_emb = np.array(emb)
     print("shape of final", np_emb.shape)
