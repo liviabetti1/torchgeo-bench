@@ -156,7 +156,7 @@ def spatial_aggregation(bench: CoordBenchmark,
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
     # generates embeddings per aggregation group to avoid memory spike
-    for i, group in grouped:
+    for i, group in track(grouped, f"{method} spatial aggregation"):
         emb = encoder.encode(group["lon"].to_numpy(),
                              group["lat"].to_numpy(),
                              group["posix_timestamp"].to_numpy())
