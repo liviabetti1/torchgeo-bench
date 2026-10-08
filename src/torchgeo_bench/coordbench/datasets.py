@@ -318,7 +318,7 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     """
 
     counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
-    electrical_load = load_config_extended("electrical_load_usa_2016_2023").sample(n=1000000, random_state=42)
+    electrical_load = load_config_extended("electrical_load_usa_2016_2023").sample(n=2000000, random_state=42)
 
     #TODO update temporal aggregation to go beyond just a year?
     combined_df = electrical_load.merge(counties, on="county", how="left")

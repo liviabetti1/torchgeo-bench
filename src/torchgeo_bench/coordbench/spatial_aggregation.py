@@ -1,3 +1,5 @@
+from typing import Callable
+
 import numpy as np
 import pandas as pd
 from rich.progress import track
@@ -37,30 +39,12 @@ def statistical(series):
 def mean(series):
     return np.mean(series, axis=0)
 
-
-def spatial_aggregation(bench: CoordBenchmark,
-                        method: str,
-                        embeddings: np.ndarray | None,
-                        encoder: LocationEncoder|None = None) ->  tuple[CoordBenchmark, np.ndarray]:
-
-    # if temporally aggregated already (or pre-computed), use existing embeddings
-    if embeddings is None:
-        assert encoder is not None, "Need encoder if embeddings are not pre-computed"
-        embeddings = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
-
-    if method == "mean":
-        emb_agg_func = mean
-    elif method == "median_and_iqr":
-        emb_agg_func = median_and_iqr
-    elif method == "covariance":
-        emb_agg_func = covariance
-    elif method == "statistical":
-        emb_agg_func = statistical
-    else:
-        raise NotImplementedError
-
-    embeddings = np.array(embeddings)
-
+# Keeps non-aggregated embeddings in memory all at the same time
+# Fast, but expensive.  Ex: 10M 256-dim float32 embeddings are ~10 GB
+def _spatial_agg_with_all_emb(bench: CoordBenchmark,
+                              method: Callable,
+                              embeddings: np.ndarray
+                              ):
     spatial_agg_map = {}
 
     non_emb = {}
@@ -95,7 +79,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     for spatial_key, timestamp in track(spatial_agg_map.keys(), f"{method} aggregating by spatial key"):
         key = (spatial_key, timestamp)
         group = np.array(spatial_agg_map[key])
-        agg = emb_agg_func(group)
+        agg = method(group)
         emb.append(agg)
 
         # non-embedding aggregation to maintain proper ordering
@@ -114,15 +98,86 @@ def spatial_aggregation(bench: CoordBenchmark,
 
     np_emb = np.array(emb)
 
-
     updated_benchmark = CoordBenchmark(
         name=f"{bench.name}-spatial-{method}",
         lat=np.array(lat),
         lon=np.array(lon),
         posix_timestamp=np.array(timestamps),
-        tasks= tasks,
+        tasks=tasks,
         task_type=bench.task_type,
     )
 
     return updated_benchmark, np_emb
 
+
+
+def spatial_aggregation(bench: CoordBenchmark,
+                        method: str,
+                        embeddings: np.ndarray | None,
+                        encoder: LocationEncoder|None = None,
+                        agg_at_same_time=False) ->  tuple[CoordBenchmark, np.ndarray]:
+
+
+
+    if method == "mean":
+        emb_agg_func = mean
+    elif method == "median_and_iqr":
+        emb_agg_func = median_and_iqr
+    elif method == "covariance":
+        emb_agg_func = covariance
+    elif method == "statistical":
+        emb_agg_func = statistical
+    else:
+        raise NotImplementedError
+
+    if agg_at_same_time:
+        # if temporally aggregated already (or pre-computed), use existing embeddings
+        if embeddings is None:
+            assert encoder is not None, "Need encoder if embeddings are not pre-computed"
+            embeddings = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
+
+        embeddings = np.array(embeddings)
+
+        return _spatial_agg_with_all_emb(bench, emb_agg_func, embeddings)
+
+    df = pd.DataFrame({"lon": bench.lon,
+                       "lat": bench.lat,
+                       "posix_timestamp": bench.posix_timestamp,
+                       bench.spatial_aggregation_key[0]: bench.spatial_aggregation_key[1]} |
+                      bench.tasks)
+
+    grouped = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"])
+
+    finalized_rows = []
+    embeddings = []
+
+    agg_dictionary = {"lon": "mean", "lat": "mean", "timestamp": lambda x: x.iloc[0]}
+    for task_name, _ in bench.tasks.items():
+        agg_dictionary[task_name] = lambda x: x.iloc[0]
+
+    # generates embeddings per aggregation group to avoid memory spike
+    for i, group in grouped:
+        emb = encoder.encode(group["lon"].to_numpy(),
+                             group["lat"].to_numpy(),
+                             group["posix_timestamp"].to_numpy())
+
+        embeddings.append(emb_agg_func(np.array(emb))) # aggregated embeddings
+        finalized_rows.append(group.agg(agg_dictionary))
+
+    finalized_df = pd.DataFrame(finalized_rows)
+    finalized_embeddings = np.array(embeddings)
+
+    updated_tasks = {}
+    for task_name, _ in bench.tasks:
+        updated_tasks[task_name] = finalized_df[task_name].to_numpy()
+
+    updated_benchmark = CoordBenchmark(
+        name=f"{bench.name}-spatial-{method}",
+        lat=finalized_df["lat"].to_numpy(),
+        lon=finalized_df["lon"].to_numpy(),
+        posix_timestamp=finalized_df["posix_timestamp"].to_numpy(),
+        tasks=updated_tasks,
+        task_type=bench.task_type,
+    )
+
+    return updated_benchmark, finalized_embeddings
