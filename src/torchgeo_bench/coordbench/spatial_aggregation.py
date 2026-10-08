@@ -151,7 +151,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     finalized_rows = []
     embeddings = []
 
-    agg_dictionary = {"lon": "mean", "lat": "mean", "timestamp": lambda x: x.iloc[0]}
+    agg_dictionary = {"lon": "mean", "lat": "mean", "posix_timestamp": lambda x: x.iloc[0]}
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
