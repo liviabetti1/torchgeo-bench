@@ -179,10 +179,6 @@ def _expand_temporal(
     encoder: LocationEncoder,
 ) -> list[tuple[CoordBenchmark, np.ndarray | None]]:
     """Discretize each timestamped benchmark per method, paired with window-mean embeddings.
-
-    Only the mean statistic is evaluated: embeddings are averaged over each window and the target
-    is the per-window mean label (regression) or mode (classification). Benchmarks without
-    timestamps pass through unchanged.
     """
     expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
     for bench in benchmarks:
@@ -199,6 +195,10 @@ def _expand_temporal(
                 for name, values in discretized.tasks.items()
                 if name.endswith(f"_{label_stat}")
             }
+            # For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.
+            # Or another method...
+            print(f"Expanded {bench.name} with {method} temporal aggregation: {discretized.name}, {embeddings['mean'].shape}")
+            print(f"For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.")
             expanded.append((discretized, embeddings["mean"].numpy()))
     return expanded
 
