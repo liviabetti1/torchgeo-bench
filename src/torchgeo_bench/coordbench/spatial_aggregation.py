@@ -119,17 +119,13 @@ def generate_buffered_embeddings(encoder: LocationEncoder,
                                   np.array(lat),
                                   np.array(timestamps))
 
-    print(f"Shape of buffered embed: {np.array(buffered_emb).shape}")
-
     embeddings = []
     # reshape embeddings to be 2D
-    emb_per_group = np.reshape(np.array(buffered_emb), (-1, group_size, 256))
-    print(f"Shape of grouped and buffered embed: {emb_per_group.shape}")
+    embedding_dimension = buffered_emb.shape[1]
+    emb_per_group = np.reshape(np.array(buffered_emb), (-1, group_size, embedding_dimension))
     for i in range(len(emb_per_group)):
         emb = emb_per_group[i]
-        print(f"Shape of individual group of embeddings: {np.array(emb).shape}")
         agged = emb_agg_func(np.array(emb))
-        print(f"Shape of aggregated embedding{np.array(agged).shape}")
         embeddings.append(agged)
 
     return embeddings
