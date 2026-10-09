@@ -128,7 +128,9 @@ def generate_buffered_embeddings(encoder: LocationEncoder,
     for i in range(len(emb_per_group)):
         emb = emb_per_group[i]
         print(f"Shape of individual group of embeddings: {np.array(emb).shape}")
-        embeddings.append(emb_agg_func(np.array(emb)))
+        agged = emb_agg_func(np.array(emb))
+        print(f"Shape of aggregated embedding{np.array(agged).shape}")
+        embeddings.append(agged)
 
     return embeddings
 
