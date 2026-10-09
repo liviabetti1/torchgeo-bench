@@ -81,4 +81,4 @@ def test_expand_temporal_passes_through_untimestamped_benchmarks():
     bench = CoordBenchmark(
         name="static", lat=np.zeros(3), lon=np.zeros(3), tasks={"y": np.arange(3.0)}
     )
-    assert _expand_temporal([bench], ["weekly"], encoder=DayEncoder()) == [(bench, None)]
+    assert list(_expand_temporal([bench], ["weekly"], encoder=DayEncoder())) == [(bench, None)]

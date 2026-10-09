@@ -48,8 +48,11 @@ class CoordEvaluationConfig(StrictModel):
         default_factory=lambda: list(RIDGE_ALPHAS), min_length=1
     )
     skip_no_timestamp: StrictBool = True
-    temporal_aggregation_methods: list[StrictStr] = Field(default_factory=list)
-    temporally_aggregate_embeddings: StrictBool = True
+    temporal_discretization_methods: list[StrictStr] = Field(default_factory=list)
+    temporal_embedding_aggregation_methods: list[StrictStr] = Field(
+        default_factory=lambda: ["statistics"], min_length=1
+    )
+
     from_polygon: StrictBool = False
     spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
 

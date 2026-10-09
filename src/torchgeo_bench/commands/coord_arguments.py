@@ -37,12 +37,10 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
         default=argparse.SUPPRESS,
     )
     parser.add_argument(
-        "--temporal-aggregation-methods", nargs="+", default=argparse.SUPPRESS
+        "--temporal-discretization-methods", nargs="+", default=argparse.SUPPRESS
     )
     parser.add_argument(
-        "--temporally-aggregate-embeddings",
-        action=argparse.BooleanOptionalAction,
-        default=argparse.SUPPRESS,
+        "--temporal-embedding-aggregation-methods", nargs="+", default=argparse.SUPPRESS
     )
     parser.add_argument(
         "--from-polygon",

@@ -37,7 +37,6 @@ def dataset_discretization(
     drop_incomplete: bool = True,
 ) -> CoordBenchmark:
     """Group observations by location and temporal window."""
-    t0 = time.time()
 
     if dataset.test_mask is not None:
         raise NotImplementedError("Cannot discretize a dataset with a test mask right now.")
@@ -87,9 +86,6 @@ def dataset_discretization(
         for agg in task_val_aggregations
     }).reset_index()
 
-    t1 = time.time()
-    print(f"Discretized dataset in {t1 - t0:.2f} seconds, {len(aggregated)} rows")
-
     return CoordBenchmark(
         name=f"{dataset.name}_{method}",
         lat=aggregated["lat"].to_numpy(),
@@ -130,7 +126,8 @@ def _aggregate_embeddings(
 
     aggregated_embeddings = {"mean": [], "min": [], "max": []}
 
-    for start in tqdm(range(0, len(lats), locations_per_batch), desc="Encoding", unit="batch"):
+    #for start in tqdm(range(0, len(lats), locations_per_batch), desc="Encoding", unit="batch", leave=False):
+    for start in range(0, len(lats), locations_per_batch):
         end = start + locations_per_batch
 
         batch_lats = lats[start:end]
@@ -197,7 +194,10 @@ def discretize_dataset_and_aggregate_embeddings(
         #NEED TO IMPLEMENT FOR OTHER METHODS TOO
         raise ValueError(f"Unknown aggregation method: {embedding_aggregation_method}")
 
+    t0 = time.perf_counter()
     discretized_dataset = dataset_discretization(dataset, method=discretization_method)
+    t1 = time.perf_counter()
+    print(f"Discretized dataset in {t1 - t0:.2f} seconds. {len(discretized_dataset.lat)} locations, {discretized_dataset.posix_timestamp.shape[1]} timestamps per location.")
 
     aggregated_embeddings = _aggregate_embeddings(
         lats=discretized_dataset.lat,
@@ -206,6 +206,8 @@ def discretize_dataset_and_aggregate_embeddings(
         encoder=encoder,
         batch_size=batch_size,
     )
+    t2 = time.perf_counter()
+    print(f"Aggregated embeddings in {t2 - t1:.2f} seconds. {aggregated_embeddings['mean'].shape[0]} locations, {aggregated_embeddings['mean'].shape[1]} embedding dimensions.")
 
     return discretized_dataset, aggregated_embeddings
 

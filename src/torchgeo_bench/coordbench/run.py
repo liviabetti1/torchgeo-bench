@@ -174,48 +174,64 @@ def _evaluation_split(
 
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
-    methods: Sequence[str],
+    discretization_methods: Sequence[str],
+    embedding_aggregation_methods: Sequence[str] = ("statistics",),
     *,
     encoder: LocationEncoder,
-) -> list[tuple[CoordBenchmark, np.ndarray | None]]:
-    """Discretize each timestamped benchmark per method, paired with window-mean embeddings.
-    """
-    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+) -> Iterator[tuple[CoordBenchmark, np.ndarray | None]]:
+    """Discretize each timestamped benchmark per (discretization, aggregation) pair."""
     for bench in benchmarks:
         if bench.posix_timestamp is None:
-            expanded.append((bench, None))
+            yield bench, None
             continue
         label_stat = "mode" if bench.task_type == "classification" else "mean"
-        for method in methods:
-            discretized, embeddings = discretize_dataset_and_aggregate_embeddings(
-                bench, encoder, method
-            )
-            discretized.tasks = {
-                name: values
-                for name, values in discretized.tasks.items()
-                if name.endswith(f"_{label_stat}")
-            }
-            # For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.
-            # Or another method...
-            print(f"Expanded {bench.name} with {method} temporal aggregation: {discretized.name}, {embeddings['mean'].shape}")
-            print(f"For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.")
-            expanded.append((discretized, embeddings["mean"].numpy()))
-    return expanded
+        for discretization in discretization_methods:
+            for aggregation in embedding_aggregation_methods:
+                discretized, embeddings = discretize_dataset_and_aggregate_embeddings(
+                    bench, encoder, discretization, aggregation
+                )
+                discretized.tasks = {
+                    name: values
+                    for name, values in discretized.tasks.items()
+                    if name.endswith(f"_{label_stat}")
+                }
+                # For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.
+                # Or another method...
+                print(f"Expanded {bench.name} with {discretization} discretization and {aggregation} aggregation: {discretized.name}, {embeddings['mean'].shape}")
+                print(f"For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.")
+                yield discretized, embeddings["mean"].numpy()
+                del discretized, embeddings
+
+
+def _expected_benchmark_count(
+    benchmarks: Sequence[CoordBenchmark], coord: CoordEvaluationConfig
+) -> int:
+    """Number of (benchmark, embeddings) pairs the expansion pipeline will yield."""
+    with_timestamp = sum(b.posix_timestamp is not None for b in benchmarks)
+    without_timestamp = 0 if coord.skip_no_timestamp else len(benchmarks) - with_timestamp
+    methods_per_timestamp = 1
+    if coord.temporal_discretization_methods:
+        methods_per_timestamp = len(coord.temporal_discretization_methods) * len(
+            coord.temporal_embedding_aggregation_methods
+        )
+    count = with_timestamp * methods_per_timestamp + without_timestamp
+    if coord.from_polygon:
+        count *= sum(m in SPATIAL_AGGREGATION_METHODS for m in coord.spatial_aggregation_methods)
+    return count
 
 
 def _expand_spatial(
         benchmarks: Sequence[tuple[CoordBenchmark, np.ndarray]],
         methods: Sequence[str],
         encoder: LocationEncoder | None = None,
-) -> list[tuple[CoordBenchmark, np.ndarray]]:
-    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+) -> Iterator[tuple[CoordBenchmark, np.ndarray]]:
     for bench, embeddings in benchmarks:
         applicable_methods = [m for m in methods if m in SPATIAL_AGGREGATION_METHODS]
         for method in applicable_methods:
             windowed, emb = spatial_aggregation(bench, method, embeddings, encoder=encoder)
             windowed.name = f"{bench.name}-{method}"
-            expanded.append((windowed, emb))
-    return expanded
+            yield windowed, emb
+            del windowed, emb
 
 
 def run_coordbench(cfg: CoordConfig) -> None:
@@ -234,8 +250,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
     knn_k = coord.knn_k
     knn_device = coord.knn_device
     methods = coord.methods
-    temporal_aggregation_methods = list(coord.temporal_aggregation_methods)
-    aggregate_embeddings = coord.temporally_aggregate_embeddings
+    temporal_discretization_methods = list(coord.temporal_discretization_methods)
     from_polygon = coord.from_polygon
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
@@ -258,18 +273,15 @@ def run_coordbench(cfg: CoordConfig) -> None:
     benchmarks = load_benchmarks(names)
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
-    t0 = time.perf_counter()
-    if temporal_aggregation_methods:
-        if not aggregate_embeddings:
-            raise ValueError(
-                "evaluation.temporal_aggregation_methods requires "
-                "evaluation.temporally_aggregate_embeddings=true"
-            )
-        all_benchmarks = _expand_temporal(benchmarks, temporal_aggregation_methods, encoder=encoder)
+    if temporal_discretization_methods:
+        all_benchmarks = _expand_temporal(
+            benchmarks,
+            temporal_discretization_methods,
+            coord.temporal_embedding_aggregation_methods,
+            encoder=encoder,
+        )
     else:
-        all_benchmarks = [(b, None) for b in benchmarks]
-
-    t1 = time.perf_counter()
+        all_benchmarks = ((b, None) for b in benchmarks)
 
     if from_polygon:
         all_benchmarks = _expand_spatial(
@@ -277,23 +289,18 @@ def run_coordbench(cfg: CoordConfig) -> None:
             spatial_aggregation_methods,
             encoder=encoder
         )
-    t2 = time.perf_counter()
-
-    logger.info(
-        "CoordBench: %d benchmarks selected (temporal expansion took %.1fs, spatial expansion and agg took %.1fs)",
-        len(all_benchmarks),
-        t1 - t0,
-        t2 - t1,
-    )
 
     if bool(coord.skip_no_timestamp):
-        skipped = [b.name for b, emb in all_benchmarks if b.posix_timestamp is None and emb is None]
-        if skipped:
-            logger.info("Skipping %d benchmark(s) with no posix_timestamp: %s", len(skipped), skipped)
-        all_benchmarks = [(b, emb) for b, emb in all_benchmarks if b.posix_timestamp is not None or emb is not None]
+        all_benchmarks = (
+            (b, emb)
+            for b, emb in all_benchmarks
+            if b.posix_timestamp is not None or emb is not None
+        )
 
     with Progress() as progress:
-        task_id = progress.add_task("CoordBench", total=len(all_benchmarks))
+        task_id = progress.add_task(
+            "CoordBench", total=_expected_benchmark_count(benchmarks, coord)
+        )
         for bench, emb in all_benchmarks:
             progress.update(task_id, description=f"CoordBench: {bench.name}")
             bench_t0 = time.perf_counter()
@@ -308,6 +315,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
                 n_rows,
             )
             progress.advance(task_id)
+            del bench, emb
 
 
     logger.info("CoordBench complete. Results appended to %s", output_path)
