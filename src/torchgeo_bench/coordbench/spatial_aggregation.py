@@ -5,7 +5,6 @@ import pandas as pd
 from rich.progress import track
 
 from torchgeo_bench.coordbench import CoordBenchmark, LocationEncoder
-from torchgeo_bench.coordbench.debugging.test_ridge_implementation import lon
 
 # Based on spatial pooling methods explored in https://arxiv.org/pdf/2603.02080
 SPATIAL_AGGREGATION_METHODS = [
