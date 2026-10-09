@@ -178,15 +178,11 @@ def _expand_temporal(
 ) -> list[tuple[CoordBenchmark, np.ndarray | None]]:
     """Replace each benchmark with one variant per temporal method applicable to its resolution.
     """
-    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+    all_benchmarks_expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
     for bench in benchmarks:
-        resolution = bench.temporal_resolution or "none"
-        applicable_methods = [m for m in methods if m in TEMPORAL_AGGREGATION_METHODS.get(resolution, [])]
-        for method in applicable_methods:
-            windowed, emb = temporal_aggregation(bench, method, encoder=encoder)
-            windowed.name = f"{bench.name}-{method}"
-            expanded.append((windowed, emb))
-    return expanded
+        results = temporal_aggregation(bench, methods, encoder=encoder)
+        all_benchmarks_expanded.extend(results)
+    return all_benchmarks_expanded
 
 
 def _expand_spatial(

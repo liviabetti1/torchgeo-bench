@@ -8,6 +8,8 @@
 | 4 | CHELSA monthly | Monthly, 2011-2018 | **TODO:** still needed |
 | 5 | Electrical load | Daily, 2016-2023 | **TODO:** still needed |
 | 6 | USA population | Yearly, 2010-2025 | **TODO:** still needed |
+| 7 | VIIRS Nightlights | ?| **TODO:** still needed |
+| 8 | GHCNd | ? | **TODO:** still needed |
 
 ---
 
