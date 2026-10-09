@@ -176,22 +176,19 @@ def spatial_aggregation(bench: CoordBenchmark,
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
-    buffer_size = 1000000 #~4 GB for 256-dim float32 embeddings; can expand upwards for increased speed
+    buffer_size = 1000000 #~1 GB for 256-dim float32 embeddings; can expand upwards for increased speed?
     current_buffer_count = 0
 
     buffer_lat = []
     buffer_lon = []
     buffer_timestamp = []
     group_size = 0
-    j = 0
 
     # generates embeddings per aggregation group to avoid memory spike
     for i, group in track(grouped, f"{method} spatial aggregation"):
         group_size = group["lon"].size
 
-
         current_buffer_count += group_size
-        j+= 1
 
         buffer_lat.extend(group["lat"])
         buffer_lon.extend(group["lon"])
@@ -200,6 +197,7 @@ def spatial_aggregation(bench: CoordBenchmark,
 
         # limit I/O to model with queries of ~1GB instead of per group
         if current_buffer_count >= buffer_size:
+            print("Buffer filled, generating embeddings")
 
             emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
                                                timestamps=buffer_timestamp, group_size=group_size,
@@ -210,6 +208,7 @@ def spatial_aggregation(bench: CoordBenchmark,
             buffer_lon = []
             buffer_lat = []
             buffer_timestamp = []
+            emb = None # do I need to do this to manually free the memory?
             current_buffer_count = 0
 
     if len(buffer_lon) != 0:
