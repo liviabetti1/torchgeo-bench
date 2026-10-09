@@ -176,7 +176,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
-    buffer_size = 1000000 #~1 GB for 256-dim float32 embeddings; can expand upwards for increased speed
+    buffer_size = 4000000 #~4 GB for 256-dim float32 embeddings; can expand upwards for increased speed
     current_buffer_count = 0
 
     buffer_lat = []
@@ -186,17 +186,16 @@ def spatial_aggregation(bench: CoordBenchmark,
 
     # generates embeddings per aggregation group to avoid memory spike
     for i, group in track(grouped, f"{method} spatial aggregation"):
-        if i == 0:
-            group_size = len(group) # get this once for reshaping purposes
-
-        current_buffer_count += 1
+        group_size = group["lon"].size
+        current_buffer_count += group_size
         buffer_lat.extend(group["lat"])
         buffer_lon.extend(group["lon"])
         buffer_timestamp.extend(group["posix_timestamp"])
         finalized_rows.append(group.agg(agg_dictionary))
 
         # limit I/O to model with queries of ~1GB instead of per group
-        if current_buffer_count == buffer_size:
+        if current_buffer_count >= buffer_size:
+
             emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
                                                timestamps=buffer_timestamp, group_size=group_size,
                                                emb_agg_func=emb_agg_func)

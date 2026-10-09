@@ -318,12 +318,13 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     """
 
     counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
-    electrical_load = load_config_extended("electrical_load_usa_2016_2023").sample(n=2000000, random_state=42)
-
+    electrical_load = load_config_extended("electrical_load_usa_2016_2023").sample(n=1000000, random_state=42)
     #TODO update temporal aggregation to go beyond just a year?
     combined_df = electrical_load.merge(counties, on="county", how="left")
+    print(f"Electric load dataset size: {len(combined_df)}")
+
     if subsample_locations:
-        combined_df["sub_sampled"] = combined_df["samples"][:10] #hard-coded, but we can go up to 1k for num samples per county
+        combined_df["sub_sampled"] = combined_df["samples"].map(lambda items: items[:10]) # hard-coded, can go up to 1k
         combined_df.drop("samples", axis=1, inplace=True)
 
         finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
@@ -335,6 +336,8 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
         finalized_df['lon'] = finalized_df["samples"].str[0].astype("float32")  # isolate lon/lat columns
         finalized_df['lat'] = finalized_df["samples"].str[1].astype("float32")
         finalized_df.drop("samples", axis=1, inplace=True)
+
+    print(f"Electric load dataset size with expansion {len(finalized_df)}")
 
     task_cols = [v for v in ELECTRIC_LOAD_VARIABLES if v in finalized_df.columns]
 
