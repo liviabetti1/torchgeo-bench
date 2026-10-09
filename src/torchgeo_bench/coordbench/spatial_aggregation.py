@@ -5,6 +5,7 @@ import pandas as pd
 from rich.progress import track
 
 from torchgeo_bench.coordbench import CoordBenchmark, LocationEncoder
+from torchgeo_bench.coordbench.debugging.test_ridge_implementation import lon
 
 # Based on spatial pooling methods explored in https://arxiv.org/pdf/2603.02080
 SPATIAL_AGGREGATION_METHODS = [
@@ -110,6 +111,27 @@ def _spatial_agg_with_all_emb(bench: CoordBenchmark,
     return updated_benchmark, np_emb
 
 
+def generate_buffered_embeddings(encoder: LocationEncoder,
+                                 lon: list,
+                                 lat: list,
+                                 timestamps: list,
+                                 group_size: int,
+                                 emb_agg_func: Callable):
+
+    buffered_emb = encoder.encode(np.array(lon),
+                                  np.array(lat),
+                                  np.array(timestamps))
+
+    embeddings = []
+    # reshape embeddings to be 2D
+    emb_per_group = np.reshape(np.array(buffered_emb), (-1, group_size))
+    for i in range(len(emb_per_group)):
+        emb = emb_per_group[i]
+        embeddings.append(emb_agg_func(np.array(emb)))
+
+    return embeddings
+
+
 
 def spatial_aggregation(bench: CoordBenchmark,
                         method: str,
@@ -155,14 +177,43 @@ def spatial_aggregation(bench: CoordBenchmark,
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
+    buffer_size = 1000000 #~1 GB for 256-dim float32 embeddings; can expand upwards for increased speed
+    current_buffer_count = 0
+
+    buffer_lat = []
+    buffer_lon = []
+    buffer_timestamp = []
+    group_size = 0
+
     # generates embeddings per aggregation group to avoid memory spike
     for i, group in track(grouped, f"{method} spatial aggregation"):
-        emb = encoder.encode(group["lon"].to_numpy(),
-                             group["lat"].to_numpy(),
-                             group["posix_timestamp"].to_numpy())
+        if i == 0:
+            group_size = len(group) # get this once for reshaping purposes
 
-        embeddings.append(emb_agg_func(np.array(emb))) # aggregated embeddings
+        current_buffer_count += 1
+        buffer_lat.extend(group["lat"])
+        buffer_lon.extend(group["lon"])
+        buffer_timestamp.extend(group["posix_timestamp"])
         finalized_rows.append(group.agg(agg_dictionary))
+
+        # limit I/O to model with queries of ~1GB instead of per group
+        if current_buffer_count == buffer_size:
+            emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
+                                               timestamps=buffer_timestamp, group_size=group_size,
+                                               emb_agg_func=emb_agg_func)
+            embeddings.extend(emb)
+
+            # reset buffer
+            buffer_lon = []
+            buffer_lat = []
+            buffer_timestamp = []
+            current_buffer_count = 0
+
+    # flush whatever remains in buffer (i.e. if dataset not evenly divisible by buffer size)
+    remaining_emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
+                                               timestamps=buffer_timestamp, group_size=group_size,
+                                               emb_agg_func=emb_agg_func)
+    embeddings.extend(remaining_emb)
 
     finalized_df = pd.DataFrame(finalized_rows)
     finalized_embeddings = np.array(embeddings)
