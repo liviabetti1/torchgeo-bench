@@ -28,7 +28,9 @@ from torchgeo_bench.coordbench.config import (
 )
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
-from torchgeo_bench.coordbench.temporal_aggregation import TEMPORAL_AGGREGATION_METHODS, temporal_aggregation
+from torchgeo_bench.coordbench.temporal_aggregation import (
+    discretize_dataset_and_aggregate_embeddings,
+)
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
@@ -64,7 +66,7 @@ class CoordResult:
     seed: int
     model_name: str
     model_target: str
-    temporal_embedding_aggregation: str # "" (encoded per point) | "embedding_mean" (precomputed features)
+    temporal_embedding_aggregation: str # "" (encoded per point) | "<window>/mean" (precomputed features)
 
 
     def to_row(self) -> dict[str, Any]:
@@ -174,15 +176,31 @@ def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     methods: Sequence[str],
     *,
-    encoder: LocationEncoder | None = None,
+    encoder: LocationEncoder,
 ) -> list[tuple[CoordBenchmark, np.ndarray | None]]:
-    """Replace each benchmark with one variant per temporal method applicable to its resolution.
+    """Discretize each timestamped benchmark per method, paired with window-mean embeddings.
+
+    Only the mean statistic is evaluated: embeddings are averaged over each window and the target
+    is the per-window mean label (regression) or mode (classification). Benchmarks without
+    timestamps pass through unchanged.
     """
-    all_benchmarks_expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
+    expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
     for bench in benchmarks:
-        results = temporal_aggregation(bench, methods, encoder=encoder)
-        all_benchmarks_expanded.extend(results)
-    return all_benchmarks_expanded
+        if bench.posix_timestamp is None:
+            expanded.append((bench, None))
+            continue
+        label_stat = "mode" if bench.task_type == "classification" else "mean"
+        for method in methods:
+            discretized, embeddings = discretize_dataset_and_aggregate_embeddings(
+                bench, encoder, method
+            )
+            discretized.tasks = {
+                name: values
+                for name, values in discretized.tasks.items()
+                if name.endswith(f"_{label_stat}")
+            }
+            expanded.append((discretized, embeddings["mean"].numpy()))
+    return expanded
 
 
 def _expand_spatial(
@@ -242,11 +260,12 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
     t0 = time.perf_counter()
     if temporal_aggregation_methods:
-        all_benchmarks = _expand_temporal(
-            benchmarks,
-            temporal_aggregation_methods,
-            encoder=encoder if aggregate_embeddings else None,
-        )
+        if not aggregate_embeddings:
+            raise ValueError(
+                "evaluation.temporal_aggregation_methods requires "
+                "evaluation.temporally_aggregate_embeddings=true"
+            )
+        all_benchmarks = _expand_temporal(benchmarks, temporal_aggregation_methods, encoder=encoder)
     else:
         all_benchmarks = [(b, None) for b in benchmarks]
 
@@ -322,7 +341,9 @@ def _evaluate_benchmark(
         return
 
     features = precomputed_features
-    temporal_embedding_aggregation = "embedding_mean" if precomputed_features is not None else ""
+    temporal_embedding_aggregation = (
+        f"{bench.temporal_resolution}/mean" if precomputed_features is not None else ""
+    )
 
     for split in _resolve_splits(coord.split):
         test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)

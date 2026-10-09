@@ -1,116 +1,34 @@
 """Temporal discretization of CoordBenchmark datasets."""
 
+import time
 import numpy as np
 import pandas as pd
+import torch
+
+from tqdm import tqdm
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
+from torchgeo_bench.coordbench.models import LocationEncoder
 
+GROUP_KEYS = ["lat", "lon", "window"]
 
-DISCRETIZATION_METHODS = {
-    "weekly": 7 * 24 * 60 * 60,
-    "biweekly": 14 * 24 * 60 * 60,
-    "monthly": 30 * 24 * 60 * 60,
-    "seasonally": 90 * 24 * 60 * 60,
-    "yearly": 365 * 24 * 60 * 60,
+DAY_SECONDS = 24 * 60 * 60
+
+DISCRETIZATION_METHODS_TO_SECONDS = {
+    "weekly": 7 * DAY_SECONDS,
+    "biweekly": 14 * DAY_SECONDS,
+    "monthly": 30 * DAY_SECONDS,
+    "seasonally": 90 * DAY_SECONDS,
+    "yearly": 365 * DAY_SECONDS,
 }
 
-EMBEDDING_AGGREGATION_METHODS = (
+EMBEDDING_AGGREGATION_METHODS = [
     "statistics",
     "temporal_filter",
     "sequence_model",
-)
+]
 
-
-def _make_timestamp_range(
-    timestamp_start: int,
-    timestamp_end: int,
-    timestamp_interval: int,
-    drop_incomplete: bool = True,
-) -> pd.DatetimeIndex:
-    """Return boundaries of non-overlapping temporal windows."""
-
-    time_intervals = pd.date_range(
-        start=pd.to_datetime(timestamp_start, unit="s", utc=True),
-        end=pd.to_datetime(timestamp_end, unit="s", utc=True),
-        freq=pd.Timedelta(seconds=timestamp_interval),
-    )
-
-    if not drop_incomplete and time_intervals[-1].timestamp() < timestamp_end:
-        time_intervals = time_intervals.append(
-            pd.DatetimeIndex([
-                pd.to_datetime(timestamp_end, unit="s", utc=True)
-            ])
-        )
-
-    return time_intervals
-
-
-def _group_by_location_and_window(
-    dataset: CoordBenchmark,
-    windows: np.ndarray,
-    valid: np.ndarray,
-) -> dict:
-    """Group original dataset indices by (latitude, longitude, window)."""
-
-    indices = np.flatnonzero(valid)
-    indices = indices[np.lexsort((
-        windows[indices], dataset.lon[indices], dataset.lat[indices]
-    ))]
-
-    groups = {}
-
-    for i in indices:
-        key = (dataset.lat[i], dataset.lon[i], windows[i])
-
-        if key not in groups:
-            groups[key] = []
-
-        groups[key].append(i)
-
-    return groups
-
-
-def _aggregate_groups(
-    dataset: CoordBenchmark,
-    groups: dict,
-) -> tuple:
-    """Aggregate timestamps and task statistics for each group."""
-
-    lat = []
-    lon = []
-    timestamps = []
-    tasks = {name: [] for name in dataset.tasks}
-
-    for (latitude, longitude, window), group_indices in groups.items():
-        lat.append(latitude)
-        lon.append(longitude)
-
-        timestamps.append(tuple(dataset.posix_timestamp[group_indices]))
-
-        for name, values in dataset.tasks.items():
-            group_values = np.asarray(values)[group_indices]
-
-            tasks[name].append({
-                "mean": np.mean(group_values),
-                "max": np.max(group_values),
-                "min": np.min(group_values),
-            })
-
-    new_tasks = {
-        f"{name}_{stat}": np.array([group[stat] for group in groups])
-        for name, groups in tasks.items()
-        for stat in ("mean", "max", "min")
-    }
-
-    new_timestamps = np.empty(len(timestamps), dtype=object)
-    new_timestamps[:] = timestamps
-
-    return (
-        np.asarray(lat),
-        np.asarray(lon),
-        new_timestamps,
-        new_tasks
-    )
+LABEL_STATS = ["mean", "min", "max"]
 
 
 def dataset_discretization(
@@ -119,6 +37,7 @@ def dataset_discretization(
     drop_incomplete: bool = True,
 ) -> CoordBenchmark:
     """Group observations by location and temporal window."""
+    t0 = time.time()
 
     if dataset.test_mask is not None:
         raise NotImplementedError("Cannot discretize a dataset with a test mask right now.")
@@ -127,107 +46,141 @@ def dataset_discretization(
         print("No timestamp data for this dataset")
         return dataset
 
-    if method not in DISCRETIZATION_METHODS:
+    if method not in DISCRETIZATION_METHODS_TO_SECONDS:
         raise ValueError(f"Unknown discretization method: {method}")
 
-    ts = np.asarray(dataset.posix_timestamp, dtype=np.int64)
+    task_val_aggregations = ["mode"] if dataset.task_type == "classification" else LABEL_STATS
 
-    start, end = int(ts.min()), int(ts.max()) + 1
-    interval = DISCRETIZATION_METHODS[method]
+    interval = DISCRETIZATION_METHODS_TO_SECONDS[method]
+    timestamp = np.asarray(dataset.posix_timestamp, dtype=np.int64)
+    elapsed = timestamp - timestamp.min()
+    span = int(elapsed.max()) + 1
 
-    time_intervals = (
-        _make_timestamp_range(start, end, interval, drop_incomplete)
-        .astype("int64") // 10**9
-    )
+    if drop_incomplete:
+        n_windows = span // interval
+    else:
+        n_windows = int(np.ceil(span / interval))
 
-    # Assign each observation to a window
-    windows = np.searchsorted(time_intervals, ts, side="right") - 1
-    valid = (windows >= 0) & (windows < len(time_intervals) - 1)
+    rows = pd.DataFrame({
+        "lat": dataset.lat,
+        "lon": dataset.lon,
+        "window": elapsed // interval,
+        "timestamp": timestamp,
+        "row": np.arange(len(timestamp)),
+        **dataset.tasks,
+    })
+    rows = rows[rows["window"] < n_windows]
+    rows = rows.sort_values([*GROUP_KEYS, "timestamp"], kind="stable")
+    grouped = rows.groupby(GROUP_KEYS, sort=False)
 
-    # Group observations by location and window
-    groups = _group_by_location_and_window(dataset, windows, valid)
+    window_size = grouped.size()
+    if window_size.nunique() != 1:
+        raise ValueError("All windows must have the same number of timestamps.")
+    T = int(window_size.iloc[0])
 
-    # Aggregate observations
-    lat, lon, timestamps, tasks = _aggregate_groups(dataset, groups)
+    # Rows are sorted by (lat, lon, window, timestamp), so each consecutive run of T is one group.
+    timestamps = rows["timestamp"].to_numpy().reshape(-1, T) # (N, T)
+
+    aggregated = grouped.agg(**{
+        f"{task}_{agg}": (task, (lambda s: s.mode().iloc[0]) if agg == "mode" else agg)
+        for task in dataset.tasks
+        for agg in task_val_aggregations
+    }).reset_index()
+
+    t1 = time.time()
+    print(f"Discretized dataset in {t1 - t0:.2f} seconds, {len(aggregated)} rows")
 
     return CoordBenchmark(
         name=f"{dataset.name}_{method}",
-        lat=lat,
-        lon=lon,
-        tasks=tasks,
+        lat=aggregated["lat"].to_numpy(),
+        lon=aggregated["lon"].to_numpy(),
+        tasks={
+            f"{task}_{stat}": aggregated[f"{task}_{stat}"].to_numpy()
+            for task in dataset.tasks
+            for stat in task_val_aggregations
+        },
         task_type=dataset.task_type,
         temporal_resolution=method,
         year=dataset.year,
         posix_timestamp=timestamps,
-        test_mask=(
-            dataset.test_mask[first]
-            if dataset.test_mask is not None
-            else None
-        ),
         spatial_aggregation_key=dataset.spatial_aggregation_key,
     )
 
-
-def _generate_embeddings(
-    lat: np.ndarray,
-    lon: np.ndarray,
+@torch.inference_mode()
+def _aggregate_embeddings(
+    lats: np.ndarray,
+    lons: np.ndarray,
     timestamps: np.ndarray,
     encoder: LocationEncoder,
     batch_size: int = 4096,
-) -> torch.Tensor:
-    """Generate embeddings for multiple (lat, lon, timestamp) observations.
+) -> dict[str, torch.Tensor]:
+    """Encode each location's window of timestamps and reduce over time.
 
     Args:
-        lat, lon, timestamps: 1D arrays of equal length.
+        lats, lons: 1D arrays of length N.
+        timestamps: Array of shape (N, T), one window of timestamps per location.
         encoder: Location encoder.
         batch_size: Maximum number of observations per encoder call.
 
     Returns:
-        Tensor of shape (M, D).
+        Mapping of "mean", "min" and "max" to tensors of shape (N, D).
     """
-    all_embeddings = []
+    T = timestamps.shape[1]
+    locations_per_batch = max(1, batch_size // T)
 
-    for start in range(0, len(lat), batch_size):
-        end = start + batch_size
+    aggregated_embeddings = {"mean": [], "min": [], "max": []}
 
+    for start in tqdm(range(0, len(lats), locations_per_batch), desc="Encoding", unit="batch"):
+        end = start + locations_per_batch
+
+        batch_lats = lats[start:end]
+        batch_lons = lons[start:end]
+        batch_timestamps = timestamps[start:end]  # (B, T)
+
+        B, T = batch_timestamps.shape
+
+        # Repeat each location for every timestamp
+        batch_lats = np.repeat(batch_lats, T)
+        batch_lons = np.repeat(batch_lons, T)
+        batch_timestamps = batch_timestamps.reshape(-1)
+
+        # Encode all location-timestamp pairs
         embeddings = encoder.encode(
-            lon[start:end],
-            lat[start:end],
-            timestamps[start:end],
+            batch_lons,
+            batch_lats,
+            batch_timestamps,
+        )  # (B*T, D)
+
+        # Restore temporal dimension
+        embeddings = torch.as_tensor(embeddings).reshape(B, T, -1)
+
+        mean_embeddings = embeddings.mean(dim=1)
+        min_embeddings = embeddings.amin(dim=1)
+        max_embeddings = embeddings.amax(dim=1)
+
+        assert mean_embeddings.shape == min_embeddings.shape == max_embeddings.shape == (B, embeddings.shape[-1]), (
+            f"Expected shape {(B, embeddings.shape[-1])}, got mean {mean_embeddings.shape}, min {min_embeddings.shape}, max {max_embeddings.shape}"
         )
 
-        all_embeddings.append(torch.as_tensor(embeddings))
+        for stat, value in (
+            ("mean", mean_embeddings),
+            ("min", min_embeddings),
+            ("max", max_embeddings),
+        ):
+            aggregated_embeddings[stat].append(value.cpu())
 
-    return torch.cat(all_embeddings, dim=0)
+    aggregated_embeddings = {
+        stat: torch.cat(values, dim=0)
+        for stat, values in aggregated_embeddings.items()
+    }
 
-
-def _aggregate_embeddings(
-    embeddings: torch.Tensor,
-    method: str = "statistics",
-) -> tuple[torch.Tensor, ...]:
-    """Aggregate temporal embeddings of shape (T, D)."""
-
-    if method == "statistics":
-        return {
-            "mean": embeddings.mean(dim=0),
-            "min": embeddings.min(dim=0).values,
-            "max": embeddings.max(dim=0).values,
-        }
-
-    elif method == "temporal_filter":
-        raise NotImplementedError("Temporal filtering not implemented yet.")
-
-    elif method == "sequence_model":
-        raise NotImplementedError("Sequence model not implemented yet.")
-
-    else:
-        raise ValueError(f"Unknown aggregation method: {method}")
-
+    return aggregated_embeddings
 
 def discretize_dataset_and_aggregate_embeddings(
     dataset: CoordBenchmark,
     encoder: LocationEncoder,
-    method: str = "statistics",
+    discretization_method: str,
+    embedding_aggregation_method: str = "statistics",
     batch_size: int = 4096,
 ) -> tuple[CoordBenchmark, tuple[torch.Tensor, ...]]:
     """Generate and aggregate temporal embeddings for a discretized dataset.
@@ -240,42 +193,27 @@ def discretize_dataset_and_aggregate_embeddings(
     if dataset.posix_timestamp is None:
         raise ValueError("Dataset must contain timestamps.")
 
-    if method not in EMBEDDING_AGGREGATION_METHODS:
-        raise ValueError(f"Unknown aggregation method: {method}")
+    if embedding_aggregation_method not in EMBEDDING_AGGREGATION_METHODS:
+        #NEED TO IMPLEMENT FOR OTHER METHODS TOO
+        raise ValueError(f"Unknown aggregation method: {embedding_aggregation_method}")
 
-    # Number of timestamps per location
-    lengths = np.array([len(ts) for ts in dataset.posix_timestamp])
+    discretized_dataset = dataset_discretization(dataset, method=discretization_method)
 
-    if np.any(lengths == 0):
-        raise ValueError("Each location must have at least one timestamp.")
-
-    # Flatten all observations into individual (lat, lon, timestamp) rows
-    lat = np.repeat(dataset.lat, lengths)
-    lon = np.repeat(dataset.lon, lengths)
-    timestamps = np.concatenate(dataset.posix_timestamp)
-
-    # Encode in batches
-    embeddings = _generate_embeddings(
-        lat=lat,
-        lon=lon,
-        timestamps=timestamps,
+    aggregated_embeddings = _aggregate_embeddings(
+        lats=discretized_dataset.lat,
+        lons=discretized_dataset.lon,
+        timestamps=np.asarray(discretized_dataset.posix_timestamp, dtype=np.int64),
         encoder=encoder,
         batch_size=batch_size,
     )
 
-    # Split embeddings back into temporal groups
-    splits = np.cumsum(lengths)[:-1]
-    groups = torch.tensor_split(embeddings, splits.tolist())
+    return discretized_dataset, aggregated_embeddings
 
-    # Aggregate each group's embeddings
-    aggregated = [
-        _aggregate_embeddings(group, method=method)
-        for group in groups
-    ]
 
-    results = {
-        name: torch.stack([group[name] for group in aggregated])
-        for name in aggregated[0]
-    }
+if __name__ == "__main__":
+    # EXAMPLE USAGE
+    from torchgeo_bench.coordbench.datasets import load_era5_ecmwf
+    from torchgeo_bench.coordbench.models import GeoCLIPLocationEncoder
 
-    return dataset, results
+    (era5,) = load_era5_ecmwf()
+    discretize_dataset_and_aggregate_embeddings(era5, GeoCLIPLocationEncoder(), 'weekly', 'statistics')
