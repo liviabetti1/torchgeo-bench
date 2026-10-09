@@ -124,11 +124,15 @@ def generate_buffered_embeddings(encoder: LocationEncoder,
                                   np.array(lat),
                                   np.array(timestamps))
 
+    print(f"Shape of buffered embed: {np.array(buffered_emb).shape}")
+
     embeddings = []
     # reshape embeddings to be 2D
     emb_per_group = np.reshape(np.array(buffered_emb), (-1, group_size))
+    print(f"Shape of grouped and buffered embed: {emb_per_group.shape}")
     for i in range(len(emb_per_group)):
         emb = emb_per_group[i]
+        print(f"Shape of individual group of embeddings: {np.array(emb).shape}")
         embeddings.append(emb_agg_func(np.array(emb)))
 
     return embeddings
@@ -217,11 +221,12 @@ def spatial_aggregation(bench: CoordBenchmark,
             buffer_timestamp = []
             current_buffer_count = 0
 
-    # flush whatever remains in buffer (i.e. if dataset not evenly divisible by buffer size)
-    remaining_emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
-                                               timestamps=buffer_timestamp, group_size=group_size,
-                                               emb_agg_func=emb_agg_func)
-    embeddings.extend(remaining_emb)
+    if len(buffer_lon) != 0:
+        # flush whatever remains in buffer (i.e. if dataset not evenly divisible by buffer size)
+        remaining_emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
+                                                   timestamps=buffer_timestamp, group_size=group_size,
+                                                   emb_agg_func=emb_agg_func)
+        embeddings.extend(remaining_emb)
 
     finalized_df = pd.DataFrame(finalized_rows)
     finalized_embeddings = np.array(embeddings)
