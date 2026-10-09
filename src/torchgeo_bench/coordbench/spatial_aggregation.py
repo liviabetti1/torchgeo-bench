@@ -1,3 +1,4 @@
+import logging
 from typing import Callable
 
 import numpy as np
@@ -15,6 +16,8 @@ SPATIAL_AGGREGATION_METHODS = [
 ]
 
 method_parallelized = None
+
+logger = logging.getLogger(__name__)
 
 def median_and_iqr(series):
     median = np.median(series, axis=0)
@@ -176,18 +179,24 @@ def spatial_aggregation(bench: CoordBenchmark,
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
-    buffer_size = 4000000 #~4 GB for 256-dim float32 embeddings; can expand upwards for increased speed
+    buffer_size = 1000000 #~4 GB for 256-dim float32 embeddings; can expand upwards for increased speed
     current_buffer_count = 0
 
     buffer_lat = []
     buffer_lon = []
     buffer_timestamp = []
     group_size = 0
+    j = 0
 
+    logger.info(f"Expanded dataset size is {len(df)}")
     # generates embeddings per aggregation group to avoid memory spike
     for i, group in track(grouped, f"{method} spatial aggregation"):
         group_size = group["lon"].size
+        logger.info(f"Buffering group {j} of size {group_size}")
+
         current_buffer_count += group_size
+        j+= 1
+
         buffer_lat.extend(group["lat"])
         buffer_lon.extend(group["lon"])
         buffer_timestamp.extend(group["posix_timestamp"])
@@ -195,6 +204,7 @@ def spatial_aggregation(bench: CoordBenchmark,
 
         # limit I/O to model with queries of ~1GB instead of per group
         if current_buffer_count >= buffer_size:
+            logger.info(f"Sending buffer of {current_buffer_count} datapoints for inference")
 
             emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
                                                timestamps=buffer_timestamp, group_size=group_size,
