@@ -52,7 +52,6 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--spatial-aggregation-methods", nargs="+", default=argparse.SUPPRESS
     )
-
     parser.add_argument("--device", default=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     add_output_arguments(parser)

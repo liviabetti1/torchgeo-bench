@@ -37,7 +37,9 @@ coord:
                                      #   no-timestamp benchmarks (e.g. elevation): annual, summer,
                                      #     default_date_winter, default_date_summer, concat_four_seasons
                                      #     (labels unchanged; only the embedding varies by synthetic date)
-  aggregate_embeddings: true
+  temporally_aggregate_embeddings: true
+  from_polygon: false
+  spatial_aggregation_methods: []
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers
