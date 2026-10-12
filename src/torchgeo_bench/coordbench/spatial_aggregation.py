@@ -176,7 +176,7 @@ def spatial_aggregation(bench: CoordBenchmark,
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
-    buffer_size = 1000000 #~1 GB for 256-dim float32 embeddings; can expand upwards for increased speed?
+    buffer_size = 4096 #~1 GB for 256-dim float32 embeddings; can expand upwards for increased speed?
     current_buffer_count = 0
 
     buffer_lat = []
