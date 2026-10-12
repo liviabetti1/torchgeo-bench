@@ -76,7 +76,7 @@ def _spatial_agg_with_all_emb(bench: CoordBenchmark,
     # aggregation
     for spatial_key, timestamp in track(spatial_agg_map.keys(), f"{method} aggregating by spatial key"):
         key = (spatial_key, timestamp)
-        group = np.array(spatial_agg_map[key])
+        group = np.asarray(spatial_agg_map[key])
         agg = method(group)
         emb.append(agg)
 
@@ -92,15 +92,15 @@ def _spatial_agg_with_all_emb(bench: CoordBenchmark,
                 tasks[task_name] = [task_value]
 
     for task, values in bench.tasks.items():
-        tasks[task] = np.array(tasks[task])
+        tasks[task] = np.asarray(tasks[task])
 
-    np_emb = np.array(emb)
+    np_emb = np.asarray(emb)
 
     updated_benchmark = CoordBenchmark(
         name=f"{bench.name}-spatial-{method}",
-        lat=np.array(lat),
-        lon=np.array(lon),
-        posix_timestamp=np.array(timestamps),
+        lat=np.asarray(lat),
+        lon=np.asarray(lon),
+        posix_timestamp=np.asarray(timestamps),
         tasks=tasks,
         task_type=bench.task_type,
     )
@@ -115,17 +115,17 @@ def generate_buffered_embeddings(encoder: LocationEncoder,
                                  group_size: int,
                                  emb_agg_func: Callable):
 
-    buffered_emb = encoder.encode(np.array(lon),
-                                  np.array(lat),
-                                  np.array(timestamps))
+    buffered_emb = encoder.encode(np.asarray(lon),
+                                  np.asarray(lat),
+                                  np.asarray(timestamps))
 
     embeddings = []
     # reshape embeddings to be 2D
     embedding_dimension = buffered_emb.shape[1]
-    emb_per_group = np.reshape(np.array(buffered_emb), (-1, group_size, embedding_dimension))
+    emb_per_group = np.reshape(np.asarray(buffered_emb), (-1, group_size, embedding_dimension))
     for i in range(len(emb_per_group)):
         emb = emb_per_group[i]
-        agged = emb_agg_func(np.array(emb))
+        agged = emb_agg_func(np.asarray(emb))
         embeddings.append(agged)
 
     return embeddings
@@ -157,7 +157,7 @@ def spatial_aggregation(bench: CoordBenchmark,
             assert encoder is not None, "Need encoder if embeddings are not pre-computed"
             embeddings = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
 
-        embeddings = np.array(embeddings)
+        embeddings = np.asarray(embeddings)
 
         return _spatial_agg_with_all_emb(bench, emb_agg_func, embeddings)
 
@@ -169,14 +169,13 @@ def spatial_aggregation(bench: CoordBenchmark,
 
     grouped = df.groupby([bench.spatial_aggregation_key[0], "posix_timestamp"])
 
-    finalized_rows = []
     embeddings = []
 
     agg_dictionary = {"lon": "mean", "lat": "mean", "posix_timestamp": lambda x: x.iloc[0]}
     for task_name, _ in bench.tasks.items():
         agg_dictionary[task_name] = lambda x: x.iloc[0]
 
-    buffer_size = 4096 #~1 GB for 256-dim float32 embeddings; can expand upwards for increased speed?
+    buffer_size = 4096
     current_buffer_count = 0
 
     buffer_lat = []
@@ -193,7 +192,6 @@ def spatial_aggregation(bench: CoordBenchmark,
         buffer_lat.extend(group["lat"])
         buffer_lon.extend(group["lon"])
         buffer_timestamp.extend(group["posix_timestamp"])
-        finalized_rows.append(group.agg(agg_dictionary))
 
         # limit I/O to model with queries of ~1GB instead of per group
         if current_buffer_count >= buffer_size:
@@ -208,7 +206,6 @@ def spatial_aggregation(bench: CoordBenchmark,
             buffer_lon = []
             buffer_lat = []
             buffer_timestamp = []
-            emb = None # do I need to do this to manually free the memory?
             current_buffer_count = 0
 
     if len(buffer_lon) != 0:
@@ -218,11 +215,11 @@ def spatial_aggregation(bench: CoordBenchmark,
                                                    emb_agg_func=emb_agg_func)
         embeddings.extend(remaining_emb)
 
-    finalized_df = pd.DataFrame(finalized_rows)
-    finalized_embeddings = np.array(embeddings)
+    finalized_df = grouped.agg(agg_dictionary)
+    finalized_embeddings = np.asarray(embeddings)
 
     updated_tasks = {}
-    for task_name, _ in bench.tasks:
+    for task_name, _ in bench.tasks.items():
         updated_tasks[task_name] = finalized_df[task_name].to_numpy()
 
     updated_benchmark = CoordBenchmark(
