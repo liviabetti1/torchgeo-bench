@@ -195,7 +195,6 @@ def spatial_aggregation(bench: CoordBenchmark,
 
         # limit I/O to model with queries of ~1GB instead of per group
         if current_buffer_count >= buffer_size:
-            print("Buffer filled, generating embeddings")
 
             emb = generate_buffered_embeddings(encoder=encoder, lon=buffer_lon, lat=buffer_lat,
                                                timestamps=buffer_timestamp, group_size=group_size,
