@@ -323,7 +323,7 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     combined_df = electrical_load.merge(counties, on="county", how="left")
 
     if subsample_locations:
-        combined_df["sub_sampled"] = combined_df["samples"].map(lambda items: items[:20]) # hard-coded, can go up to 1k
+        combined_df["sub_sampled"] = combined_df["samples"].map(lambda items: items[:10]) # hard-coded, can go up to 1k
         combined_df.drop("samples", axis=1, inplace=True)
 
         finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
