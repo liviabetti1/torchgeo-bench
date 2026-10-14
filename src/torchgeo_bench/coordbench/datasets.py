@@ -698,7 +698,7 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
         tasks={v: df[v].to_numpy(np.float32) for v in task_cols},
         # kept float64 for posix since it will lose second-level precision in float32
         posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
-        temporal_resolution="daily",
+        temporal_resolution=TemporalResolution.DAILY,
         year=2017
     )
     return [daily]
