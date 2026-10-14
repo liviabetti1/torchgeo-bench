@@ -35,8 +35,6 @@ logger = logging.getLogger(__name__)
 
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
-# Integrate with coordbench (right now, this is my personal repo)
-COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "liviabetti/coordbench_extension") # REMOVE 
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
@@ -149,23 +147,16 @@ def load_config(config: str) -> pd.DataFrame:
     path = hf_hub_download(COORDBENCH_REPO, f"data/{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
-def load_config_gdf(config: str, base_repo) -> gpd.GeoDataFrame:
+def load_config_gdf(config: str) -> gpd.GeoDataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(base_repo, filename=f"data/{config}/data.parquet", repo_type="dataset")
+    path = hf_hub_download(f"Temporal-Coordbench/{config}", filename="data.parquet", repo_type="dataset")
     return gpd.read_parquet(path)
 
-def load_config_extended(config: str, columns: list[str] | None = None) -> pd.DataFrame:
-    """Read one CoordBench config's normalized parquet table from HuggingFace (specifically, the extended repo).
-    Remove this if/when these datasets are integrated with Coordbench.
-
-    Args:
-        config: Config name (subdirectory under ``data/``).
-        columns: If given, only these columns are read from the parquet file.
-    """
+def load_config_temporal(config: str, columns: list[str] | None = None) -> pd.DataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(COORDBENCH_EXTENSION_REPO, f"data/{config}/data.parquet", repo_type="dataset")
+    path = hf_hub_download(f"Temporal-Coordbench/{config}", "data.parquet", repo_type="dataset")
     return pd.read_parquet(path, columns=columns)
 
 def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
@@ -317,15 +308,14 @@ def load_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.  Polygons are county-level.
     """
 
-    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
-    electrical_load = load_config_extended("electrical_load_usa_2016_2023").sample(n=1000000, random_state=42)
-    #TODO update temporal aggregation to go beyond just a year?
+    counties = load_config_gdf("usa_counties")
+    electrical_load = load_config_temporal("electrical_load_usa_2016_2023")
+
     combined_df = electrical_load.merge(counties, on="county", how="left")
-
+    #combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
+    combined_df["sub_sampled"] = combined_df["samples"].apply(lambda s: s[:100])
+    combined_df.drop("samples", axis=1, inplace=True)
     if subsample_locations:
-        combined_df["sub_sampled"] = combined_df["samples"].map(lambda items: items[:10]) # hard-coded, can go up to 1k
-        combined_df.drop("samples", axis=1, inplace=True)
-
         finalized_df = combined_df.explode("sub_sampled") # results in a column of [lon, lat]
         finalized_df['lon'] = finalized_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
         finalized_df['lat'] = finalized_df["sub_sampled"].str[1].astype("float32")
@@ -630,7 +620,7 @@ def load_soilgrids() -> list[CoordBenchmark]:
 
 def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    df = load_config_extended("era5_ecmwf_2017_daily")
+    df = load_config_temporal("era5_ecmwf_2017_daily")
     task_cols = [v for v in ERA5_ECMWF_LABELS if v in df.columns]
     df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
@@ -651,7 +641,7 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
 
 def load_chelsa_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    df = load_config_extended("chelsa_2017")
+    df = load_config_temporal("chelsa_2017")
     task_cols = [v for v in CHELSA_LABELS if v in df.columns]
     df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
@@ -731,40 +721,6 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "chelsa_monthly": load_chelsa_monthly,
     "usa_census": load_usa_census_data,
     "global_population": load_global_population,
-}
-
-
-# Benchmark names each family emits; lets a selection load only the needed family,
-# and lets callers enumerate the suite without a download.
-FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
-    "pdfm": ("pdfm-conus27",),
-    "air_temp": ("satclip-air-temp",),
-    "california_housing": ("california-housing",),
-    "satclip": (
-        "satclip-country",
-        "satclip-ecoregion",
-        "satclip-biome",
-        "satclip-population",
-        "satclip-elevation",
-    ),
-    "sustainbench": tuple(f"sustainbench-{k}" for k in SUSTAINBENCH_TASKS),
-    "better_together": (
-        "bt-cropharvest",
-        "bt-biomass",
-        "bt-landcover",
-        "bt-bioclim",
-        "bt-population",
-        "bt-distroad",
-    ),
-    "cdc_places": tuple(f"places-{k}" for k in CDC_PLACES_MEASURES),
-    "usavars": tuple(f"mosaiks-{label}" for label in USAVARS_LABELS),
-    "country": ("country",),
-    "ecoregions": ("ecoregions",),
-    "worldclim": ("worldclim-bio1", "worldclim-bio12"),
-    "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
-    "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
-    "era5_ecmwf": ("era5_ecmwf",),
-    "chelsa": ("chelsa",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
