@@ -148,10 +148,10 @@ def load_config(config: str) -> pd.DataFrame:
     path = hf_hub_download(COORDBENCH_REPO, f"data/{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
-def load_config_gdf(config: str) -> gpd.GeoDataFrame:
+def load_config_gdf(config: str, filename="data") -> gpd.GeoDataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(f"Temporal-Coordbench/{config}", filename="data.parquet", repo_type="dataset")
+    path = hf_hub_download(f"Temporal-Coordbench/{config}", filename=f"{filename}.parquet", repo_type="dataset")
     return gpd.read_parquet(path)
 
 def load_config_temporal(config: str, columns: list[str] | None = None, filename="data") -> pd.DataFrame:
@@ -307,7 +307,7 @@ def load_sustainbench() -> list[CoordBenchmark]:
 
 def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
 
-    counties = load_config_gdf("usa_counties")
+    counties = load_config_gdf("usa_electric_load","usa_counties")
 
     benchmarks = []
     # generates 8 datasets, each corresponding to one year with 1M daily datapoints
@@ -356,8 +356,8 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
 
 
 def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
-    counties = load_config_gdf("usa_counties")
-    electrical_load = load_config_temporal(repo="usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
+    counties = load_config_gdf("usa_electric_load", filename="usa_counties")
+    electrical_load = load_config_temporal("usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
     combined_df = electrical_load.merge(counties, on="county", how="left")
     if subsample_locations:
         combined_df["sub_sampled"] = combined_df["samples"].map(
@@ -397,7 +397,7 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
 
 #TODO: missing data for a few counties from 2010 to 2019
 def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmark]:
-    counties = load_config_gdf("usa_counties")
+    counties = load_config_gdf("usa_electric_load",filename="usa_counties")
     census_data = load_config_temporal("usa_census_data_2010_2025")
 
     combined_df = census_data.merge(counties, on="county", how="left")
