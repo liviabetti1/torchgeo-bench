@@ -438,7 +438,7 @@ def load_global_population(subsample_locations: bool = True) -> list[CoordBenchm
             df = df.sample(n=10_000, random_state=42)
 
         result = CoordBenchmark(
-            name="global_population",
+            name=f"global_population_{land_mass}",
             lat=df["lat"].to_numpy(np.float64),
             lon=df["lon"].to_numpy(np.float64),
             tasks={"log_population": np.log(df["population"].to_numpy(np.float64))},
