@@ -5,17 +5,22 @@ import numpy as np
 import pandas as pd
 import torch
 
-from tqdm import tqdm
-
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 from torchgeo_bench.coordbench.models import LocationEncoder
 
-GROUP_KEYS = ["lat", "lon", "window"]
+GROUP_KEYS = ["lat", "lon", "window_index"]  # keys to group by when discretizing/aggregating over time
 
+# Since Posix timestamps are in seconds
+# can convert days to seconds
+# to specify windows
 DAY_SECONDS = 24 * 60 * 60
 
 DISCRETIZATION_METHODS_TO_SECONDS = {
     "daily": DAY_SECONDS,
+    "1_week": 7 * DAY_SECONDS,
+    "2_weeks": 14 * DAY_SECONDS,
+    "4_weeks": 28 * DAY_SECONDS,
+    "13_weeks": 91 * DAY_SECONDS,
     "weekly": 7 * DAY_SECONDS,
     "biweekly": 14 * DAY_SECONDS,
     "monthly": 30 * DAY_SECONDS,
@@ -35,7 +40,7 @@ TEMPORAL_SAMPLING_MONTHS = {
 TEMPORAL_SAMPLING_METHODS = list(TEMPORAL_SAMPLING_MONTHS)
 
 EMBEDDING_AGGREGATION_METHODS = [
-    "statistics",
+    "statistics", # returns mean, min, max channel-wise; might want to add some measure of "trajectory"
     "temporal_filter",
     "sequence_model",
 ]
@@ -45,26 +50,28 @@ LABEL_STATS = ["mean", "min", "max"]
 def dataset_temporal_sampling(
     dataset: CoordBenchmark, method: str, discretization: str
 ) -> CoordBenchmark:
-    """Assign each observation a regular grid of timestamps over a window of `dataset.year`.
-
-    Args:
-        dataset: Benchmark with a year and no timestamps.
-        method: Window of the year, a key of `TEMPORAL_SAMPLING_MONTHS`.
-        discretization: Step between timestamps, a key of `DISCRETIZATION_METHODS_TO_SECONDS`.
+    """Used on datasets without timestamps.
+    For now, must specify a dataset year.
+    This function will assign each observation a regular grid of timestamps over a window of `dataset.year`.
     """
     if dataset.year is None:
         raise ValueError("Dataset must have a year to be temporally sampled.")
+    
     if method not in TEMPORAL_SAMPLING_MONTHS:
         raise ValueError(f"Unknown temporal sampling method: {method}")
+    
     if discretization not in DISCRETIZATION_METHODS_TO_SECONDS:
         raise ValueError(f"Unknown discretization method: {discretization}")
+    
     step = DISCRETIZATION_METHODS_TO_SECONDS[discretization]
+
     times = []
     for month in TEMPORAL_SAMPLING_MONTHS[method]:
         start = pd.Timestamp(year=dataset.year, month=month, day=1, tz="UTC")
         end = start + pd.offsets.MonthBegin(1)
         times.append(np.arange(int(start.timestamp()), int(end.timestamp()), step))
     times = np.concatenate(times)
+
     return CoordBenchmark(
         name=f"{dataset.name}_{method}_{discretization}",
         lat=dataset.lat,
@@ -97,36 +104,44 @@ def dataset_discretization(
 
     task_val_aggregations = ["mode"] if dataset.task_type == "classification" else LABEL_STATS
 
-    interval = DISCRETIZATION_METHODS_TO_SECONDS[method]
+    interval = DISCRETIZATION_METHODS_TO_SECONDS[method] # number of seconds in the discretization interval
     timestamp = np.asarray(dataset.posix_timestamp, dtype=np.int64)
-    elapsed = timestamp - timestamp.min()
-    span = int(elapsed.max()) + 1
+    elapsed = timestamp - timestamp.min() # time since the first observation in seconds
+    span = int(elapsed.max()) + 1   # total number of seconds in the dataset
 
     if drop_incomplete:
-        n_windows = span // interval
+        n_windows = span // interval # will only keep windows that are fully covered by the dataset
     else:
         n_windows = int(np.ceil(span / interval))
 
+    # convert into a dataframe to use pandas groupby for aggregation
     rows = pd.DataFrame({
         "lat": dataset.lat,
         "lon": dataset.lon,
-        "window": elapsed // interval,
+        "window_index": elapsed // interval, # which window each observation belongs to, i.e. an index
         "timestamp": timestamp,
         "row": np.arange(len(timestamp)),
         **dataset.tasks,
     })
-    rows = rows[rows["window"] < n_windows]
-    rows = rows.sort_values([*GROUP_KEYS, "timestamp"], kind="stable")
-    grouped = rows.groupby(GROUP_KEYS, sort=False)
+    rows = rows[rows["window_index"] < n_windows] # only keep complete windows if drop_incomplete is True
+    # group keys are lat, lon, and window_index (i.e. the temporal window)
+    rows = rows.sort_values([*GROUP_KEYS, "timestamp"], kind="stable") # sort by lat, lon, window_index, and timestamp to ensure that each group is contiguous
+    grouped = rows.groupby(GROUP_KEYS, sort=False) # group by lat, lon, and window_index to aggregate over time
 
+    # check all windows have the same number of timestamps
     window_size = grouped.size()
     if window_size.nunique() != 1:
-        raise ValueError("All windows must have the same number of timestamps.")
-    T = int(window_size.iloc[0])
+        raise ValueError("All windows must have the same number of timestamps for now -- might change later.")
+    T = int(window_size.iloc[0]) # number of timestamps per window
 
-    # Rows are sorted by (lat, lon, window, timestamp), so each consecutive run of T is one group.
+    # Rows are sorted by (lat, lon, window, timestamp),
+    # so each contiguous bloc of T rows corresponds to a single (lat, lon, window) group
+    # therefore, we can reshape the timestamps into a 2D array of shape (N, T) where N is the number of unique (lat, lon, window) groups
     timestamps = rows["timestamp"].to_numpy().reshape(-1, T) # (N, T)
 
+    # Aggregate the tasks over time for each (lat, lon, window) group
+    #f or classification tasks, we use the mode of the labels over time
+    # for regression tasks, we use the mean, min, and max of the labels over time
     aggregated = grouped.agg(**{
         f"{task}_{agg}": (task, (lambda s: s.mode().iloc[0]) if agg == "mode" else agg)
         for task in dataset.tasks
@@ -157,7 +172,7 @@ def _aggregate_embeddings(
     encoder: LocationEncoder,
     batch_size: int = 16384,
 ) -> dict[str, torch.Tensor]:
-    """Encode each location's window of timestamps and reduce over time.
+    """Encode each location's window of timestamps and "pool" over time.
 
     Args:
         lats, lons: 1D arrays of length N.
@@ -202,6 +217,7 @@ def _aggregate_embeddings(
         min_embeddings = embeddings.amin(dim=1)
         max_embeddings = embeddings.amax(dim=1)
 
+        # just checking that the shapes are correct
         assert mean_embeddings.shape == min_embeddings.shape == max_embeddings.shape == (B, embeddings.shape[-1]), (
             f"Expected shape {(B, embeddings.shape[-1])}, got mean {mean_embeddings.shape}, min {min_embeddings.shape}, max {max_embeddings.shape}"
         )
