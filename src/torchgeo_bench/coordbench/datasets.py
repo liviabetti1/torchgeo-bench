@@ -323,7 +323,7 @@ def load_sustainbench() -> list[CoordBenchmark]:
 
 def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
 
-    counties = load_config_gdf("usa_counties", f"{TEMPORAL_COORDBENCH_ORG}/usa_electrical_load")
+    counties = load_config_gdf("usa_counties", f"{TEMPORAL_COORDBENCH_ORG}usa_electric_load")
 
     benchmarks = []
     # generates 8 datasets, each corresponding to one year with 1M daily datapoints
@@ -372,7 +372,7 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
 
 
 def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
-    counties = load_config_gdf("usa_counties", f"{TEMPORAL_COORDBENCH_ORG}/usa_electrical_load")
+    counties = load_config_gdf("usa_counties", f"{TEMPORAL_COORDBENCH_ORG}usa_electric_load")
     electrical_load = load_config_temporal(repo="usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
     combined_df = electrical_load.merge(counties, on="county", how="left")
     if subsample_locations:
