@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from torchgeo_bench.coordbench.temporal_aggregation import TemporalResolution
+
 
 @dataclass
 class CoordBenchmark:
@@ -28,7 +30,7 @@ class CoordBenchmark:
     lon: np.ndarray
     tasks: dict[str, np.ndarray] = field(default_factory=dict)
     task_type: str = "regression"
-    temporal_resolution: str | None = None
+    temporal_resolution: TemporalResolution | None = None
     year: int | None = None
     posix_timestamp: np.ndarray | None = None
     test_mask: np.ndarray | None = None

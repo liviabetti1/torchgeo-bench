@@ -176,7 +176,7 @@ def _expand_temporal(
     """
     expanded: list[tuple[CoordBenchmark, np.ndarray | None]] = []
     for bench in benchmarks:
-        resolution = bench.temporal_resolution or "none"
+        resolution = bench.temporal_resolution.value or "none"
         applicable_methods = [m for m in methods if m in TEMPORAL_AGGREGATION_METHODS.get(resolution, [])]
         for method in applicable_methods:
             windowed, emb = temporal_aggregation(bench, method, encoder=encoder)

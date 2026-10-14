@@ -4,6 +4,7 @@ Labels/timestamps aggregate by mean (regression) or mode (classification).
 
 If an `encoder` is passed, embeddings are computed per-day and mean-pooled over the same windows.
 """
+from enum import Enum
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,12 @@ from rich.progress import track
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 from torchgeo_bench.coordbench.models import LocationEncoder
+
+class TemporalResolution(Enum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
 
 RESOLUTION_LABELS = {"24h": "daily"}
 
@@ -196,10 +203,10 @@ def temporal_aggregation(
     """Average each window's labels (mean/mode); mean-pool per-day embeddings if `encoder` is given.
     """
     resolution = dataset.temporal_resolution or (
-        "none" if dataset.posix_timestamp is None else _check_temporal_resolution(dataset)
+        None if dataset.posix_timestamp is None else _check_temporal_resolution(dataset)
     )
-    if resolution == "none":
+    if resolution is None:
         return _static_aggregation(dataset, method, encoder)
 
-    assert resolution == "daily", "Dataset must have daily temporal resolution for aggregation for now."
+    assert resolution == TemporalResolution.DAILY, "Dataset must have daily temporal resolution for aggregation for now."
     return _nonstatic_aggregation(dataset, method, encoder)
