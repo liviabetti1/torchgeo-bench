@@ -17,7 +17,6 @@ def spatial_aggregation(bench: CoordBenchmark,
                         method: str,
                         embeddings: np.ndarray | None,
                         encoder: LocationEncoder|None = None) ->  tuple[CoordBenchmark, np.ndarray]:
-    from IPython import embed; embed()
 
     #basic columns that will be present regardless of pre-processing steps
     df = pd.DataFrame({"lat": bench.lat,

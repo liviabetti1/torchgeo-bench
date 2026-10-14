@@ -39,6 +39,9 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--temporal-discretization-methods", nargs="+", default=argparse.SUPPRESS
     )
+    parser.add_argument("--temporal-sampling-year", type=int, default=argparse.SUPPRESS)
+
+    parser.add_argument("--temporal-sampling-methods", nargs="+", default=argparse.SUPPRESS)
     parser.add_argument(
         "--temporal-embedding-aggregation-methods", nargs="+", default=argparse.SUPPRESS
     )

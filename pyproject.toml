@@ -61,6 +61,7 @@ dependencies = [
   "tqdm>=4.66",
   # SAM3 (Sam3Model / Sam3Config) and the DPT segmentation head.
   "transformers>=5.14",
+  "xarray>=2026.9.0",
 ]
 optional-dependencies.all = [
   "torchgeo-bench[coordbench]",

@@ -7,6 +7,7 @@ cross-validation. One CSV row per (benchmark, task, method, split) is appended
 to ``output.file`` via the shared atomic writer, with resume support.
 """
 
+import itertools
 import logging
 import os
 import time
@@ -30,6 +31,7 @@ from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import (
     discretize_dataset_and_aggregate_embeddings,
+    temporal_sample_and_aggregate_embeddings,
 )
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
@@ -175,6 +177,7 @@ def _evaluation_split(
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     discretization_methods: Sequence[str],
+    temporal_sampling_methods: Sequence[str],
     embedding_aggregation_methods: Sequence[str] = ("statistics",),
     *,
     encoder: LocationEncoder,
@@ -182,8 +185,19 @@ def _expand_temporal(
     """Discretize each timestamped benchmark per (discretization, aggregation) pair."""
     for bench in benchmarks:
         if bench.posix_timestamp is None:
-            yield bench, None
+            if temporal_sampling_methods is not None and len(temporal_sampling_methods) > 0:
+                for sampling, discretization, aggregation in itertools.product(
+                    temporal_sampling_methods, discretization_methods, embedding_aggregation_methods
+                ):
+                    sampled, embeddings = temporal_sample_and_aggregate_embeddings(
+                        bench, encoder, sampling, discretization, aggregation
+                    )
+                    print("For now, only returning the mean embeddings")
+                    yield sampled, embeddings["mean"].numpy()
+            else:
+                yield bench, None
             continue
+        
         label_stat = "mode" if bench.task_type == "classification" else "mean"
         for discretization in discretization_methods:
             for aggregation in embedding_aggregation_methods:
@@ -214,7 +228,13 @@ def _expected_benchmark_count(
         methods_per_timestamp = len(coord.temporal_discretization_methods) * len(
             coord.temporal_embedding_aggregation_methods
         )
-    count = with_timestamp * methods_per_timestamp + without_timestamp
+    sampled = sum(b.posix_timestamp is None and b.year is not None for b in benchmarks)
+    sampled *= (
+        len(coord.temporal_sampling_methods)
+        * len(coord.temporal_discretization_methods)
+        * len(coord.temporal_embedding_aggregation_methods)
+    )
+    count = with_timestamp * methods_per_timestamp + without_timestamp + sampled
     if coord.from_polygon:
         count *= sum(m in SPATIAL_AGGREGATION_METHODS for m in coord.spatial_aggregation_methods)
     return count
@@ -251,6 +271,8 @@ def run_coordbench(cfg: CoordConfig) -> None:
     knn_device = coord.knn_device
     methods = coord.methods
     temporal_discretization_methods = list(coord.temporal_discretization_methods)
+    temporal_sampling_methods = list(coord.temporal_sampling_methods)
+    temporal_embedding_aggregation_methods = list(coord.temporal_embedding_aggregation_methods)
     from_polygon = coord.from_polygon
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
@@ -271,13 +293,21 @@ def run_coordbench(cfg: CoordConfig) -> None:
     t0 = time.perf_counter()
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
     benchmarks = load_benchmarks(names)
+
+    if coord.temporal_sampling_year is not None:
+        for bench in benchmarks:
+            if bench.posix_timestamp is None:
+                bench.year = coord.temporal_sampling_year
+
+
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
-    if temporal_discretization_methods:
+    if temporal_discretization_methods or temporal_sampling_methods:
         all_benchmarks = _expand_temporal(
             benchmarks,
             temporal_discretization_methods,
-            coord.temporal_embedding_aggregation_methods,
+            temporal_sampling_methods,
+            temporal_embedding_aggregation_methods,
             encoder=encoder,
         )
     else:

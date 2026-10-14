@@ -15,12 +15,24 @@ GROUP_KEYS = ["lat", "lon", "window"]
 DAY_SECONDS = 24 * 60 * 60
 
 DISCRETIZATION_METHODS_TO_SECONDS = {
+    "daily": DAY_SECONDS,
     "weekly": 7 * DAY_SECONDS,
     "biweekly": 14 * DAY_SECONDS,
     "monthly": 30 * DAY_SECONDS,
     "seasonally": 90 * DAY_SECONDS,
     "yearly": 365 * DAY_SECONDS,
 }
+
+# Calendar months of `dataset.year` covered by each window
+# To try to capture seasons
+TEMPORAL_SAMPLING_MONTHS = {
+    "year": list(range(1, 13)),
+    "spring": [3, 4, 5],
+    "summer": [6, 7, 8],
+    "fall": [9, 10, 11],
+    "winter": [12, 1, 2],
+}
+TEMPORAL_SAMPLING_METHODS = list(TEMPORAL_SAMPLING_MONTHS)
 
 EMBEDDING_AGGREGATION_METHODS = [
     "statistics",
@@ -29,6 +41,41 @@ EMBEDDING_AGGREGATION_METHODS = [
 ]
 
 LABEL_STATS = ["mean", "min", "max"]
+
+def dataset_temporal_sampling(
+    dataset: CoordBenchmark, method: str, discretization: str
+) -> CoordBenchmark:
+    """Assign each observation a regular grid of timestamps over a window of `dataset.year`.
+
+    Args:
+        dataset: Benchmark with a year and no timestamps.
+        method: Window of the year, a key of `TEMPORAL_SAMPLING_MONTHS`.
+        discretization: Step between timestamps, a key of `DISCRETIZATION_METHODS_TO_SECONDS`.
+    """
+    if dataset.year is None:
+        raise ValueError("Dataset must have a year to be temporally sampled.")
+    if method not in TEMPORAL_SAMPLING_MONTHS:
+        raise ValueError(f"Unknown temporal sampling method: {method}")
+    if discretization not in DISCRETIZATION_METHODS_TO_SECONDS:
+        raise ValueError(f"Unknown discretization method: {discretization}")
+    step = DISCRETIZATION_METHODS_TO_SECONDS[discretization]
+    times = []
+    for month in TEMPORAL_SAMPLING_MONTHS[method]:
+        start = pd.Timestamp(year=dataset.year, month=month, day=1, tz="UTC")
+        end = start + pd.offsets.MonthBegin(1)
+        times.append(np.arange(int(start.timestamp()), int(end.timestamp()), step))
+    times = np.concatenate(times)
+    return CoordBenchmark(
+        name=f"{dataset.name}_{method}_{discretization}",
+        lat=dataset.lat,
+        lon=dataset.lon,
+        tasks=dataset.tasks,
+        task_type=dataset.task_type,
+        temporal_resolution=f"{method}/{discretization}",
+        year=dataset.year,
+        posix_timestamp=np.tile(times, (len(dataset.lat), 1)),
+        spatial_aggregation_key=dataset.spatial_aggregation_key,
+    )
 
 
 def dataset_discretization(
@@ -210,6 +257,40 @@ def discretize_dataset_and_aggregate_embeddings(
     print(f"Aggregated embeddings in {t2 - t1:.2f} seconds. {aggregated_embeddings['mean'].shape[0]} locations, {aggregated_embeddings['mean'].shape[1]} embedding dimensions.")
 
     return discretized_dataset, aggregated_embeddings
+
+def temporal_sample_and_aggregate_embeddings(
+    dataset: CoordBenchmark,
+    encoder: LocationEncoder,
+    temporal_sampling_method: str,
+    discretization_method: str,
+    embedding_aggregation_method: str = "statistics",
+    batch_size: int = 16384,
+) -> tuple[CoordBenchmark, tuple[torch.Tensor, ...]]:
+    """Generate and aggregate temporal embeddings for a temporally sampled dataset.
+
+    Returns:
+        Original dataset and (mean, min, max) embeddings,
+        each of shape (N, D).
+    """
+
+    if dataset.posix_timestamp is not None:
+        raise ValueError("This method should only be used on datasets with no timestamps.")
+
+    if embedding_aggregation_method not in EMBEDDING_AGGREGATION_METHODS:
+        raise ValueError(f"Unknown aggregation method: {embedding_aggregation_method}")
+
+    temporally_sampled_dataset = dataset_temporal_sampling(
+        dataset, temporal_sampling_method, discretization_method
+    )
+    aggregated_embeddings = _aggregate_embeddings(
+        lats=temporally_sampled_dataset.lat,
+        lons=temporally_sampled_dataset.lon,
+        timestamps=np.asarray(temporally_sampled_dataset.posix_timestamp, dtype=np.int64),
+        encoder=encoder,
+        batch_size=batch_size,
+    )
+
+    return temporally_sampled_dataset, aggregated_embeddings
 
 
 if __name__ == "__main__":

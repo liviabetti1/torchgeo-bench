@@ -141,7 +141,9 @@ def test_all_typed_flags() -> None:
         "ridge_alphas": [0.1, 1.0, 10.0],
         "knn_k": 7,
         "knn_device": "cpu",
-        "skip_no_timestamp": True, # new config addition for temporal tasks
+        "skip_no_timestamp": False, # new config addition for temporal tasks
+        "temporal_sampling_year": None,
+        "temporal_sampling_methods": [], # new config addition for temporal tasks
         "temporal_discretization_methods": [], # new config addition for temporal tasks
         "temporal_embedding_aggregation_methods": ["statistics"],
         "from_polygon": False, # new config addition for spatial aggregation

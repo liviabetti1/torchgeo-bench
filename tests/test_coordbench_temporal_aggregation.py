@@ -69,7 +69,7 @@ def test_aggregation_rejects_unknown_method():
 )
 def test_expand_temporal_keeps_only_mean_targets(task_type, task):
     ((bench, features),) = _expand_temporal(
-        [_daily_benchmark(task_type)], ["weekly"], encoder=DayEncoder()
+        [_daily_benchmark(task_type)], ["weekly"], [], encoder=DayEncoder()
     )
 
     assert list(bench.tasks) == [task]
@@ -81,4 +81,17 @@ def test_expand_temporal_passes_through_untimestamped_benchmarks():
     bench = CoordBenchmark(
         name="static", lat=np.zeros(3), lon=np.zeros(3), tasks={"y": np.arange(3.0)}
     )
-    assert list(_expand_temporal([bench], ["weekly"], encoder=DayEncoder())) == [(bench, None)]
+    assert list(_expand_temporal([bench], ["weekly"], [], encoder=DayEncoder())) == [(bench, None)]
+
+
+def test_expand_temporal_samples_a_season_of_untimestamped_benchmarks():
+    bench = CoordBenchmark(
+        name="static", lat=np.zeros(3), lon=np.zeros(3), tasks={"y": np.arange(3.0)}, year=2017
+    )
+    ((sampled, features),) = _expand_temporal(
+        [bench], ["weekly"], ["summer"], encoder=DayEncoder()
+    )
+
+    assert sampled.posix_timestamp.shape == (3, 15)  # weekly steps from Jun 1, Jul 1, Aug 1
+    assert sampled.temporal_resolution == "summer/weekly"
+    assert features.shape == (3, 1)
