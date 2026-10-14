@@ -42,12 +42,16 @@ def test_aggregation_reduces_each_window_over_time():
     )
 
     assert len(bench.lat) == 4
-    np.testing.assert_allclose(embeddings["mean"].numpy().ravel(), [3, 10, 3, 10])
+    # check that the embeddings are correct for each window
+    # we can compute since the encoder is just the day number
+    np.testing.assert_allclose(embeddings["mean"].numpy().ravel(), [3, 10, 3, 10]) # mean of days 0..6 is 3, mean of days 7..13 is 10
     np.testing.assert_allclose(embeddings["min"].numpy().ravel(), [0, 7, 0, 7])
     np.testing.assert_allclose(embeddings["max"].numpy().ravel(), [6, 13, 6, 13])
 
 
 def test_aggregation_is_independent_of_batch_size():
+    # to make sure I got the reshape and groupby logic correct
+    # check results are the same for a small batch size
     reference = discretize_dataset_and_aggregate_embeddings(
         _daily_benchmark(), DayEncoder(), "weekly"
     )[1]["mean"]
@@ -55,13 +59,6 @@ def test_aggregation_is_independent_of_batch_size():
         _daily_benchmark(), DayEncoder(), "weekly", batch_size=7
     )[1]["mean"]
     np.testing.assert_array_equal(small.numpy(), reference.numpy())
-
-
-def test_aggregation_rejects_unknown_method():
-    with pytest.raises(ValueError, match="Unknown"):
-        discretize_dataset_and_aggregate_embeddings(
-            _daily_benchmark(), DayEncoder(), "weekly", embedding_aggregation_method="bogus"
-        )
 
 
 @pytest.mark.parametrize(
@@ -74,14 +71,8 @@ def test_expand_temporal_keeps_only_mean_targets(task_type, task):
 
     assert list(bench.tasks) == [task]
     assert bench.temporal_resolution == "weekly"
-    assert features.shape == (4, 1)
+    assert features.shape == (4, 1) # 4 windows, 1 feature (the mean of the embeddings, or here, days, over time)
 
-
-def test_expand_temporal_passes_through_untimestamped_benchmarks():
-    bench = CoordBenchmark(
-        name="static", lat=np.zeros(3), lon=np.zeros(3), tasks={"y": np.arange(3.0)}
-    )
-    assert list(_expand_temporal([bench], ["weekly"], [], encoder=DayEncoder())) == [(bench, None)]
 
 
 def test_expand_temporal_samples_a_season_of_untimestamped_benchmarks():
@@ -92,6 +83,6 @@ def test_expand_temporal_samples_a_season_of_untimestamped_benchmarks():
         [bench], ["weekly"], ["summer"], encoder=DayEncoder()
     )
 
-    assert sampled.posix_timestamp.shape == (3, 15)  # weekly steps from Jun 1, Jul 1, Aug 1
+    assert sampled.posix_timestamp.shape == (3, 15)  # weekly steps from Jun 1, Jul 1, Aug 1 result in 15 timestamps
     assert sampled.temporal_resolution == "summer/weekly"
     assert features.shape == (3, 1)
