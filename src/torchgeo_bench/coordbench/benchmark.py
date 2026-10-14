@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from torchgeo_bench.coordbench.temporal_aggregation import TemporalResolution
+from torchgeo_bench.coordbench.config_enums import TemporalResolution
 
 
 @dataclass
