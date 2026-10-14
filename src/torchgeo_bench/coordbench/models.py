@@ -169,8 +169,8 @@ class GTLocEncoder(LocationEncoder):
     def _encode(self, lon: np.ndarray, lat: np.ndarray, posix_timestamp: np.ndarray | None) -> np.ndarray:
         if posix_timestamp is None:
             raise ValueError("GTLoc requires per-point posix_timestamp for temporal features")
-        latlon = torch.stack([torch.as_tensor(lat), torch.as_tensor(lon)], dim=1).float()
-        posix_timestamp = torch.as_tensor(posix_timestamp).to(self.device)
+        latlon = torch.stack([torch.tensor(lat), torch.tensor(lon)], dim=1).float()
+        posix_timestamp = torch.tensor(posix_timestamp).to(self.device)
         emb = self.model(latlon.to(self.device), posix_timestamp)
         return emb.float().cpu().numpy()[:, : self.dim]
 
@@ -191,7 +191,7 @@ class _RSHFEncoder(LocationEncoder):
     @torch.no_grad()
     def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
         first, second = (lon, lat) if self.coord_order == "lonlat" else (lat, lon)
-        x = torch.stack([torch.as_tensor(first), torch.as_tensor(second)], dim=1).to(
+        x = torch.stack([torch.tensor(first), torch.tensor(second)], dim=1).to(
             self.device, self.dtype
         )
         return self.model(x).float().cpu().numpy()

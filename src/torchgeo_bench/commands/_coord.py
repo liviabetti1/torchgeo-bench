@@ -7,7 +7,6 @@ import yaml
 
 from torchgeo_bench.coordbench.config import CoordConfig, resolve_coord_preset
 
-from ._common import setup_logging
 from ._config import OUTPUT_FLAG_OVERRIDES, FlagOverride, load_config_or_exit, load_from_flags
 
 _FLAG_OVERRIDES = (
@@ -21,8 +20,10 @@ _FLAG_OVERRIDES = (
     FlagOverride("knn_k", ("evaluation", "knn_k")),
     FlagOverride("knn_device", ("evaluation", "knn_device")),
     FlagOverride("skip_no_timestamps", ("evaluation", "skip_no_timestamp")),
-    FlagOverride("temporal_aggregation_methods", ("evaluation", "temporal_aggregation_methods")),
-    FlagOverride("temporally_aggregate_embeddings", ("evaluation", "temporally_aggregate_embeddings")),
+    FlagOverride("temporal_discretization_methods", ("evaluation", "temporal_discretization_methods")),
+    FlagOverride("temporal_sampling_year", ("evaluation", "temporal_sampling_year")),
+    FlagOverride("temporal_sampling_methods", ("evaluation", "temporal_sampling_methods")),
+    FlagOverride("temporal_embedding_aggregation_methods", ("evaluation", "temporal_embedding_aggregation_methods")),
     FlagOverride("from_polygon", ("evaluation", "from_polygon")),
     FlagOverride("spatial_aggregation_methods", ("evaluation", "spatial_aggregation_methods")),
     FlagOverride("device", ("runtime", "device")),
@@ -52,7 +53,6 @@ def run(args: argparse.Namespace) -> None:
         return
     from torchgeo_bench.coordbench.run import run_coordbench
 
-    #setup_logging(verbose=True)
     run_coordbench(config)
 
 

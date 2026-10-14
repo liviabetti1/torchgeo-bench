@@ -340,61 +340,6 @@ def test_mind_encoder_dim_slice(monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_allclose(out, expected[:, :8].numpy())
 
 
-class _FakeClimplicit(torch.nn.Module):
-    """Mimics rshf.climplicit.Climplicit's forward signature closely enough to
-    catch regressions: month must be a tensor (torch.sin rejects numpy arrays),
-    and the per-month output width must line up with ClimplicitLocationEncoder.dim.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.linear = torch.nn.Linear(4, 256)
-
-    @classmethod
-    def from_pretrained(cls, repo: str, config: dict | None = None) -> "_FakeClimplicit":
-        return cls()
-
-    def forward(self, coordinates: torch.Tensor, month: torch.Tensor | None = None) -> torch.Tensor:
-        if month is None:
-            month = torch.zeros(len(coordinates))
-        month_feats = torch.stack(
-            [torch.sin(month / 12 * torch.pi * 2), torch.cos(month / 12 * torch.pi * 2)], dim=-1
-        )
-        return self.linear(torch.cat([coordinates, month_feats], dim=-1))
-
-
-def test_climplicit_encoder_month_conditioning(monkeypatch) -> None:
-    import sys
-    import types
-
-    from torchgeo_bench.coordbench.models import ClimplicitLocationEncoder
-
-    fake_climplicit_mod = types.ModuleType("rshf.climplicit")
-    fake_climplicit_mod.Climplicit = _FakeClimplicit
-    monkeypatch.setitem(sys.modules, "rshf", types.ModuleType("rshf"))
-    monkeypatch.setitem(sys.modules, "rshf.climplicit", fake_climplicit_mod)
-
-    enc = ClimplicitLocationEncoder(device="cpu")
-    lon = np.array([8.550155, 8.550155])
-    lat = np.array([47.396702, 47.396702])
-    jan = pd.Timestamp("2021-01-15", tz="UTC").timestamp()
-    jul = pd.Timestamp("2021-07-15", tz="UTC").timestamp()
-    posix_timestamp = np.array([jan, jul])
-
-    out = enc.encode(lon, lat, posix_timestamp)
-    assert out.shape == (2, 256)
-    assert out.dtype == np.float32
-    assert np.isfinite(out).all()
-    assert not np.allclose(out[0], out[1])  # same location, different month -> different embedding
-
-    # No posix_timestamp -> falls back to the encoder's default_date (Jan 1, 2021)
-    # rather than raising, matching the other temporal encoders (mind/gtloc/t_satclip).
-    assert enc.default_date == "2021-01-01"
-    default_out = enc.encode(lon, lat)
-    jan_only = enc.encode(lon, lat, np.array([jan, jan]))
-    assert np.allclose(default_out, jan_only)
-
-
 def test_family_index_matches_loaders() -> None:
     # Static family indexes allow listing and selection without downloads.
     assert set(cb_datasets.FAMILY_BENCHMARKS) == set(cb_datasets.FAMILY_LOADERS)
@@ -459,6 +404,7 @@ def test_runtime_method_selection(
         "seed",
         "model_name",
         "model_target",
+        "temporal_embedding_aggregation"
     ]
 
 

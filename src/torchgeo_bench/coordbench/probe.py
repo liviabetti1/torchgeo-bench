@@ -176,7 +176,7 @@ def _cv_alpha_scores(
             best_mean, best_alpha, best_scores = mean_score, a, scores
     if len(alphas) > 1 and best_alpha in (alphas[0], alphas[-1]):
         warnings.warn(
-            f"ridge alpha selected at grid edge ({best_alpha:g}); widen RIDGE_ALPHAS",
+            "ridge alpha selected at grid edge; widen RIDGE_ALPHAS",
             stacklevel=2,
         )
     return best_alpha, best_scores
