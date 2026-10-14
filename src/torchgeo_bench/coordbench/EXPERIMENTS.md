@@ -68,3 +68,36 @@ Electrical load data in the US from 2016-2023. This is daily data at the county 
 Yearly USA population data from 2010-2025.
 
 > **TODO:** still need a bash script for this.
+
+# Temporal Aggregation Experiments
+
+We have two categories of experiments, depending on whether the dataset carries timestamps.
+
+## Datasets with timestamps
+
+Timestamps are discretized into windows of a chosen resolution (e.g. `1_week`, `2_week`). Each location's samples that fall within a window are then aggregated into a single embedding.
+
+Note, you can specify 1_week or weekly, 2_week or biweekly,...
+
+## Datasets without timestamps (static)
+
+Timestamps are *sampled* for each location across a specified time frame (`year`, `spring`, `summer`, `fall`, `winter`). The same discretization resolutions apply, which controls how densely points are sampled within that frame.
+
+Note that for this, you have to specify `--temporal-sampling-year` (since some models with time input require year...)
+
+## Implementation
+
+We now have two steps to this process:
+
+1. **Discretization / temporal sampling** — produces a dataset where each row is a `(lat, lon, time_window)` tuple.
+2. **Embedding generation and aggregation** — generates an embedding per timestamp and aggregates across the window. The default aggregation is *statistical*, which returns channelwise mean, max, and min; `run.py` currently uses only the mean.
+
+## Summary of flags now
+
+| Flag | Description |
+|------|-------------|
+| `--temporal-discretization-methods` | Window sizes for datasets that already have timestamps (e.g. `1_week`, `2_weeks`, `4_weeks`, `13_weeks`) |
+| `--temporal-sampling-methods` | Time frame to sample for static datasets (`year`, `spring`, `summer`, `fall`, `winter`) |
+| `--temporal-sampling-year` | Calendar year to sample timestamps from (required for static datasets) |
+| `--temporal-embedding-aggregation-methods` | How to pool per-timestamp embeddings into one vector (default: `statistics`, which computes channelwise mean, min, and max; only the mean is used downstream) |
+| `--skip-no-timestamps` | Skip benchmarks that have no native timestamps (useful when only temporal models are being evaluated) |
