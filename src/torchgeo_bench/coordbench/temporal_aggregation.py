@@ -108,7 +108,7 @@ def _aggregate_embeddings(
     lons: np.ndarray,
     timestamps: np.ndarray,
     encoder: LocationEncoder,
-    batch_size: int = 4096,
+    batch_size: int = 16384,
 ) -> dict[str, torch.Tensor]:
     """Encode each location's window of timestamps and reduce over time.
 
@@ -178,7 +178,7 @@ def discretize_dataset_and_aggregate_embeddings(
     encoder: LocationEncoder,
     discretization_method: str,
     embedding_aggregation_method: str = "statistics",
-    batch_size: int = 4096,
+    batch_size: int = 16384,
 ) -> tuple[CoordBenchmark, tuple[torch.Tensor, ...]]:
     """Generate and aggregate temporal embeddings for a discretized dataset.
 

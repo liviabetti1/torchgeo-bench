@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
 # Integrate with coordbench (right now, this is my personal repo)
-COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "liviabetti/coordbench_extension") # REMOVE 
+TEMPORAL_COORDBENCH_REPO = os.environ.get("TEMPORAL_COORDBENCH_REPO", "Temporal-Coordbench/") 
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
@@ -140,17 +140,10 @@ def load_config_gdf(config: str, base_repo) -> gpd.GeoDataFrame:
     path = hf_hub_download(base_repo, filename=f"data/{config}/data.parquet", repo_type="dataset")
     return gpd.read_parquet(path)
 
-def load_config_extended(config: str, columns: list[str] | None = None) -> pd.DataFrame:
-    """Read one CoordBench config's normalized parquet table from HuggingFace (specifically, the extended repo).
-    Remove this if/when these datasets are integrated with Coordbench.
-
-    Args:
-        config: Config name (subdirectory under ``data/``).
-        columns: If given, only these columns are read from the parquet file.
-    """
+def load_config_temporal(config: str, columns: list[str] | None = None) -> pd.DataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(COORDBENCH_EXTENSION_REPO, f"data/{config}/data.parquet", repo_type="dataset")
+    path = hf_hub_download(TEMPORAL_COORDBENCH_REPO, f"{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path, columns=columns)
 
 def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
@@ -302,8 +295,8 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
 
-    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
-    electrical_load = load_config_extended("electrical_load_usa_2016_2023")
+    counties = load_config_gdf("usa_counties", TEMPORAL_COORDBENCH_REPO)
+    electrical_load = load_config_temporal("electrical_load_usa_2016_2023")
 
     combined_df = electrical_load.merge(counties, on="county", how="left")
     #combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
@@ -333,8 +326,8 @@ def load_usa_population_yearly() -> list[CoordBenchmark]:
     """ Coninual USA county-level yearly census data 2010-2025
     """
 
-    counties = load_config_gdf("usa_counties", COORDBENCH_EXTENSION_REPO)
-    population_data = load_config_extended("usa_population_yearly_2010_2025")
+    counties = load_config_gdf("usa_counties", TEMPORAL_COORDBENCH_REPO)
+    population_data = load_config_temporal("usa_population_yearly_2010_2025")
 
     combined_df = population_data.merge(counties, on="county", how="left")
     #combined_df["sub_sampled"] = combined_df["samples"][:100] #hard-coded, but we can go up to 1k for num samples per county
@@ -560,7 +553,7 @@ def load_soilgrids() -> list[CoordBenchmark]:
 
 def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    df = load_config_extended("era5_ecmwf_2017_daily")
+    df = load_config_temporal("era5_ecmwf_2017_daily")
     task_cols = [v for v in ERA5_ECMWF_LABELS if v in df.columns]
     df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
@@ -581,7 +574,7 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
 
 def load_chelsa(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    df = load_config_extended("chelsa_2017")
+    df = load_config_temporal("chelsa_2017")
     task_cols = [v for v in CHELSA_LABELS if v in df.columns]
     df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
