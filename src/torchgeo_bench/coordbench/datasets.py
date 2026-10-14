@@ -160,7 +160,7 @@ def load_config_gdf(filename: str, base_repo) -> gpd.GeoDataFrame:
 
 def load_config_temporal(repo: str, filename: str) -> pd.DataFrame:
     from huggingface_hub import hf_hub_download
-    path = hf_hub_download(f"{TEMPORAL_COORDBENCH_ORG}/{repo}", filename=f"{filename}.parquet", repo_type="dataset")
+    path = hf_hub_download(f"{TEMPORAL_COORDBENCH_ORG}{repo}", filename=f"{filename}.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
 def load_config_extended(config: str, columns: list[str] | None = None) -> pd.DataFrame:
