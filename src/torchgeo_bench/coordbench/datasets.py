@@ -154,10 +154,10 @@ def load_config_gdf(config: str) -> gpd.GeoDataFrame:
     path = hf_hub_download(f"Temporal-Coordbench/{config}", filename="data.parquet", repo_type="dataset")
     return gpd.read_parquet(path)
 
-def load_config_temporal(config: str, columns: list[str] | None = None) -> pd.DataFrame:
+def load_config_temporal(config: str, columns: list[str] | None = None, filename="data") -> pd.DataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(f"Temporal-Coordbench/{config}", "data.parquet", repo_type="dataset")
+    path = hf_hub_download(f"Temporal-Coordbench/{config}", f"{filename}.parquet", repo_type="dataset")
     return pd.read_parquet(path, columns=columns)
 
 def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
@@ -307,12 +307,12 @@ def load_sustainbench() -> list[CoordBenchmark]:
 
 def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
 
-    counties = load_config_gdf("usa_counties", f"{TEMPORAL_COORDBENCH_ORG}usa_electric_load")
+    counties = load_config_gdf("usa_counties")
 
     benchmarks = []
     # generates 8 datasets, each corresponding to one year with 1M daily datapoints
     for year in range(2016, 2024):
-        electrical_load = load_config_temporal(repo="usa_electric_load", filename=f"usa_electrical_load_{year}")
+        electrical_load = load_config_temporal("usa_electric_load", filename=f"usa_electrical_load_{year}")
         combined_df = electrical_load.merge(counties, on="county", how="left")
 
         if subsample_locations:
@@ -356,7 +356,7 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
 
 
 def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
-    counties = load_config_gdf("usa_counties", f"{TEMPORAL_COORDBENCH_ORG}usa_electric_load")
+    counties = load_config_gdf("usa_counties")
     electrical_load = load_config_temporal(repo="usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
     combined_df = electrical_load.merge(counties, on="county", how="left")
     if subsample_locations:
@@ -397,8 +397,8 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
 
 #TODO: missing data for a few counties from 2010 to 2019
 def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmark]:
-    counties = load_config_gdf("counties", COORDBENCH_EXTENSION_REPO)
-    census_data = load_config_extended("usa_census_data_2010_2025")
+    counties = load_config_gdf("usa_counties")
+    census_data = load_config_temporal("usa_census_data_2010_2025")
 
     combined_df = census_data.merge(counties, on="county", how="left")
 
@@ -433,7 +433,7 @@ def load_global_population(subsample_locations: bool = True) -> list[CoordBenchm
 
     benchmarks = []
     for land_mass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]:
-        df = load_config_temporal(repo="world_population", filename=f"{land_mass}_2015_to_2025")
+        df = load_config_temporal("world_population", filename=f"{land_mass}_2015_to_2025")
         if subsample_locations:
             df = df.sample(n=10_000, random_state=42)
 
@@ -453,7 +453,7 @@ def load_global_population(subsample_locations: bool = True) -> list[CoordBenchm
 
 def load_chelsa_monthly(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """Monthly CHELSA 1km resolution climate data from 2011 to 2018"""
-    df = load_config_extended("chelsa_monthly") #TODO ensure path is correct
+    df = load_config_temporal("chelsa_monthly")
 
     if subsample_locations:
         pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
