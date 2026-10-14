@@ -336,6 +336,7 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
             if task_name not in finalized_df.columns:
                 continue
             tasks[task_name] = finalized_df[task_name].to_numpy(np.float64)
+            finalized_df[task_name] += 1 # to avoid div/0 for log
             tasks[f"{task_name}_log"] = np.log(finalized_df[task_name])
 
 
@@ -380,6 +381,7 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
         if task_name not in finalized_df.columns:
             continue
         tasks[task_name] = finalized_df[task_name].to_numpy(np.float64) #remove if log norm is the better task
+        finalized_df[task_name] += 1
         tasks[f"{task_name}_log"] = np.log(finalized_df[task_name])
 
     ds = CoordBenchmark(
@@ -436,6 +438,8 @@ def load_global_population(subsample_locations: bool = True) -> list[CoordBenchm
         df = load_config_temporal("world_population", filename=f"{land_mass}_2015_to_2025")
         if subsample_locations:
             df = df.sample(n=10_000, random_state=42)
+
+        df["population"] += 1 # to avoid div/0 issues when taking log
 
         result = CoordBenchmark(
             name=f"global_population_{land_mass}",
