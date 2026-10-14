@@ -132,5 +132,6 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
     "era5_ecmwf": ("era5_ecmwf",),
     "chelsa": ("chelsa",),
-    "usa_electric_usage": tuple(f"usa_electric_usage-{col}" for col in ELECTRIC_LOAD_VARIABLES),
+    "usa_electric_load_daily": [f"usa_daily_electric_load_{year}" for year in range(2016, 2024)],
+    "usa_electric_load_weekly" : ("usa_electric_load_weekly",),
 }
