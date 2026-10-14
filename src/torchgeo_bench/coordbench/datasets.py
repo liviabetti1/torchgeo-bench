@@ -30,7 +30,7 @@ from torchgeo_bench.coordbench.catalog import (
 )
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
-from torchgeo_bench.coordbench.temporal_aggregation import TemporalResolution
+from torchgeo_bench.coordbench.config_enums import TemporalResolution
 
 logger = logging.getLogger(__name__)
 

@@ -4,20 +4,14 @@ Labels/timestamps aggregate by mean (regression) or mode (classification).
 
 If an `encoder` is passed, embeddings are computed per-day and mean-pooled over the same windows.
 """
-from enum import Enum
 
 import numpy as np
 import pandas as pd
 from rich.progress import track
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
+from torchgeo_bench.coordbench.config_enums import TemporalResolution
 from torchgeo_bench.coordbench.models import LocationEncoder
-
-class TemporalResolution(Enum):
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    YEARLY = "yearly"
 
 RESOLUTION_LABELS = {"24h": "daily"}
 
