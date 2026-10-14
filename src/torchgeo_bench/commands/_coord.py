@@ -22,7 +22,6 @@ _FLAG_OVERRIDES = (
     FlagOverride("skip_no_timestamps", ("evaluation", "skip_no_timestamp")),
     FlagOverride("temporal_discretization_methods", ("evaluation", "temporal_discretization_methods")),
     FlagOverride("temporal_sampling_year", ("evaluation", "temporal_sampling_year")),
-
     FlagOverride("temporal_sampling_methods", ("evaluation", "temporal_sampling_methods")),
     FlagOverride("temporal_embedding_aggregation_methods", ("evaluation", "temporal_embedding_aggregation_methods")),
     FlagOverride("from_polygon", ("evaluation", "from_polygon")),

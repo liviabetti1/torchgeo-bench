@@ -35,8 +35,6 @@ logger = logging.getLogger(__name__)
 
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
-# Integrate with coordbench (right now, this is my personal repo)
-TEMPORAL_COORDBENCH_REPO = os.environ.get("TEMPORAL_COORDBENCH_REPO", "Temporal-Coordbench/") 
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
@@ -134,16 +132,16 @@ def load_config(config: str) -> pd.DataFrame:
     path = hf_hub_download(COORDBENCH_REPO, f"data/{config}/data.parquet", repo_type="dataset")
     return pd.read_parquet(path)
 
-def load_config_gdf(config: str, base_repo) -> gpd.GeoDataFrame:
+def load_config_gdf(config: str) -> gpd.GeoDataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(base_repo, filename=f"data/{config}/data.parquet", repo_type="dataset")
+    path = hf_hub_download(f"Temporal-Coordbench/{config}", filename="data.parquet", repo_type="dataset")
     return gpd.read_parquet(path)
 
 def load_config_temporal(config: str, columns: list[str] | None = None) -> pd.DataFrame:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(TEMPORAL_COORDBENCH_REPO, f"{config}/data.parquet", repo_type="dataset")
+    path = hf_hub_download(f"Temporal-Coordbench/{config}", "data.parquet", repo_type="dataset")
     return pd.read_parquet(path, columns=columns)
 
 def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
@@ -295,7 +293,7 @@ def load_usa_electric_usage() -> list[CoordBenchmark]:
     Data is hourly and aggregated to a vector of daily mean/min/max/median.
     """
 
-    counties = load_config_gdf("usa_counties", TEMPORAL_COORDBENCH_REPO)
+    counties = load_config_gdf("usa_counties")
     electrical_load = load_config_temporal("electrical_load_usa_2016_2023")
 
     combined_df = electrical_load.merge(counties, on="county", how="left")
@@ -326,7 +324,7 @@ def load_usa_population_yearly() -> list[CoordBenchmark]:
     """ Coninual USA county-level yearly census data 2010-2025
     """
 
-    counties = load_config_gdf("usa_counties", TEMPORAL_COORDBENCH_REPO)
+    counties = load_config_gdf("usa_counties")
     population_data = load_config_temporal("usa_population_yearly_2010_2025")
 
     combined_df = population_data.merge(counties, on="county", how="left")
