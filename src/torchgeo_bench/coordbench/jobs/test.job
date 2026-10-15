@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1    # <- match to OMP_NUM_THREADS
-#SBATCH --partition=gpu      # <- or cpu_amd, gpu_a100
+#SBATCH --partition=gpu_a100      # <- or cpu_amd, gpu_a100
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bgtj-tgirails
@@ -19,6 +19,5 @@ export OMP_NUM_THREADS=1
 cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
 source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
-torchgeo-bench coord --model climplicit --dataset usa_electric_usage --split both --device cuda:0 \
---from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
---output results/coordbench_electric_load_polygon_test.csv "$@"
+torchgeo-bench coord --model climplicit --dataset global_population --split both --device cuda:0 \
+--output results/global_population.csv "$@"
