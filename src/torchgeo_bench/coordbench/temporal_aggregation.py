@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
+from torchgeo_bench.coordbench.config_enums import TemporalResolution
 from torchgeo_bench.coordbench.models import LocationEncoder
 
 GROUP_KEYS = ["lat", "lon", "window_index"]  # keys to group by when discretizing/aggregating over time
@@ -56,13 +57,13 @@ def dataset_temporal_sampling(
     """
     if dataset.year is None:
         raise ValueError("Dataset must have a year to be temporally sampled.")
-    
+
     if method not in TEMPORAL_SAMPLING_MONTHS:
         raise ValueError(f"Unknown temporal sampling method: {method}")
-    
+
     if discretization not in DISCRETIZATION_METHODS_TO_SECONDS:
         raise ValueError(f"Unknown discretization method: {discretization}")
-    
+
     step = DISCRETIZATION_METHODS_TO_SECONDS[discretization]
 
     times = []
@@ -78,7 +79,7 @@ def dataset_temporal_sampling(
         lon=dataset.lon,
         tasks=dataset.tasks,
         task_type=dataset.task_type,
-        temporal_resolution=f"{method}/{discretization}",
+        temporal_resolution=dataset.temporal_resolution,
         year=dataset.year,
         posix_timestamp=np.tile(times, (len(dataset.lat), 1)),
         spatial_aggregation_key=dataset.spatial_aggregation_key,
@@ -158,7 +159,7 @@ def dataset_discretization(
             for stat in task_val_aggregations
         },
         task_type=dataset.task_type,
-        temporal_resolution=method,
+        temporal_resolution=dataset.temporal_resolution,
         year=dataset.year,
         posix_timestamp=timestamps,
         spatial_aggregation_key=dataset.spatial_aggregation_key,

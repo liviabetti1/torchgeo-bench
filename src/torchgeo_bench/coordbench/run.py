@@ -197,7 +197,7 @@ def _expand_temporal(
             else:
                 yield bench, None
             continue
-        
+
         label_stat = "mode" if bench.task_type == "classification" else "mean"
         for discretization in discretization_methods:
             for aggregation in embedding_aggregation_methods:

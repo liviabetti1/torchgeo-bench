@@ -131,6 +131,10 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
     "era5_ecmwf": ("era5_ecmwf",),
-    "chelsa": ("chelsa",),
-    "usa_electric_usage": tuple(f"usa_electric_usage-{col}" for col in ELECTRIC_LOAD_VARIABLES),
+    "chelsa_daily": ("chelsa_daily",),
+    "usa_electric_load_daily": [f"usa_daily_electric_load_{year}" for year in range(2016, 2024)],
+    "usa_electric_load_weekly" : ("usa_electric_load_weekly",),
+    "chelsa_monthly": ("chelsa_monthly",),
+    "global_population": [f"global_population_{landmass}" for
+                          landmass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]]
 }
