@@ -397,37 +397,27 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
 
     return [ds]
 
-#TODO: missing data for a few counties from 2010 to 2019
 def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmark]:
-    counties = load_config_gdf("usa_electric_load",filename="usa_counties")
     census_data = load_config_temporal("usa_census_data_2010_2025")
 
-    combined_df = census_data.merge(counties, on="county", how="left")
-
+    # polygon, but already comes with 200 points sub_sampled per polygon, so no need to join up with the
+    # county dataset
     if subsample_locations:
-        combined_df["sub_sampled"] = combined_df["samples"][
-            :100]  # hard-coded, but we can go up to 1k for num samples per county
-        combined_df.drop("samples", axis=1, inplace=True)
+        census_data = census_data.sample(n=1000_000, random_state=42)
 
-        finalized_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
-        finalized_df['lon'] = finalized_df.sub_sampled.apply(lambda x: x[0])  # isolate lon/lat columns
-        finalized_df['lat'] = finalized_df.sub_sampled.apply(lambda x: x[1])
-        finalized_df.drop("sub_sampled", axis=1, inplace=True)
-    else:
-        finalized_df = combined_df.explode("samples")
-        finalized_df['lon'] = finalized_df.samples.apply(lambda x: x[0])
-        finalized_df['lat'] = finalized_df.samples.apply(lambda x: x[1])
-        finalized_df.drop("samples", axis=1, inplace=True)
+    census_data["log_population"] = np.log(census_data["population"])
 
     ds = CoordBenchmark(
         name="usa_census_data",
-        lat=finalized_df["lat"].to_numpy(np.float64),
-        lon=finalized_df["lon"].to_numpy(np.float64),
-        tasks={"population": finalized_df["population"].to_numpy(np.float64)},
+        lat=census_data["lat"].to_numpy(np.float64),
+        lon=census_data["lon"].to_numpy(np.float64),
+        tasks={"population": census_data["population"].to_numpy(np.float64),
+               "log_population": census_data["log_population"].to_numpy(np.float64)},
         # kept float64 for posix since it will lose second-level precision in float32
-        posix_timestamp=finalized_df["start_timestamp"].to_numpy(np.float64),
-        end_timestamp=finalized_df["end_timestamp"].to_numpy(np.float64),
+        posix_timestamp=census_data["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=census_data["end_timestamp"].to_numpy(np.float64),
         temporal_resolution=TemporalResolution.YEARLY,
+        spatial_aggregation_key=("county", census_data["county"])
     )
     return [ds]
 
