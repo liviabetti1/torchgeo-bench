@@ -136,5 +136,6 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "usa_electric_load_weekly" : ("usa_electric_load_weekly",),
     "chelsa_monthly": ("chelsa_monthly",),
     "global_population": [f"global_population_{landmass}" for
-                          landmass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]]
+                          landmass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]],
+    "viirs_night_lights": ("viirs_night_lights",),
 }

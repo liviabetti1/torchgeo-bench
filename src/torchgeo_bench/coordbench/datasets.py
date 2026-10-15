@@ -686,6 +686,21 @@ def load_soilgrids() -> list[CoordBenchmark]:
         if p in df.columns
     ]
 
+def load_viirs_night_lights() -> list[CoordBenchmark]:
+    df = load_config_temporal("viirs_night_lights")
+
+    task = CoordBenchmark(
+        name="viirs_night_lights",
+        lat=df["lat"].to_numpy(np.float32),
+        lon=df["lon"].to_numpy(np.float32),
+        posix_timestamp=df["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=df["end_timestamp"].to_numpy(np.float64),
+        tasks={"night_lights": df["night_lights"].to_numpy(np.float64)},
+        temporal_resolution=TemporalResolution.YEARLY
+    )
+
+    return [task]
+
 def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
     df = load_config_temporal("era5_ecmwf_2017_daily")
@@ -790,6 +805,7 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "chelsa_monthly": load_chelsa_monthly,
     "usa_census": load_usa_census_data,
     "global_population": load_global_population,
+    "viirs_night_lights": load_viirs_night_lights,
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
