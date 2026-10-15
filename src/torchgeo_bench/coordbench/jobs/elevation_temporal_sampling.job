@@ -1,0 +1,49 @@
+#!/bin/bash
+#SBATCH --job-name=cb-elevation
+#SBATCH --mem=16g
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus-per-node=1
+#SBATCH --gpu-bind=closest
+#SBATCH --account=bgtj-tgirails
+#SBATCH --time=2:00:00
+#SBATCH --output=slurm_logs/%x_%A.out
+
+set -euo pipefail
+export OMP_NUM_THREADS=1
+
+REPO=/u/lbetti/projects/torchgeo-bench
+RESULTS=/projects/bgtj/t_satclip/results
+
+source "$REPO/.venv/bin/activate"
+
+STATIC_MODELS=(sincos satclip geoclip mind mind-small sinr)
+TEMPORAL_MODELS=(climplicit gtloc "t_satclip/t_satclip_doy_1M")
+
+for model in "${STATIC_MODELS[@]}"; do
+    torchgeo-bench coord \
+        --model "$model" \
+        --dataset satclip-elevation \
+        --split both \
+        --resume \
+        --output "$RESULTS/coordbench_elevation.csv" \
+        --device cuda:0 \
+        "$@"
+done
+
+for model in "${TEMPORAL_MODELS[@]}"; do
+    torchgeo-bench coord \
+        --model "$model" \
+        --dataset satclip-elevation \
+        --split both \
+        --temporal-sampling-year 2019 \
+        --temporal-sampling-methods year spring summer fall winter \
+        --temporal-discretization-methods weekly \
+        --skip-no-timestamps \
+        --resume \
+        --output "$RESULTS/coordbench_elevation.csv" \
+        --device cuda:0 \
+        "$@"
+done

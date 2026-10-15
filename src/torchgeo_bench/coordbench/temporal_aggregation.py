@@ -41,11 +41,12 @@ TEMPORAL_SAMPLING_MONTHS = {
 TEMPORAL_SAMPLING_METHODS = list(TEMPORAL_SAMPLING_MONTHS)
 
 EMBEDDING_AGGREGATION_METHODS = [
-    "statistics", # returns mean, min, max channel-wise; might want to add some measure of "trajectory"
+    "statistics",
     "temporal_filter",
     "sequence_model",
 ]
 
+EMBEDDING_STATS = ["mean", "min", "max", "std", "slope", "total_variation"]
 LABEL_STATS = ["mean", "min", "max"]
 
 def dataset_temporal_sampling(
@@ -182,14 +183,18 @@ def _aggregate_embeddings(
         batch_size: Maximum number of observations per encoder call.
 
     Returns:
-        Mapping of "mean", "min" and "max" to tensors of shape (N, D).
+        Mapping of stat name to tensor of shape (N, D).
+        Keys: "mean", "min", "max", "std", "slope", "total_variation".
     """
     T = timestamps.shape[1]
     locations_per_batch = max(1, batch_size // T)
 
-    aggregated_embeddings = {"mean": [], "min": [], "max": []}
+    aggregated_embeddings: dict[str, list[torch.Tensor]] = {s: [] for s in EMBEDDING_STATS}
 
-    #for start in tqdm(range(0, len(lats), locations_per_batch), desc="Encoding", unit="batch", leave=False):
+    # Centered time index for OLS slope
+    t_index = torch.linspace(-1, 1, T)  # (T,)
+    t_var = (t_index**2).sum()
+
     for start in range(0, len(lats), locations_per_batch):
         end = start + locations_per_batch
 
@@ -217,17 +222,24 @@ def _aggregate_embeddings(
         mean_embeddings = embeddings.mean(dim=1)
         min_embeddings = embeddings.amin(dim=1)
         max_embeddings = embeddings.amax(dim=1)
+        std_embeddings = embeddings.std(dim=1)
 
-        # just checking that the shapes are correct
-        assert mean_embeddings.shape == min_embeddings.shape == max_embeddings.shape == (B, embeddings.shape[-1]), (
-            f"Expected shape {(B, embeddings.shape[-1])}, got mean {mean_embeddings.shape}, min {min_embeddings.shape}, max {max_embeddings.shape}"
-        )
+        # Per-channel OLS slope against centered time index
+        slope_embeddings = (embeddings * t_index[None, :, None]).sum(dim=1) / t_var
 
+        # Sum of absolute consecutive differences
+        total_variation_embeddings = (embeddings[:, 1:] - embeddings[:, :-1]).abs().sum(dim=1)
+
+        expected = (B, embeddings.shape[-1])
         for stat, value in (
             ("mean", mean_embeddings),
             ("min", min_embeddings),
             ("max", max_embeddings),
+            ("std", std_embeddings),
+            ("slope", slope_embeddings),
+            ("total_variation", total_variation_embeddings),
         ):
+            assert value.shape == expected, f"{stat}: expected {expected}, got {value.shape}"
             aggregated_embeddings[stat].append(value.cpu())
 
     aggregated_embeddings = {
