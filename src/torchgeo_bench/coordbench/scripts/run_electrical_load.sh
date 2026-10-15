@@ -4,7 +4,8 @@
 set -euo pipefail
 
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/electrical_load # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+mkdir -p "$RESULTS"
 
 MODELS=(
     climplicit
@@ -12,6 +13,7 @@ MODELS=(
     "t_satclip/t_satclip_doy_1M"
 )
 
+out="$RESULTS/usa_electric_load_daily.csv"
 for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
@@ -20,6 +22,7 @@ for model in "${MODELS[@]}"; do
         --from-polygon \
         --spatial-aggregation-methods statistical median_and_iqr \
         --resume \
-        --output "$RESULTS/coordbench_electrical_load.csv" \
+        --output "$out" \
         "$@"
+    rm -f "${out}.lock"
 done

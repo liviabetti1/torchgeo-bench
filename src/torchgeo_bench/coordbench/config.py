@@ -55,6 +55,8 @@ class CoordEvaluationConfig(StrictModel):
         default_factory=lambda: ["statistics"], min_length=1
     )
 
+    exclude_antarctica: StrictBool = False
+
     from_polygon: StrictBool = False
     spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
 

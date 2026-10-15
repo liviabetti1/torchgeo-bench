@@ -4,19 +4,22 @@
 # Pass --device cuda:0 as an extra arg when calling directly.
 set -euo pipefail
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/elevation_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+mkdir -p "$RESULTS"
 
 STATIC_MODELS=(sincos satclip geoclip mind mind-small sinr)
 TEMPORAL_MODELS=(climplicit gtloc "t_satclip/t_satclip_doy_1M")
 
+out="$RESULTS/satclip-elevation.csv"
 for model in "${STATIC_MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset satclip-elevation \
         --split both \
         --resume \
-        --output "$RESULTS/coordbench_elevation.csv" \
+        --output "$out" \
         "$@"
+    rm -f "${out}.lock"
 done
 
 for model in "${TEMPORAL_MODELS[@]}"; do
@@ -29,6 +32,7 @@ for model in "${TEMPORAL_MODELS[@]}"; do
         --temporal-discretization-methods weekly \
         --skip-no-timestamps \
         --resume \
-        --output "$RESULTS/coordbench_elevation.csv" \
+        --output "$out" \
         "$@"
+    rm -f "${out}.lock"
 done

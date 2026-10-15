@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # CHELSA monthly climate 2011-2018: temporal aggregation at monthly/seasonal/annual scales.
+# Runs with and without Antarctica to compare impact on global climate models.
 # Requires access to the Temporal-Coordbench HuggingFace repo.
 # Pass --device cuda:0 as an extra arg when calling directly.
 set -euo pipefail
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/chelsa_monthly_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+mkdir -p "$RESULTS"
 
 MODELS=(
     climplicit
@@ -12,6 +14,7 @@ MODELS=(
     "t_satclip/t_satclip_doy_1M"
 )
 
+out="$RESULTS/chelsa_monthly.csv"
 for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
@@ -19,6 +22,18 @@ for model in "${MODELS[@]}"; do
         --split both \
         --temporal-discretization-methods monthly seasonally yearly \
         --resume \
-        --output "$RESULTS/coordbench_chelsa_monthly_temporal.csv" \
+        --output "$out" \
         "$@"
+
+    torchgeo-bench coord \
+        --model "$model" \
+        --dataset chelsa_monthly \
+        --split both \
+        --temporal-discretization-methods monthly seasonally yearly \
+        --exclude-antarctica \
+        --resume \
+        --output "$out" \
+        "$@"
+
+    rm -f "${out}.lock"
 done

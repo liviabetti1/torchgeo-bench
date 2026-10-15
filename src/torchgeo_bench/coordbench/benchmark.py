@@ -36,3 +36,19 @@ class CoordBenchmark:
     test_mask: np.ndarray | None = None
     spatial_aggregation_key: tuple[str, pd.Series] = None
     end_timestamp: np.ndarray | None = None
+
+    def filter_by_latitude(self, min_lat: float) -> None:
+        """Drop points below ``min_lat`` in-place."""
+        mask = self.lat >= min_lat
+        self.lat = self.lat[mask]
+        self.lon = self.lon[mask]
+        self.tasks = {k: v[mask] for k, v in self.tasks.items()}
+        if self.posix_timestamp is not None:
+            self.posix_timestamp = self.posix_timestamp[mask]
+        if self.end_timestamp is not None:
+            self.end_timestamp = self.end_timestamp[mask]
+        if self.test_mask is not None:
+            self.test_mask = self.test_mask[mask]
+        if self.spatial_aggregation_key is not None:
+            col, series = self.spatial_aggregation_key
+            self.spatial_aggregation_key = (col, series[mask])

@@ -302,6 +302,14 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
+    if coord.exclude_antarctica:
+        for bench in benchmarks:
+            n_before = len(bench.lat)
+            bench.filter_by_latitude(-60.0)
+            if len(bench.lat) < n_before:
+                bench.name = f"{bench.name}_no_antarctica"
+                logger.info("Exclude Antarctica: %s %d -> %d points", bench.name, n_before, len(bench.lat))
+
     if temporal_discretization_methods or temporal_sampling_methods:
         all_benchmarks = _expand_temporal(
             benchmarks,

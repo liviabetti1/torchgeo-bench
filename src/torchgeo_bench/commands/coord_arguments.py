@@ -46,6 +46,11 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
         "--temporal-embedding-aggregation-methods", nargs="+", default=argparse.SUPPRESS
     )
     parser.add_argument(
+        "--exclude-antarctica",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--from-polygon",
         action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
