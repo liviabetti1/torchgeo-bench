@@ -19,4 +19,7 @@ export OMP_NUM_THREADS=1
 cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
 source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
-./u/kplane19/torchgeo-bench/src/coordbench/scripts/run_viirs_night_lights.sh
+
+torchgeo-bench coord --model climplicit --dataset usa_census --split both \
+    --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
+    --output results/coordbench_usa_electrical_load.csv "$@"

@@ -337,7 +337,7 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
                 continue
             tasks[task_name] = finalized_df[task_name].to_numpy(np.float64)
             finalized_df[task_name] += 1 # to avoid div/0 for log
-            tasks[f"{task_name}_log"] = np.log(finalized_df[task_name])
+            tasks[f"{task_name}_log"] = np.log(finalized_df[task_name].to_numpy(np.float64))
 
 
         ds = CoordBenchmark(
@@ -382,7 +382,7 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
             continue
         tasks[task_name] = finalized_df[task_name].to_numpy(np.float64) #remove if log norm is the better task
         finalized_df[task_name] += 1
-        tasks[f"{task_name}_log"] = np.log(finalized_df[task_name])
+        tasks[f"{task_name}_log"] = np.log(finalized_df[task_name].to_numpy(np.float64))
 
     ds = CoordBenchmark(
         name="usa_weekly_electric_load",
@@ -405,7 +405,7 @@ def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmar
     if subsample_locations:
         census_data = census_data.sample(n=1000_000, random_state=42)
 
-    census_data["log_population"] = np.log(census_data["population"])
+    census_data["log_population"] = np.log(census_data["population"].to_numpy(np.float64))
 
     ds = CoordBenchmark(
         name="usa_census_data",
@@ -461,7 +461,7 @@ def load_chelsa_monthly(subsample_locations: bool = True) -> list[CoordBenchmark
             continue
 
         if task_name in ["pet", "cmi"]:
-            tasks[f"{task_name}_log"] = np.log(df[task_name])
+            tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
         else:
             tasks[task_name] = df[task_name].to_numpy(np.float64)
 
