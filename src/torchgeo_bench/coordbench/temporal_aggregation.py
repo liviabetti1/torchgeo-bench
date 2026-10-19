@@ -358,6 +358,9 @@ def temporal_sample_and_aggregate_embeddings(
         batch_size=batch_size,
     )
 
+    # need this to be 1D again if there's any spatial pooling downstream
+    temporally_sampled_dataset.posix_timestamp = dataset.posix_timestamp
+
     return temporally_sampled_dataset, aggregated_embeddings
 
 
