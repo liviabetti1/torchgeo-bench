@@ -362,7 +362,7 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
     combined_df = electrical_load.merge(counties, on="county", how="left")
 
     if subsample_locations:
-        pool = combined_df["county"].drop_duplicates().sample(n=10, random_state=0) #total counties is 3117
+        pool = combined_df["county"].drop_duplicates().sample(n=1_500, random_state=0) #total counties is 3117
         combined_df = combined_df.merge(pool, on=["county"])
 
     if subsample_locations:
