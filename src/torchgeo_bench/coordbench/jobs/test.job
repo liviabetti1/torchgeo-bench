@@ -21,5 +21,6 @@ source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
 
 torchgeo-bench coord --model climplicit --dataset usa_census --split both \
+    --temporal-discretization-methods weekly \
     --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
     --output results/coordbench_usa_electrical_load.csv "$@"
