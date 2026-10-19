@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pandas as pd
 import torch
+from rich.progress import track
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 from torchgeo_bench.coordbench.config_enums import TemporalResolution
@@ -48,7 +49,53 @@ EMBEDDING_AGGREGATION_METHODS = [
 
 LABEL_STATS = ["mean", "min", "max"]
 
-def dataset_temporal_sampling(
+def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
+    if dataset.temporal_resolution == TemporalResolution.WEEKLY:
+        step = DISCRETIZATION_METHODS_TO_SECONDS[discretization] # take aggregate daily details
+    elif dataset.temporal_resolution == TemporalResolution.MONTHLY:
+        step = DISCRETIZATION_METHODS_TO_SECONDS[discretization] # aggregate weekly
+    elif dataset.temporal_resolution == TemporalResolution.YEARLY:
+        step = DISCRETIZATION_METHODS_TO_SECONDS[discretization] # aggregate by month . . . might make higher?
+    else:
+        raise NotImplementedError("Only do temporal sampling on datasets that are more coarse than daily")
+
+    timestamps_with_leapdays = []
+    min_size = 365
+    max_size = 0
+    for i in track(range(len(dataset.lon)), f"{dataset.name}_temporal_sampling_{discretization}"):
+        start = dataset.posix_timestamp[i]
+        end = dataset.end_timestamp[i]
+
+        new_timestamps = np.arange(start, end, step)
+        timestamps_with_leapdays.append(new_timestamps)
+        if max_size < new_timestamps.shape[0]:
+            max_size = new_timestamps.shape[0]
+        elif min_size > new_timestamps.shape[0]:
+            min_size = new_timestamps.shape[0]
+
+    # because of leap years, we can run into an inconsistent number of temporal samples from year to year
+    # when we're not discretizing by month.  In that case, we remove the last timestamp
+    timestamps = []
+
+    for samples in timestamps_with_leapdays:
+        leap_year_removed = samples[:min_size]
+        timestamps.append(leap_year_removed)
+
+    return CoordBenchmark(
+        name=f"{dataset.name}_{discretization}_discretization",
+        lat=dataset.lat,
+        lon=dataset.lon,
+        tasks=dataset.tasks,
+        task_type=dataset.task_type,
+        temporal_resolution=dataset.temporal_resolution,
+        year=dataset.year,
+        posix_timestamp=np.asarray(timestamps),
+        spatial_aggregation_key=dataset.spatial_aggregation_key,
+    )
+
+#TODO: adjust for weekly, monthly, and yearly datasets; see run_elevation_temporal_sampling.sh for how this is
+# wired up in coords
+def no_timestamp_temporal_sampling(
     dataset: CoordBenchmark, method: str, discretization: str
 ) -> CoordBenchmark:
     """Used on datasets without timestamps.
@@ -190,7 +237,7 @@ def _aggregate_embeddings(
     aggregated_embeddings = {"mean": [], "min": [], "max": []}
 
     #for start in tqdm(range(0, len(lats), locations_per_batch), desc="Encoding", unit="batch", leave=False):
-    for start in range(0, len(lats), locations_per_batch):
+    for start in track(range(0, len(lats), locations_per_batch), f"Aggregating embeddings"):
         end = start + locations_per_batch
 
         batch_lats = lats[start:end]
@@ -289,16 +336,20 @@ def temporal_sample_and_aggregate_embeddings(
         Original dataset and (mean, min, max) embeddings,
         each of shape (N, D).
     """
-
-    if dataset.posix_timestamp is not None:
-        raise ValueError("This method should only be used on datasets with no timestamps.")
+    if dataset.posix_timestamp is not None and dataset.temporal_resolution == TemporalResolution.DAILY:
+        raise ValueError("This method should only be used on datasets with no timestamps or on datasets with a coarse temporal resolution.")
 
     if embedding_aggregation_method not in EMBEDDING_AGGREGATION_METHODS:
         raise ValueError(f"Unknown aggregation method: {embedding_aggregation_method}")
 
-    temporally_sampled_dataset = dataset_temporal_sampling(
-        dataset, temporal_sampling_method, discretization_method
-    )
+
+    if dataset.temporal_resolution is None:
+        temporally_sampled_dataset = no_timestamp_temporal_sampling(
+            dataset, temporal_sampling_method, discretization_method
+        )
+    else:
+        temporally_sampled_dataset = non_daily_temporal_sampling(dataset, discretization_method)
+
     aggregated_embeddings = _aggregate_embeddings(
         lats=temporally_sampled_dataset.lat,
         lons=temporally_sampled_dataset.lon,

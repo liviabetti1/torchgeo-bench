@@ -27,6 +27,7 @@ from torchgeo_bench.coordbench.config import (
     CoordEvaluationConfig,
     resolve_coord_preset
 )
+from torchgeo_bench.coordbench.config_enums import TemporalResolution
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import (
@@ -197,6 +198,16 @@ def _expand_temporal(
             else:
                 yield bench, None
             continue
+
+        elif bench.temporal_resolution != TemporalResolution.DAILY:
+            for discretization, aggregation in itertools.product(discretization_methods, embedding_aggregation_methods):
+                # sampling and discretization are hard-coded for the time being
+                sampled, embeddings = temporal_sample_and_aggregate_embeddings(
+                    bench, encoder, "", discretization, aggregation
+                )
+                yield sampled, embeddings["mean"].numpy()
+            continue
+
 
         label_stat = "mode" if bench.task_type == "classification" else "mean"
         for discretization in discretization_methods:

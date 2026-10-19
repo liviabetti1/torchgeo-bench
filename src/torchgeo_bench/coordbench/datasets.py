@@ -403,7 +403,8 @@ def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmar
     # polygon, but already comes with 200 points sub_sampled per polygon, so no need to join up with the
     # county dataset
     if subsample_locations:
-        census_data = census_data.sample(n=1000_000, random_state=42)
+        pool = census_data["county"].drop_duplicates().sample(n=1_000, random_state=0) #total counties is 3117
+        census_data = census_data.merge(pool, on=["county"])
 
     census_data["log_population"] = np.log(census_data["population"].to_numpy(np.float64))
 
@@ -461,6 +462,7 @@ def load_chelsa_monthly(subsample_locations: bool = True) -> list[CoordBenchmark
             continue
 
         if task_name in ["pet", "cmi"]:
+            df[task_name] = df[task_name] + 1 # for log norm
             tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
         else:
             tasks[task_name] = df[task_name].to_numpy(np.float64)
