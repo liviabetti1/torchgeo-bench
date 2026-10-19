@@ -160,9 +160,6 @@ def spatial_aggregation(bench: CoordBenchmark,
         embeddings = np.asarray(embeddings)
 
         return _spatial_agg_with_all_emb(bench, emb_agg_func, embeddings)
-    print(len(bench.lon))
-    print(len(bench.lat))
-    print(len(bench.posix_timestamp))
     df = pd.DataFrame({"lon": bench.lon,
                        "lat": bench.lat,
                        "posix_timestamp": bench.posix_timestamp,

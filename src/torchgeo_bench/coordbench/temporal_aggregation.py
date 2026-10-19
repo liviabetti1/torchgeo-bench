@@ -77,20 +77,35 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
     # when we're not discretizing by month.  In that case, we remove the last timestamp
     timestamps = []
 
-    for samples in timestamps_with_leapdays:
-        leap_year_removed = samples[:min_size]
-        timestamps.append(leap_year_removed)
+    samples_to_ignore = []
+    if dataset.temporal_resolution != TemporalResolution.WEEKLY:
+        for samples in timestamps_with_leapdays:
+            leap_year_removed = samples[:min_size]
+            timestamps.append(leap_year_removed)
+
+    else: #weekly sampling can vary from 0 to 6 samples, so we have to manually drop all samples that aren't a full week
+        for i in range(len(dataset.lon)):
+            timestamp = timestamps_with_leapdays[i]
+            if len(timestamp) != max_size:
+                samples_to_ignore.append(i)
+            else:
+                timestamps.append(timestamp)
+
+    if len(samples_to_ignore) != 0:
+        for task_name, task_values in dataset.tasks.items():
+            dataset.tasks[task_name] = np.delete(task_values, samples_to_ignore)
 
     return CoordBenchmark(
         name=f"{dataset.name}_{discretization}_discretization",
-        lat=dataset.lat,
-        lon=dataset.lon,
+        lat=np.delete(dataset.lat, samples_to_ignore),
+        lon=np.delete(dataset.lon, samples_to_ignore),
         tasks=dataset.tasks,
         task_type=dataset.task_type,
         temporal_resolution=dataset.temporal_resolution,
         year=dataset.year,
         posix_timestamp=np.asarray(timestamps),
-        spatial_aggregation_key=dataset.spatial_aggregation_key,
+        spatial_aggregation_key=(dataset.spatial_aggregation_key[0],
+                                 np.delete(dataset.spatial_aggregation_key[1], samples_to_ignore)),
     )
 
 #TODO: adjust for weekly, monthly, and yearly datasets; see run_elevation_temporal_sampling.sh for how this is
@@ -359,7 +374,8 @@ def temporal_sample_and_aggregate_embeddings(
     )
 
     # need this to be 1D again if there's any spatial pooling downstream
-    temporally_sampled_dataset.posix_timestamp = dataset.posix_timestamp
+    if len(temporally_sampled_dataset.posix_timestamp.shape) > 1:
+        temporally_sampled_dataset.posix_timestamp = temporally_sampled_dataset.posix_timestamp[:,0]
 
     return temporally_sampled_dataset, aggregated_embeddings
 
