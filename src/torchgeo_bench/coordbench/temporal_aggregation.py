@@ -99,7 +99,7 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
         new_spatial_agg_key = None
     else:
         new_spatial_agg_key = (dataset.spatial_aggregation_key[0],
-                                 np.delete(dataset.spatial_aggregation_key[1], samples_to_ignore)
+                                 np.delete(dataset.spatial_aggregation_key[1], samples_to_ignore))
 
     return CoordBenchmark(
         name=f"{dataset.name}_{discretization}_discretization",
