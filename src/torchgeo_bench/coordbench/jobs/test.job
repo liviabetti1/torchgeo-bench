@@ -12,6 +12,7 @@
 ##SBATCH --mail-type="BEGIN,END" See sbatch or srun man pages for more email options
 #SBATCH --output=slurm_logs/%x_%A_%a.out
 #SBATCH --job-name=test-job
+#SBATCH --export=ALL
 
 set -x
 export OMP_NUM_THREADS=1
