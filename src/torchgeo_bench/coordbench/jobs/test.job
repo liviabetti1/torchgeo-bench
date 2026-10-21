@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mem=16g
+#SBATCH --mem=20g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1    # <- match to OMP_NUM_THREADS
@@ -7,19 +7,19 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bgtj-tgirails
-#SBATCH --time=1:00:00      # hh:mm:ss for the job
+#SBATCH --time=168:00:00      # hh:mm:ss for the job
 ##SBATCH --mail-user=kevin.lane@colorado.edu
 ##SBATCH --mail-type="BEGIN,END" See sbatch or srun man pages for more email options
 #SBATCH --output=slurm_logs/%x_%A_%a.out
-#SBATCH --job-name=chelsa-runs
+#SBATCH --job-name=test-job
 
 set -x
 export OMP_NUM_THREADS=1
 
-cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
-source /u/kplane19/torchgeo-bench/.venv/bin/activate
+cd $TORCHGEO_HOME/src/torchgeo_bench/coordbench/scripts/
+source $ENV/bin/activate
 
 
-torchgeo-bench coord --model t_satclip/t_satclip_doy_1M --dataset viirs_night_lights --split both \
-    --temporal-discretization-methods monthly \
+torchgeo-bench coord --model t_satclip/t_satclip_doy_1M climplicit gtloc --dataset viirs_night_lights --split both \
+    --temporal-discretization-methods weekly 2_weeks monthly seasonally \
     --output results/viirs_night_lights.csv "$@"
