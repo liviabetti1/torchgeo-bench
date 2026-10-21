@@ -21,5 +21,5 @@ source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
 
 torchgeo-bench coord --model t_satclip/t_satclip_doy_1M --dataset viirs_night_lights --split both \
-    --temporal-discretization-methods weekly monthly \
+    --temporal-discretization-methods monthly \
     --output results/viirs_night_lights.csv "$@"
