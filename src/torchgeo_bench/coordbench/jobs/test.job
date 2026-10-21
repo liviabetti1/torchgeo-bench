@@ -19,5 +19,8 @@ export OMP_NUM_THREADS=1
 cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
 source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
-torchgeo-bench coord --model climplicit --dataset global_population --split both --device cuda:0 \
---output results/global_population.csv "$@"
+
+torchgeo-bench coord --model climplicit --dataset usa_census --split both \
+    --temporal-discretization-methods weekly \
+    --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
+    --output results/coordbench_usa_electrical_load.csv "$@"
