@@ -10,7 +10,7 @@ mkdir -p "$RESULTS"
 
 MODELS=(
     climplicit
-    gtloc
+    #gtloc
     "t_satclip/t_satclip_doy_1M"
 )
 
@@ -20,7 +20,7 @@ for model in "${MODELS[@]}"; do
         --model "$model" \
         --dataset chelsa_monthly \
         --split both \
-        --temporal-discretization-methods monthly seasonally yearly \
+        --temporal-discretization-methods seasonally yearly \
         --resume \
         --output "$out" \
         "$@"
@@ -29,7 +29,7 @@ for model in "${MODELS[@]}"; do
         --model "$model" \
         --dataset chelsa_monthly \
         --split both \
-        --temporal-discretization-methods monthly seasonally yearly \
+        --temporal-discretization-methods seasonally yearly \
         --exclude-antarctica \
         --resume \
         --output "$out" \

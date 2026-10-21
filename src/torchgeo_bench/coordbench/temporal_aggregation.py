@@ -142,7 +142,7 @@ def dataset_discretization(
     timestamps = rows["timestamp"].to_numpy().reshape(-1, T) # (N, T)
 
     # Aggregate the tasks over time for each (lat, lon, window) group
-    #f or classification tasks, we use the mode of the labels over time
+    # for classification tasks, we use the mode of the labels over time
     # for regression tasks, we use the mean, min, and max of the labels over time
     aggregated = grouped.agg(**{
         f"{task}_{agg}": (task, (lambda s: s.mode().iloc[0]) if agg == "mode" else agg)
@@ -324,8 +324,10 @@ def temporal_sample_and_aggregate_embeddings(
 
 if __name__ == "__main__":
     # EXAMPLE USAGE
-    from torchgeo_bench.coordbench.datasets import load_era5_ecmwf
-    from torchgeo_bench.coordbench.models import GeoCLIPLocationEncoder
+    from torchgeo_bench.coordbench.datasets import load_era5_ecmwf, load_chelsa_daily
+    from torchgeo_bench.coordbench.models import SinCosLocationEncoder
 
-    (era5,) = load_era5_ecmwf()
-    discretize_dataset_and_aggregate_embeddings(era5, GeoCLIPLocationEncoder(), 'weekly', 'statistics')
+    (era5,) = load_era5_ecmwf(subsample_locations=False)
+    (chelsa,) = load_chelsa_daily(subsample_locations=False)
+    discretize_dataset_and_aggregate_embeddings(era5, SinCosLocationEncoder(), 'weekly', 'statistics')
+    discretize_dataset_and_aggregate_embeddings(chelsa, SinCosLocationEncoder(), 'weekly', 'statistics')

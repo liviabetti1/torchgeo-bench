@@ -7,8 +7,8 @@ set -euo pipefail
 RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/elevation_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
-STATIC_MODELS=(sincos satclip geoclip mind mind-small sinr)
-TEMPORAL_MODELS=(climplicit gtloc "t_satclip/t_satclip_doy_1M")
+STATIC_MODELS=(sincos satclip geoclip mind sinr)
+TEMPORAL_MODELS=(climplicit "t_satclip/t_satclip_doy_1M" gtloc)
 
 out="$RESULTS/satclip-elevation.csv"
 for model in "${STATIC_MODELS[@]}"; do

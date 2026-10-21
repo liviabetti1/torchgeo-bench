@@ -9,7 +9,7 @@ mkdir -p "$RESULTS"
 
 MODELS=(
     climplicit
-    gtloc
+    #gtloc
     "t_satclip/t_satclip_doy_1M"
 )
 

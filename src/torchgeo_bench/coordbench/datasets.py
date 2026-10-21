@@ -709,7 +709,7 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
 
 def load_chelsa_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
     """"""
-    df = load_config_temporal("chelsa_2017")
+    df = load_config_temporal("chelsa_2017_daily")
     task_cols = [v for v in CHELSA_LABELS if v in df.columns]
     df = df[["lat", "lon", "posix_timestamp", *task_cols]]
     if subsample_locations:
