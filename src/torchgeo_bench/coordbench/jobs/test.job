@@ -20,7 +20,6 @@ cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
 source /u/kplane19/torchgeo-bench/.venv/bin/activate
 
 
-torchgeo-bench coord --model climplicit --dataset usa_census --split both \
-    --temporal-discretization-methods weekly \
-    --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
-    --output results/coordbench_usa_electrical_load.csv "$@"
+torchgeo-bench coord --model t_satclip/t_satclip_doy_1M --dataset viirs_night_lights --split both \
+    --temporal-discretization-methods weekly monthly \
+    --output results/viirs_night_lights.csv "$@"
