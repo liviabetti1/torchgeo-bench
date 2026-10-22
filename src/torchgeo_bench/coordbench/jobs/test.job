@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mem=20g
+#SBATCH --mem=12g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1    # <- match to OMP_NUM_THREADS
@@ -7,7 +7,7 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bgtj-tgirails
-#SBATCH --time=24:00:00      # hh:mm:ss for the job
+#SBATCH --time=1:00:00      # hh:mm:ss for the job
 ##SBATCH --mail-user=kevin.lane@colorado.edu
 ##SBATCH --mail-type="BEGIN,END" See sbatch or srun man pages for more email options
 #SBATCH --output=slurm_logs/%x_%A_%a.out
