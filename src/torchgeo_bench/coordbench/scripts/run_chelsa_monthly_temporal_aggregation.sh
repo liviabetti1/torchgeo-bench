@@ -5,7 +5,7 @@
 # Pass --device cuda:0 as an extra arg when calling directly.
 set -euo pipefail
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/chelsa_monthly_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME/chelsa_monthly_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 MODELS=(

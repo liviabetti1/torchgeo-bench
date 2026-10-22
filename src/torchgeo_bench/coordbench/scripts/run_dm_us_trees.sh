@@ -6,7 +6,7 @@
 set -euo pipefail
 
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/dm_us_trees # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME/dm_us_trees # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 MODELS=(sincos satclip geoclip mind sinr climplicit gtloc "t_satclip/t_satclip_doy_1M")

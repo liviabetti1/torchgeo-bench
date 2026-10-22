@@ -4,8 +4,12 @@
 set -euo pipefail
 source $TORCHGEO_ENV/bin/activate torchgeo-bench
 
+RESULTS=$RESULTS_HOME/dm_us_trees # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+mkdir -p "$RESULTS"
+
+out="$RESULTS/usa_electrical_load.csv"
 for model in climplicit gtloc t_satclip/t_satclip_doy_1M; do
   torchgeo-bench coord --model "$model" --dataset usa_electric_load_daily usa_electric_load_weekly --split both \
     --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
-    --output results/coordbench_usa_electrical_load.csv "$@"
+    --output "$out" "$@"
 done
