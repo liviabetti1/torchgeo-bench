@@ -7,7 +7,7 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bgtj-tgirails
-#SBATCH --time=48:00:00      # hh:mm:ss for the job
+#SBATCH --time=24:00:00      # hh:mm:ss for the job
 ##SBATCH --mail-user=kevin.lane@colorado.edu
 ##SBATCH --mail-type="BEGIN,END" See sbatch or srun man pages for more email options
 #SBATCH --output=slurm_logs/%x_%A_%a.out
@@ -20,7 +20,8 @@ export OMP_NUM_THREADS=1
 cd $TORCHGEO_HOME/src/torchgeo_bench/coordbench/scripts/
 source $ENV/bin/activate
 
-
-torchgeo-bench coord --model t_satclip/t_satclip_doy_1M climplicit gtloc --dataset viirs_night_lights --split both \
+for model in climplicit t_satclip/t_satclip_doy_1M gtloc; do
+  torchgeo-bench coord --model "$model" --dataset viirs_night_lights --split both \
     --temporal-discretization-methods weekly 2_weeks monthly seasonally \
     --output results/viirs_night_lights.csv "$@"
+done
