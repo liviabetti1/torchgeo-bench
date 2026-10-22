@@ -2,6 +2,8 @@
 # ERA5 across temporal discretizations (weekly/biweekly/monthly/seasonally), one row per model.
 set -euo pipefail
 
+source $TORCHGEO_ENV/bin/activate torchgeo-bench
+
 RESULTS_DIR=/projects/bgtj/t_satclip/results
 
 for model in gtloc climplicit t_satclip/t_satclip_doy_1M; do

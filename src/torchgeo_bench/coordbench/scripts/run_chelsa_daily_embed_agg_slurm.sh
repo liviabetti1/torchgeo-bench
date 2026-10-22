@@ -17,8 +17,8 @@
 set -x
 export OMP_NUM_THREADS=1
 
-cd /u/leca5365/Documents/torchgeo-bench-temporal/src/torchgeo_bench/coordbench/scripts/
-source /u/leca5365/Documents/miniconda3/bin/activate torchgeo-bench
+cd $TORCHGEO_HOME/src/torchgeo_bench/coordbench/scripts/
+source $TORCHGEO_ENV/bin/activate torchgeo-bench
 
 # OUTPUT_EXPERIMENT_NAME="time_representation"
 # MODELS=("t_satclip/t_satclip_y_200k" 
@@ -60,6 +60,6 @@ MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 
 echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
 
-torchgeo-bench coord --model "$MODEL" --dataset chelsa --split both --device cuda:0 \
---temporal-aggregation-methods 1_week 2_week 4_week 13_week annual concat_four_seasons \
---output results/coordbench_chelsa_agg_embeddings_${OUTPUT_EXPERIMENT_NAME}.taskid_${SLURM_ARRAY_TASK_ID}.csv "$@"
+torchgeo-bench coord --model "$MODEL" --dataset chelsa_daily --split both --device cuda:0 \
+--temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks yearly seasonally  \
+--output /projects/bgtj/t_satclip/results/coordbench_chelsa_daily_agg_embeddings_${OUTPUT_EXPERIMENT_NAME}.taskid_${SLURM_ARRAY_TASK_ID}.csv "$@"

@@ -18,7 +18,7 @@ set -x
 export OMP_NUM_THREADS=1
 
 cd $TORCHGEO_HOME/src/torchgeo_bench/coordbench/scripts/
-source $ENV/bin/activate
+source $TORCHGEO_ENV/bin/activate
 
 for model in climplicit t_satclip/t_satclip_doy_1M gtloc; do
   torchgeo-bench coord --model "$model" --dataset viirs_night_lights --split both \

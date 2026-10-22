@@ -5,6 +5,8 @@ RESULTS_DIR=/projects/bgtj/t_satclip/results
 
 set -euo pipefail
 
+source $TORCHGEO_ENV/bin/activate torchgeo-bench
+
 for model in sincos mind geoclip satclip sinr climplicit gtloc t_satclip/t_satclip_doy_1M; do
   torchgeo-bench coord \
     --model "$model" \

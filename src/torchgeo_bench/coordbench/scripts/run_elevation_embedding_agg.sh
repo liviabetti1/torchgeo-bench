@@ -2,6 +2,8 @@
 # Elevation (no native timestamp) with and without temporal discretization
 set -euo pipefail
 
+source $TORCHGEO_ENV/bin/activate torchgeo-bench
+
 RESULTS_DIR=/projects/bgtj/t_satclip/results
 
 for model in sincos mind geoclip satclip sinr; do
