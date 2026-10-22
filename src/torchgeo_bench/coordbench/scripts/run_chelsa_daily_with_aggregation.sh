@@ -4,6 +4,8 @@ set -euo pipefail
 
 RESULTS_DIR=/projects/bgtj/t_satclip/results
 
+source $TORCHGEO_ENV/bin/activate torchgeo-bench
+
 for model in climplicit t_satclip/t_satclip_doy_1M gtloc; do
   torchgeo-bench coord --model "$model" --dataset chelsa --split both \
     --temporal-discretization-methods weekly biweekly monthly seasonally \

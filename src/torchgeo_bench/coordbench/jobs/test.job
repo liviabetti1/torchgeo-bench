@@ -20,7 +20,7 @@ export OMP_NUM_THREADS=1
 cd $TORCHGEO_HOME/src/torchgeo_bench/coordbench/scripts/
 source $TORCHGEO_ENV/bin/activate
 
-for model in climplicit t_satclip/t_satclip_doy_1M gtloc; do
+for model in t_satclip/t_satclip_doy_1M gtloc climplicit; do
   torchgeo-bench coord --model "$model" --dataset viirs_night_lights --split both \
     --temporal-discretization-methods weekly 2_weeks monthly seasonally \
     --output results/viirs_night_lights.csv "$@"
