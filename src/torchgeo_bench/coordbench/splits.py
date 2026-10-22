@@ -126,4 +126,7 @@ def _forecast_temporal(posix_timestamp: np.ndarray, folds: int = 5) -> np.ndarra
     # last one will be 0
     rank_from_latest = (len(uniq) - 1) - np.arange(len(uniq))
     fold_of_uniq = (rank_from_latest * folds) // len(uniq)
+
+    # the lowest fold is held out first
+    # but note that after the first fold, the collection of the remaining folds will not be contiguous...
     return fold_of_uniq[inverse]
