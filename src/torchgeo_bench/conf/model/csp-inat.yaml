@@ -1,0 +1,5 @@
+name: csp-inat
+target: torchgeo_bench.coordbench.models.CSPLocationEncoder
+track: coord
+kwargs:
+  variant: csp_inat

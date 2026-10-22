@@ -1,8 +1,7 @@
+"""Spatial and temporal fold assignment for CoordBench's blockCV-style evaluation splits."""
+
 import numpy as np
 
-from dataclasses import replace
-
-from torchgeo_bench.coordbench.datasets import CoordBenchmark
 
 def spatial_fold_ids(
     lat: np.ndarray, lon: np.ndarray, folds: int = 5, cell_deg: float = 10.0, seed: int = 0
@@ -31,84 +30,84 @@ def spatial_fold_ids(
     return np.array([fold_of[int(c)] for c in cell], dtype=np.int64)
 
 
-def temporal_split(dataset: CoordBenchmark, method: str, **kwargs) -> CoordBenchmark:
-    """Split a coordinate benchmark into train/test sets along the temporal axis.
+def temporal_fold_ids(
+    posix_timestamp: np.ndarray, method: str, folds: int = 5, **kwargs
+) -> np.ndarray:
+    """Assign each point a fold along the temporal axis.
 
     Args:
-        dataset: Coordinate benchmark to split.
+        posix_timestamp: POSIX timestamps, shape ``(N,)``.
         method: Splitting strategy, ``"random"``, ``"grid"``, or ``"forecast"``.
-        **kwargs
+        folds: Number of folds.
+        **kwargs: Forwarded to the method-specific helper.
 
     Returns:
-        A new `CoordBenchmark` with ``test_mask``
+        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
     if method == "random":
-        return _random_temporal(dataset, **kwargs)
-    elif method == "grid":
-        return _grid_temporal(dataset, **kwargs)
-    elif method == "forecast":
-        return _forecast_temporal(dataset, **kwargs)
-    else:
-        raise NotImplementedError(f"{method} not implemented yet.")
+        return _random_temporal(posix_timestamp, folds=folds, **kwargs)
+    if method == "grid":
+        return _grid_temporal(posix_timestamp, folds=folds, **kwargs)
+    if method == "forecast":
+        return _forecast_temporal(posix_timestamp, folds=folds, **kwargs)
+    raise NotImplementedError(f"{method} not implemented yet.")
 
 
-def _random_temporal(dataset: CoordBenchmark, test_size: float = 0.2, seed: int = 42) -> CoordBenchmark:
-    """Randomly hold out whole timestamps as the test set.
+def _random_temporal(posix_timestamp: np.ndarray, folds: int = 5, seed: int = 42) -> np.ndarray:
+    """Assign each point a fold by randomly permuting unique timestamps.
 
     Args:
-        dataset: Coordinate benchmark to split.
-        test_size: Target fraction to hold out for testing.
+        posix_timestamp: POSIX timestamps, shape ``(N,)``.
+        folds: Number of folds.
         seed: Random seed for shuffling timestamps.
 
     Returns:
-        A new `CoordBenchmark` with ``test_mask``
+        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
-    uniq, inverse, counts = np.unique(dataset.posix_timestamp, return_inverse=True, return_counts=True)
+    uniq, inverse = np.unique(posix_timestamp, return_inverse=True)
     order = np.random.default_rng(seed).permutation(len(uniq))
-
-    # Running sample count before each shuffled timestamp is added, so vectorized greedy fill
-    running_before = np.cumsum(counts[order]) - counts[order]
-
-    is_test_timestamp = np.zeros(len(uniq), dtype=bool)
-    is_test_timestamp[order] = running_before < test_size * len(dataset.posix_timestamp)
-
-    return replace(dataset, test_mask=is_test_timestamp[inverse])
+    fold_of_uniq = np.empty(len(uniq), dtype=np.int64)
+    fold_of_uniq[order] = np.arange(len(uniq)) % folds
+    return fold_of_uniq[inverse]
 
 
-def _grid_temporal(dataset: CoordBenchmark, temporal_grid_size: float, test_size: float = 0.2, seed: int = 42) -> CoordBenchmark:
-    """Evenly space held-out test cells across a fixed-size temporal grid.
+def _grid_temporal(
+    posix_timestamp: np.ndarray, temporal_grid_size: float, folds: int = 5, seed: int = 42
+) -> np.ndarray:
+    """Assign each point a fold by its position in a fixed-size temporal grid.
 
     Args:
-        dataset: Coordinate benchmark to split.
-        temporal_grid_size: Width of each temporal grid cell (currently in POSIX seconds)
-        test_size: Target fraction hold out for testing
-        seed: Random seed controlling offset at beginning for held-out cells.
+        posix_timestamp: POSIX timestamps, shape ``(N,)``.
+        temporal_grid_size: Width of each temporal grid cell (currently in POSIX seconds).
+        folds: Number of folds.
+        seed: Random seed controlling the offset of the first grid cell.
 
     Returns:
-        A new `CoordBenchmark` with ``test_mask`` 
+        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
-    cell = np.floor(np.asarray(dataset.posix_timestamp) / temporal_grid_size).astype(np.int64)
+    cell = np.floor(np.asarray(posix_timestamp) / temporal_grid_size).astype(np.int64)
     uniq, inverse = np.unique(cell, return_inverse=True)
 
-    stride = round(1 / test_size)  # How often to hold out a test cell
-    offset = np.random.default_rng(seed).integers(stride)
-    is_test_timestamp = (uniq - offset) % stride == 0
+    # to vary which fold is first
+    offset = np.random.default_rng(seed).integers(folds)
+    fold_of_uniq = (uniq - offset) % folds
+    return fold_of_uniq[inverse]
 
-    return replace(dataset, test_mask=is_test_timestamp[inverse])
 
+def _forecast_temporal(posix_timestamp: np.ndarray, folds: int = 5) -> np.ndarray:
+    """Assign each point a fold by recency (forecast-style, walk-forward blocks).
 
-def _forecast_temporal(dataset: CoordBenchmark, test_size: float = 0.2) -> CoordBenchmark:
-    """Hold out the most recent timestamps as the test set (forecast-style split).
+    Timestamps are split into ``folds`` contiguous blocks ordered by time, with
+    fold 0 the most recent block.
 
     Args:
-        dataset: Coordinate benchmark to split.
-        test_size: Target fraction to hold out for testing.
+        posix_timestamp: POSIX timestamps, shape ``(N,)``.
+        folds: Number of folds.
 
     Returns:
-        A new `CoordBenchmark` with ``test_mask``
+        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
-    _, inverse, counts = np.unique(dataset.posix_timestamp, return_inverse=True, return_counts=True)
-
-    is_test_timestamp = np.cumsum(counts[::-1])[::-1] <= test_size * len(dataset.posix_timestamp)
-
-    return replace(dataset, test_mask=is_test_timestamp[inverse])
+    uniq, inverse = np.unique(posix_timestamp, return_inverse=True)
+    rank_from_latest = (len(uniq) - 1) - np.arange(len(uniq))
+    fold_of_uniq = (rank_from_latest * folds) // len(uniq)
+    return fold_of_uniq[inverse]

@@ -18,7 +18,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset chelsa_daily \
-        --split both \
+        --split all \
         --temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks \
         --resume \
         --output "$out" \
@@ -27,7 +27,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset chelsa_daily \
-        --split both \
+        --split all \
         --temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks \
         --exclude-antarctica \
         --resume \

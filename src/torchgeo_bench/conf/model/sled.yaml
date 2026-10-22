@@ -1,0 +1,5 @@
+name: sled
+target: torchgeo_bench.coordbench.models.SLEDLocationEncoder
+track: coord
+kwargs:
+  variant: sled_s1s2ls

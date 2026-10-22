@@ -135,6 +135,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "usa_electric_load_daily": [f"usa_daily_electric_load_{year}" for year in range(2016, 2024)],
     "usa_electric_load_weekly" : ("usa_electric_load_weekly",),
     "chelsa_monthly": ("chelsa_monthly",),
+    "usa_census": ("usa_census_data",),
     "global_population": [f"global_population_{landmass}" for
                           landmass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]]
 }

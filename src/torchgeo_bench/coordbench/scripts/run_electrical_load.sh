@@ -18,7 +18,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset usa_electric_load_daily \
-        --split both \
+        --split all \
         --from-polygon \
         --spatial-aggregation-methods statistical median_and_iqr \
         --resume \

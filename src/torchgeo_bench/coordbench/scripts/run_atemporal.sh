@@ -39,7 +39,7 @@ for model in "${MODELS[@]}"; do
         torchgeo-bench coord \
             --model "$model" \
             --dataset "$dataset" \
-            --split both \
+            --split all \
             --resume \
             --output "$out" \
             "$@"

@@ -15,7 +15,7 @@ for model in "${STATIC_MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset satclip-elevation \
-        --split both \
+        --split all \
         --resume \
         --output "$out" \
         "$@"
@@ -26,7 +26,7 @@ for model in "${TEMPORAL_MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset satclip-elevation \
-        --split both \
+        --split all \
         --temporal-sampling-year 2019 \
         --temporal-sampling-methods year spring summer fall winter \
         --temporal-discretization-methods weekly \

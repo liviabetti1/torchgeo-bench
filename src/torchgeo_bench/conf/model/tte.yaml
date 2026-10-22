@@ -1,0 +1,3 @@
+name: tte
+target: torchgeo_bench.coordbench.models.TTELocationEncoder
+track: coord

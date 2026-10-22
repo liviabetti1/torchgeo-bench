@@ -40,12 +40,21 @@ Model preset      Installation    Description
 ================  ==============  =============================================
 ``sincos``        base            Four-dimensional periodic coordinate baseline.
 ``mind``          base            64-dimensional MIND Matryoshka prefix.
-``mind-small``    base            128-dimensional distilled MIND student.
 ``climplicit``    ``coordbench``  Climplicit climate-specialist encoder.
 ``geoclip``       ``coordbench``  GeoCLIP Equal-Earth/RFF encoder.
 ``satclip``       ``coordbench``  SatCLIP spherical-harmonic encoder.
 ``sinr``          ``coordbench``  SINR species-distribution encoder.
+``taxabind``      ``coordbench``  TaxaBind ecology-specialist encoder.
+``gair``          base [1]_       GAIR location encoder.
+``csp-inat``      base [1]_       CSP encoder distilled on iNat2018.
+``csp-fmow``      base [1]_       CSP encoder distilled on fMoW.
+``tte``           base [1]_       TTE (Tessellating the Earth) encoder.
+``sled``          base [1]_       SLED location encoder.
 ================  ==============  =============================================
+
+.. [1] Clones its upstream repository at a pinned revision and downloads
+   released weights the first time it runs; requires ``git`` and network
+   access.
 
 Install the optional reference encoders from PyPI with:
 
@@ -58,7 +67,7 @@ spatial-block cross-validation:
 
 .. code-block:: console
 
-   $ torchgeo-bench coord --model satclip --dataset satclip --split both
+   $ torchgeo-bench coord --model satclip --dataset satclip --split all
 
 Benchmarks and probes
 ---------------------
@@ -86,16 +95,28 @@ holdout:
    Seeded k-fold cross-validation.
 ``spatial``
    K-fold cross-validation over geographic grid cells. ``evaluation.cell_deg``
-   (``--cell-deg``) sets the cell width in degrees.
-``both``
-   Run both cross-validation protocols. Benchmarks with an official test mask
-   use that fixed holdout once instead.
+   (``--cell-deg``) sets the cell width in degrees. To sweep several cell
+   sizes in one run instead, set ``evaluation.cell_degs`` (``--cell-degs``) to
+   a list; one CSV row is written per value, and ``cell_deg`` is overridden.
+``temporal``
+   K-fold cross-validation over fixed-width time windows (grid cells along
+   the POSIX-timestamp axis), skipped for benchmarks without timestamps.
+   ``evaluation.temporal_grid_size`` (``--temporal-grid-size``) names the
+   window width: ``daily``, ``weekly``, ``biweekly``, ``4_weeks``,
+   ``13_weeks``, ``monthly``, ``seasonally``, or ``yearly`` (see
+   ``DISCRETIZATION_METHODS_TO_SECONDS`` in ``temporal_aggregation.py``). To
+   sweep several window sizes, set ``evaluation.temporal_grid_sizes``
+   (``--temporal-grid-sizes``) to a list.
+``all``
+   Run all three cross-validation protocols (and every requested sweep
+   value). Benchmarks with an official test mask use that fixed holdout once
+   instead.
 
 Benchmarks with an official test mask use that fixed holdout regardless of the
-requested cross-validation protocol; ``both`` does not duplicate it. CSV split
-labels are ``random``, ``spatial``, or ``official``. Cross-validation intervals
-report mean plus/minus the standard deviation across folds, not image-style
-bootstrapped confidence intervals.
+requested cross-validation protocol; ``all`` does not duplicate it. CSV split
+labels are ``random``, ``spatial``, ``temporal``, or ``official``.
+Cross-validation intervals report mean plus/minus the standard deviation
+across folds, not image-style bootstrapped confidence intervals.
 
 YAML configuration
 ------------------

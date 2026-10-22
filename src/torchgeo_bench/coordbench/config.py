@@ -39,9 +39,13 @@ class CoordEvaluationConfig(StrictModel):
     """Random/spatial cross-validation and coordinate probe settings."""
 
     methods: Methods = Field(default_factory=default_methods, min_length=1)
-    split: Literal["random", "spatial", "both"] = "random"
+    split: Literal["random", "spatial", "temporal", "all"] = "random"
     folds: StrictInt = Field(default=5, ge=2)
     cell_deg: StrictFloat = Field(default=10.0, gt=0)
+    cell_degs: list[Annotated[StrictFloat, Field(gt=0)]] | None = None
+    # A DISCRETIZATION_METHODS_TO_SECONDS name, e.g. "weekly".
+    temporal_grid_size: StrictStr | None = None
+    temporal_grid_sizes: list[StrictStr] | None = None
     knn_k: StrictInt = Field(default=5, gt=0)
     knn_device: KnnDevice = "cpu"
     ridge_alphas: list[Annotated[StrictFloat, Field(gt=0)]] = Field(

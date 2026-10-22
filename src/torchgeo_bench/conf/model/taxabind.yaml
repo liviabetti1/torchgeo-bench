@@ -1,0 +1,5 @@
+name: taxabind
+target: torchgeo_bench.coordbench.models.TaxaBindLocationEncoder
+track: coord
+kwargs:
+  repo: MVRL/ecogeo

@@ -384,6 +384,8 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
         finalized_df[task_name] += 1
         tasks[f"{task_name}_log"] = np.log(finalized_df[task_name])
 
+    from IPython import embed; embed(header = "in datasets.py load weekly usa electrical usage")
+
     ds = CoordBenchmark(
         name="usa_weekly_electric_load",
         lat=finalized_df["lat"].to_numpy(np.float64),

@@ -1,0 +1,5 @@
+name: csp-fmow
+target: torchgeo_bench.coordbench.models.CSPLocationEncoder
+track: coord
+kwargs:
+  variant: csp_fmow

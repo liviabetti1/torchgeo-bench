@@ -19,7 +19,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset chelsa_monthly \
-        --split both \
+        --split all \
         --temporal-discretization-methods seasonally yearly \
         --resume \
         --output "$out" \
@@ -28,7 +28,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset chelsa_monthly \
-        --split both \
+        --split all \
         --temporal-discretization-methods seasonally yearly \
         --exclude-antarctica \
         --resume \

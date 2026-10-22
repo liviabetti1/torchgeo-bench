@@ -15,7 +15,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset dm-us_trees \
-        --split both \
+        --split all \
         --resume \
         --output "$out" \
         "$@"

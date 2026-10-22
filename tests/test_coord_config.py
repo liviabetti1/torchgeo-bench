@@ -111,11 +111,19 @@ def test_all_typed_flags() -> None:
             "linear",
             "knn",
             "--split",
-            "both",
+            "all",
             "--folds",
             "3",
             "--cell-deg",
             "2.5",
+            "--cell-degs",
+            "5",
+            "15",
+            "--temporal-grid-size",
+            "weekly",
+            "--temporal-grid-sizes",
+            "monthly",
+            "seasonally",
             "--ridge-alphas",
             "0.1",
             "1",
@@ -135,9 +143,12 @@ def test_all_typed_flags() -> None:
     )
     assert config.evaluation.model_dump() == {
         "methods": ["linear", "knn"],
-        "split": "both",
+        "split": "all",
         "folds": 3,
         "cell_deg": 2.5,
+        "cell_degs": [5.0, 15.0],
+        "temporal_grid_size": "weekly",
+        "temporal_grid_sizes": ["monthly", "seasonally"],
         "ridge_alphas": [0.1, 1.0, 10.0],
         "knn_k": 7,
         "knn_device": "cpu",
@@ -146,6 +157,7 @@ def test_all_typed_flags() -> None:
         "temporal_sampling_methods": [], # new config addition for temporal tasks
         "temporal_discretization_methods": [], # new config addition for temporal tasks
         "temporal_embedding_aggregation_methods": ["statistics"],
+        "exclude_antarctica": False,
         "from_polygon": False, # new config addition for spatial aggregation
         "spatial_aggregation_methods": [], # new config addition for spatial aggregation
     }

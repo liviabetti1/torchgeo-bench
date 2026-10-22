@@ -6,10 +6,13 @@ Add models by implementing :meth:`LocationEncoder._encode` and selecting their c
 
 SinCos and MIND ship with the base install.
 
-SatCLIP, GeoCLIP, Climplicit, and SINR need ``pip install -e '.[coordbench]'``.
+SatCLIP, GeoCLIP, Climplicit, SINR, and TaxaBind need ``pip install -e '.[coordbench]'``.
+
+GAIR, CSP, TTE, and SLED need ``git`` and network access the first time a given
+model runs, to clone their pinned upstream revision and download released weights.
 """
-import os
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import override
 
@@ -98,8 +101,6 @@ class MINDLocationEncoder(LocationEncoder):
 
     Load released weights from Hugging Face. ``mind`` uses the first 64 trunk features.
 
-    ``mind_small`` uses the distilled student's 128-dimensional head output.
-
     Select trunk or head with ``feature``; ``dim`` keeps the first embedding dimensions.
 
     Note: Time is currently not supported for MIND.
@@ -115,7 +116,7 @@ class MINDLocationEncoder(LocationEncoder):
 
     def __init__(  # noqa: PLR0913 - pretrained model options.
         self,
-        repo: str = "isaaccorley/MIND",
+        repo: str = "taylor-geospatial/MIND",
         filename: str = "mind.safetensors",
         dim: int = 64,
         feature: str = "pooled",
@@ -382,3 +383,128 @@ class TemporalSatCLIPEncoder(LocationEncoder):
         ).double().to(self.device)
         emb = self.model(x)
         return emb.float().cpu().numpy()[:, : self.dim]
+
+
+class GAIRLocationEncoder(LocationEncoder):
+    """GAIR location encoder (Liu et al., ISPRS 2026, arXiv:2503.16683) -> 768-d.
+    """
+
+    name = "gair"
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+        from torchgeo_bench.coordbench.extra_encoders import embed_gair
+
+        return embed_gair(lat, lon, device=self.device)
+
+
+class CSPLocationEncoder(LocationEncoder):
+    """CSP location encoder (Mai et al., ICML 2023) -> 256-d.
+
+    Args:
+        variant: ``"csp_inat"`` (trained on iNat2018) or ``"csp_fmow"`` (trained on fMoW).
+    """
+
+    name = "csp"
+
+    def __init__(
+        self, variant: str = "csp_inat", device: str = "cpu", batch_size: int = 8192
+    ) -> None:
+        super().__init__(device=device, batch_size=batch_size)
+        self.variant = variant
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+        from torchgeo_bench.coordbench.extra_encoders import embed_csp
+
+        return embed_csp(lat, lon, device=self.device, variant=self.variant)
+
+
+class TTELocationEncoder(LocationEncoder):
+    """TTE (Tessellating the Earth, ECCV 2026) location encoder -> 512-d, L2-normalized.
+
+    Clones ``mvrl/TTE`` at a pinned revision to reuse its architecture, then
+    loads released weights from Hugging Face (``MVRL/TTE``); see
+    :mod:`torchgeo_bench.coordbench.extra_encoders`, ported from
+    ``taylor-geospatial/mind``. Requires ``git`` and network access the first
+    time this model runs.
+    """
+
+    name = "tte"
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+        from torchgeo_bench.coordbench.extra_encoders import embed_tte
+
+        return embed_tte(lat, lon, device=self.device)
+
+
+class SLEDLocationEncoder(LocationEncoder):
+    """SLED location encoder (Lane et al., arXiv:2608.06612) -> 768-d.
+
+    Clones ``geohai/sled`` at a pinned revision to reuse its GeoCLIP-style
+    architecture, then loads released weights from Hugging Face; see
+    :mod:`torchgeo_bench.coordbench.extra_encoders`, ported from
+    ``taylor-geospatial/mind``. Requires ``git`` and network access the first
+    time a given variant runs.
+
+    Args:
+        variant: ``"sled_s2ls"`` or ``"sled_s1s2ls"``, selecting the Hugging Face checkpoint.
+    """
+
+    name = "sled"
+
+    def __init__(
+        self, variant: str = "sled_s1s2ls", device: str = "cpu", batch_size: int = 8192
+    ) -> None:
+        super().__init__(device=device, batch_size=batch_size)
+        self.variant = variant
+
+    @torch.no_grad()
+    def _encode(self, lon: np.ndarray, lat: np.ndarray, _posix_timestamp: np.ndarray | None) -> np.ndarray:
+        from torchgeo_bench.coordbench.extra_encoders import embed_sled
+
+        return embed_sled(lat, lon, device=self.device, variant=self.variant)
+
+
+class TaxaBindLocationEncoder(_RSHFEncoder):
+    """TaxaBind ecology-specialist location encoder (Sastry et al., WACV 2025) -> 512-d.
+
+    Reuses GeoCLIP's Equal-Earth + RFF architecture (``rshf.geoclip``) with
+    weights trained on TaxaBind's ecological data. Input order (lat, lon).
+    The ``MVRL/ecogeo`` weights repo id follows ``taylor-geospatial/mind``'s
+    ``extra_encoders.py``. Requires the ``coordbench`` extra (``rshf``).
+
+    Args:
+        repo: HuggingFace repo id holding the weights.
+    """
+
+    name = "taxabind"
+    coord_order = "latlon"
+
+    def __init__(
+        self,
+        repo: str = "MVRL/ecogeo",
+        device: str = "cpu",
+        batch_size: int = 8192,
+    ) -> None:
+        super().__init__(device=device, batch_size=batch_size)
+        import json
+        from pathlib import Path
+
+        from huggingface_hub import hf_hub_download
+        from rshf.geoclip import GeoCLIP, GeoCLIPConfig
+        from safetensors.torch import load_file
+
+        # Build from config + weights explicitly: PyTorchModelHubMixin.from_pretrained
+        # no longer reconstructs the GeoCLIPConfig under recent huggingface_hub.
+        cfg = json.loads(Path(hf_hub_download(repo, "config.json")).read_text())
+        config = GeoCLIPConfig(
+            sigma=cfg["sigma"],
+            input_size=cfg["input_size"],
+            encoded_size=cfg["encoded_size"],
+            dim=cfg["dim"],
+        )
+        model = GeoCLIP(config)
+        model.load_state_dict(load_file(hf_hub_download(repo, "model.safetensors")))
+        self.model = model.to(self.device).eval()

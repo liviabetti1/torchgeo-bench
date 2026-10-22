@@ -94,6 +94,8 @@ def test_update_baselines_requires_comparable_results() -> None:
 
 
 def test_accuracy_fixture_matches_stored_results(tmp_path: Path) -> None:
+    if not (_REPO_ROOT / "results" / "models").exists():
+        pytest.skip("results/models not supplied; expected per-model benchmark CSVs on disk")
     out = tmp_path / "out.csv"
     result = subprocess.run(
         [
