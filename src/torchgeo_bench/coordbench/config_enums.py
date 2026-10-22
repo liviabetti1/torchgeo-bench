@@ -7,9 +7,11 @@ class TemporalResolution(str, Enum):
 
     DAILY = "daily"
     WEEKLY = "weekly"
-    BIWEEKLY = "biweekly"
-    FOUR_WEEKS = "4_weeks"
-    THIRTEEN_WEEKS = "13_weeks"
-    MONTHLY = "monthly"
-    SEASONALLY = "seasonally"
+    BIWEEKLY = "biweekly" #=2_weeks
+
+    FOUR_WEEKS = "4_weeks" # usually, will use this vs. month 
+    THIRTEEN_WEEKS = "13_weeks" # usually, will use this vs. season 
+
+    MONTHLY = "monthly" # in case acually monthly (although number of days in month differs)
+    SEASONALLY = "seasonally" # same here
     YEARLY = "yearly"

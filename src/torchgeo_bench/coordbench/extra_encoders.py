@@ -1,18 +1,16 @@
-"""GAIR, CSP, TTE, and SLED location-encoder loaders.
+"""Pretrained location-encoder baselines for CoordBench.
 
-imported from taylor-geospatial/mind
-"""
+File copied directly from https://github.com/taylor-geospatial/mind/blob/main/src/mind/eval/extra_encoders.py"""
 
 import urllib.request
 from functools import cache
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
 from torch import nn
 
-CACHE_DIR = Path.home() / ".cache" / "torchgeo_bench" / "extra_encoders"
+CACHE_DIR = Path.home() / ".cache" / "mind" / "extra_encoders"
 GAIR_SIGMAS = (2.0**0, 2.0**4, 2.0**8)
 BATCH = 65536
 
@@ -73,7 +71,6 @@ class _GairLocationEncoder(nn.Module):
 
 @cache
 def gair_model(device: str) -> nn.Module:
-    """Frozen GAIR location encoder, loaded from released Hugging Face weights."""
     from huggingface_hub import hf_hub_download
 
     state = torch.load(
@@ -151,8 +148,8 @@ def csp_model(variant: str, device: str) -> tuple:
     main = str(repo / "main")
     if main not in sys.path:  # the repo's modules import each other by bare name
         sys.path.insert(0, main)
-    from models import LocationImageEncoder  # pyrefly: ignore[missing-import]
-    from utils import convert_loc_to_tensor, get_model  # pyrefly: ignore[missing-import]
+    from models import LocationImageEncoder  # ty: ignore[unresolved-import]
+    from utils import convert_loc_to_tensor, get_model  # ty: ignore[unresolved-import]
 
     ck = torch.load(_csp_ckpt(variant), map_location="cpu", weights_only=False)
     p = dict(ck["params"])
@@ -202,12 +199,7 @@ TTE_HF = "MVRL/TTE"
 
 
 @cache
-def tte_model(device: str) -> Any:
-    """Frozen TTE location encoder, loaded from released Hugging Face weights.
-
-    Returns the upstream ``TTE`` class, whose ``.encode`` is not part of the
-    ``nn.Module`` interface, hence the ``Any`` return type.
-    """
+def tte_model(device: str) -> nn.Module:
     import subprocess
     import sys
 
@@ -218,7 +210,7 @@ def tte_model(device: str) -> Any:
         subprocess.run(["git", "-C", str(d), "checkout", "--quiet", TTE_SHA], check=True)
     if str(d) not in sys.path:
         sys.path.insert(0, str(d))
-    from tte import TTE  # pyrefly: ignore[missing-import]
+    from tte import TTE  # ty: ignore[unresolved-import]
 
     return TTE.from_pretrained(TTE_HF).to(device).eval()
 
@@ -238,6 +230,60 @@ def embed_tte(lat: np.ndarray, lon: np.ndarray, device: str = "cuda") -> np.ndar
     return np.concatenate(out, axis=0)
 
 
+# TaxaBind (Sastry et al., WACV 2025). Pass the config explicitly to retain sigma.
+
+TAXABIND_SHA = "87fb301dd2a3a855f4aa5008a0ac734289a8b1ff"  # pinned mvrl/rshf revision
+TAXABIND_REPO = "https://github.com/mvrl/rshf.git"
+TAXABIND_HF = "MVRL/ecogeo"
+
+
+@cache
+def taxabind_model(device: str) -> nn.Module:
+    import json
+    import subprocess
+    import sys
+
+    from huggingface_hub import hf_hub_download
+    from safetensors.torch import load_file
+
+    d = CACHE_DIR / "rshf"
+    if not (d / "rshf" / "geoclip" / "model.py").exists():
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "--quiet", TAXABIND_REPO, str(d)], check=True)
+        subprocess.run(["git", "-C", str(d), "checkout", "--quiet", TAXABIND_SHA], check=True)
+    if str(d) not in sys.path:
+        sys.path.insert(0, str(d))
+    from rshf.geoclip.model import GeoCLIPConfig, LocationEncoder
+
+    with open(hf_hub_download(TAXABIND_HF, "config.json")) as fh:
+        cfg = json.load(fh)
+    model = LocationEncoder(
+        GeoCLIPConfig(
+            sigma=cfg["sigma"],
+            input_size=cfg["input_size"],
+            encoded_size=cfg["encoded_size"],
+            dim=cfg["dim"],
+        )
+    )
+    model.load_state_dict(load_file(hf_hub_download(TAXABIND_HF, "model.safetensors")))
+    return model.to(device).eval()
+
+
+@torch.no_grad()
+def embed_taxabind(lat: np.ndarray, lon: np.ndarray, device: str = "cuda") -> np.ndarray:
+    """TaxaBind embeddings [N, 512]; the model takes (lat, lon) degrees."""
+    dev = device if (device == "cpu" or torch.cuda.is_available()) else "cpu"
+    enc = taxabind_model(dev)
+    coords = torch.stack(
+        [torch.as_tensor(lat, dtype=torch.float32), torch.as_tensor(lon, dtype=torch.float32)], 1
+    )
+    out = [
+        enc(coords[i : i + BATCH].to(dev)).float().cpu().numpy()
+        for i in range(0, len(coords), BATCH)
+    ]
+    return np.concatenate(out, axis=0)
+
+
 # SLED (Lane et al., arXiv:2608.06612). Its projection expects (lat, lon).
 
 SLED_SHA = "0e30d3e9e69200ab41560bdedfd3a6c71178dbd6"  # pinned geohai/sled revision
@@ -247,7 +293,6 @@ SLED_VARIANTS = {"sled_s2ls": "geohai/sled-s2-ls", "sled_s1s2ls": "geohai/sled-s
 
 @cache
 def sled_model(variant: str, device: str) -> nn.Module:
-    """Frozen SLED location encoder for the given variant, loaded from Hugging Face weights."""
     import json
     import subprocess
     import sys
@@ -262,7 +307,7 @@ def sled_model(variant: str, device: str) -> nn.Module:
         subprocess.run(["git", "-C", str(d), "checkout", "--quiet", SLED_SHA], check=True)
     if str(d) not in sys.path:
         sys.path.insert(0, str(d))
-    from sled_geo.position_encoders import (  # pyrefly: ignore[missing-import]
+    from sled_geo.position_encoders import (  # ty: ignore[unresolved-import]
         LocationEncoderGeoCLIP,
     )
 

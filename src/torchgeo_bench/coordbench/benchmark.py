@@ -38,7 +38,8 @@ class CoordBenchmark:
     end_timestamp: np.ndarray | None = None
 
     def filter_by_latitude(self, min_lat: float) -> None:
-        """Drop points below ``min_lat`` in-place."""
+        """Drop points below ``min_lat`` in-place.
+        Goal of this is to get rid of points in Antarctica."""
         mask = self.lat >= min_lat
         self.lat = self.lat[mask]
         self.lon = self.lon[mask]

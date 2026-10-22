@@ -18,6 +18,20 @@ DEEPMIND_EVAL_CONFIGS = (
     "us_trees",
 )
 
+PDFM_NON_TASK = frozenset(
+    {
+        "place",
+        "county",
+        "state",
+        "latitude",
+        "longitude",
+        "Count_Person",
+        "imputation_split",
+        "superresolution_split",
+        "extrapolation_split",
+    }
+)
+
 USAVARS_LABELS = (
     "treecover",
     "elevation",
@@ -27,6 +41,11 @@ USAVARS_LABELS = (
     "roads",
     "housing",
 )
+
+USAVARS_NODATA = -999.0  # nodata sentinel in the label CSVs
+# log1p the heavy right-skewed targets (matches PDFM's own convention for pop/nightlights).
+USAVARS_LOG_LABELS = frozenset({"population", "income", "nightlights", "housing"})
+
 
 SUSTAINBENCH_TASKS = {
     "asset": "asset_index",
@@ -71,6 +90,22 @@ CHELSA_LABELS = (
     "tz",
     "we",
 )
+
+CHELSA_MONTHLY_LABELS = (
+    'hurs',
+    'tas',
+    'tasmin',
+    'tasmax',
+    'rsds',
+    # 'vpd',
+    'pr',
+    'pet',
+    'cmi',
+    # 'sfcWind', Flatlined values regardless of time; indices that appear to be broken
+    # 'spi12',
+    # 'spei12',
+)
+
 
 ELECTRIC_LOAD_VARIABLES = (
     "mean",
@@ -135,7 +170,8 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "usa_electric_load_daily": [f"usa_daily_electric_load_{year}" for year in range(2016, 2024)],
     "usa_electric_load_weekly" : ("usa_electric_load_weekly",),
     "chelsa_monthly": ("chelsa_monthly",),
-    "usa_census": ("usa_census_data",),
     "global_population": [f"global_population_{landmass}" for
-                          landmass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]]
+                          landmass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]],
+    "viirs_night_lights": ("viirs_night_lights",),
+    "usa_census": ("usa_census",),
 }

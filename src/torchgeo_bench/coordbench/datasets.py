@@ -20,13 +20,18 @@ import pandas as pd
 import geopandas as gpd
 
 from torchgeo_bench.coordbench.catalog import (
+    ERA5_ECMWF_LABELS,
     CDC_PLACES_MEASURES,
     CHELSA_LABELS,
+    CHELSA_MONTHLY_LABELS,
     DEEPMIND_EVAL_CONFIGS,
     ELECTRIC_LOAD_VARIABLES,
     FAMILY_BENCHMARKS,
     SUSTAINBENCH_TASKS,
     USAVARS_LABELS,
+    PDFM_NON_TASK,
+    USAVARS_NODATA,
+    USAVARS_LOG_LABELS
 )
 
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
@@ -39,107 +44,6 @@ COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbenc
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
-
-USAVARS_NODATA = -999.0  # nodata sentinel in the label CSVs
-# log1p the heavy right-skewed targets (matches PDFM's own convention for pop/nightlights).
-USAVARS_LOG_LABELS = frozenset({"population", "income", "nightlights", "housing"})
-
-PDFM_NON_TASK = frozenset(
-    {
-        "place",
-        "county",
-        "state",
-        "latitude",
-        "longitude",
-        "Count_Person",
-        "imputation_split",
-        "superresolution_split",
-        "extrapolation_split",
-    }
-)
-
-# move into catalog
-SUSTAINBENCH_TASKS = {
-    "asset": "asset_index",
-    "water": "water_index",
-    "sanitation": "sanitation_index",
-    "child_mortality": "under5_mort",
-    "women_edu": "women_edu",
-    "women_bmi": "women_bmi",
-}
-
-# move into catalog
-CDC_PLACES_MEASURES = {  # task name -> GIS-friendly column prefix (CrudePrev = crude prevalence %)
-    "phys_health": "PHLTH",
-    "diabetes": "DIABETES",
-    "copd": "COPD",
-    "cancer": "CANCER",
-    "chd": "CHD",
-    "mental_health": "MHLTH",
-    "checkup": "CHECKUP",
-    "sleep_lt7": "SLEEP",
-    "asthma": "CASTHMA",
-    "obesity": "OBESITY",
-    "smoking": "CSMOKING",
-    "high_chol": "HIGHCHOL",
-}
-
-ERA5_ECMWF_LABELS = (
-    'd2m', 
-    't2m', 
-    'stl1', 
-    'stl2', 
-    'stl3', 
-    'stl4', 
-    'swvl1', 
-    'swvl2', 
-    'swvl3', 
-    'swvl4', 
-    'ssrd', 
-    'strd', 
-    'sde', 
-    'snowc', 
-    'u10', 
-    'v10', 
-    'sp', 
-    'tp', 
-    'skt'
-)
-ELECTRIC_LOAD_VARIABLES = [
-    "average",
-    "min",
-    "max",
-    "median",
-]
-
-
-CHELSA_LABELS = (
-    'hurs',
-    'pr',
-    'ps',
-    'rsds',
-    'sfcWind',
-    'tas',
-    'tasmin',
-    'tasmax',
-    'tz',
-    'we'
-)
-
-CHELSA_MONTHLY_LABELS = (
-    'hurs',
-    'tas',
-    'tasmin',
-    'tasmax',
-    'rsds',
-    # 'vpd',
-    'pr',
-    'pet',
-    'cmi',
-    # 'sfcWind', Flatlined values regardless of time; indices that appear to be broken
-    # 'spi12',
-    # 'spei12',
-)
 
 def load_config(config: str) -> pd.DataFrame:
     """Read one CoordBench config's normalized parquet table from HuggingFace."""
@@ -383,8 +287,6 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
         tasks[task_name] = finalized_df[task_name].to_numpy(np.float64) #remove if log norm is the better task
         finalized_df[task_name] += 1
         tasks[f"{task_name}_log"] = np.log(finalized_df[task_name])
-
-    from IPython import embed; embed(header = "in datasets.py load weekly usa electrical usage")
 
     ds = CoordBenchmark(
         name="usa_weekly_electric_load",

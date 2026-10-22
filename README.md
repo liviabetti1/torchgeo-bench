@@ -84,7 +84,7 @@ fall back to CPU:
 torchgeo-bench run --model rcf --dataset m-eurosat --device cpu
 ```
 
-Results are appended to `results/models/<model name>.csv`, which **ship pre-populated with reference results**. To start from a clean slate, pass `--output results/my_run.csv` or set `output.file` in a YAML file passed with `--config`. Re-run the same command with `--resume` to skip completed rows. Each evaluation is saved as soon as it finishes, so a later failure does not discard completed metrics.
+Results are appended to `results/models/<model name>.csv`. To start these files over, pass `--output results/my_run.csv` or set `output.file` in a YAML file passed with `--config`. Re-run the same command with `--resume` to skip completed rows.
 
 ```bash
 # Linear-only probing, with explicit flags overriding the YAML
