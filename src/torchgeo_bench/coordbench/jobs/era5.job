@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH --job-name=cb-era5
+#SBATCH --array=0-2
+#SBATCH --mem=20g
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus-per-node=1
+#SBATCH --gpu-bind=closest
+#SBATCH --account=bgtj-tgirails
+#SBATCH --time=4:00:00
+#SBATCH --output=slurm_logs/%x_%A_%a.out
+
+set -euo pipefail
+export OMP_NUM_THREADS=1
+
+REPO=/u/lbetti/projects/torchgeo-bench
+RESULTS=/projects/bgtj/t_satclip/results
+
+source "$REPO/.venv/bin/activate"
+
+MODELS=(
+    climplicit
+    gtloc
+    "t_satclip/t_satclip_doy_1M"
+)
+MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
+echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
+
+torchgeo-bench coord \
+    --model "$MODEL" \
+    --dataset era5_ecmwf \
+    --split both \
+    --temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks \
+    --resume \
+    --output "$RESULTS/coordbench_era5_temporal.csv" \
+    --device cuda:0 \
+    "$@"

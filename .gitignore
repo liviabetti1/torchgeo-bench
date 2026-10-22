@@ -80,6 +80,7 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+**/notebooks/shapefiles/
 
 # Keep notebooks under any debugging directory
 !**/debugging/*.ipynb

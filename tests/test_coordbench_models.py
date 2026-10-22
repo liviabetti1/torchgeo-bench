@@ -9,12 +9,16 @@ import pytest
 
 from torchgeo_bench.coordbench.models import (
     ClimplicitLocationEncoder,
+    CSPLocationEncoder,
+    GAIRLocationEncoder,
     GTLocEncoder,
     SinCosLocationEncoder,
+    SLEDLocationEncoder,
+    TaxaBindLocationEncoder,
     TemporalSatCLIPEncoder,
+    TTELocationEncoder,
     _date_to_posix_timestamp,
 )
-
 
 TEST_LAT_LONS = np.array(
     [
@@ -29,9 +33,7 @@ TEST_LAT_LONS = np.array(
 LATITUDES = TEST_LAT_LONS[:, 0]
 LONGITUDES = TEST_LAT_LONS[:, 1]
 
-TIMESTAMPS = np.array(
-    [_date_to_posix_timestamp(2020, m, 15) for m in (1, 7, 12, 6, 3)]
-)
+TIMESTAMPS = np.array([_date_to_posix_timestamp(2020, m, 15) for m in (1, 7, 12, 6, 3)])
 
 
 def test_timestamp_conversion() -> None:
@@ -51,6 +53,39 @@ def test_temporal_encoders_require_timestamp(encoder_class) -> None:
     encoder = encoder_class.__new__(encoder_class)  # Skip __init__; don't load weights.
     with pytest.raises(ValueError, match="posix_timestamp"):
         encoder._encode(LONGITUDES, LATITUDES, None)
+
+
+@pytest.mark.parametrize(
+    "encoder_class",
+    [GAIRLocationEncoder, CSPLocationEncoder, TTELocationEncoder, SLEDLocationEncoder],
+)
+def test_network_backed_encoders_construct_without_loading_weights(encoder_class) -> None:
+    """Weight loading happens lazily inside ``_encode``, not ``__init__``."""
+    encoder = encoder_class(device="cpu")
+    assert encoder.device == "cpu"
+
+
+@pytest.mark.parametrize(
+    ("encoder_class", "variant"),
+    [(CSPLocationEncoder, "csp_fmow"), (SLEDLocationEncoder, "sled_s2ls")],
+)
+def test_variant_encoders_store_the_requested_variant(encoder_class, variant) -> None:
+    encoder = encoder_class(variant=variant, device="cpu")
+    assert encoder.variant == variant
+
+
+@pytest.mark.slow
+def test_gair_embeds_expected_shape() -> None:
+    encoder = GAIRLocationEncoder(device="cpu")
+    embeddings = encoder.encode(LONGITUDES, LATITUDES)
+    assert embeddings.shape == (len(LONGITUDES), 768)
+
+
+@pytest.mark.slow
+def test_taxabind_embeds_expected_shape() -> None:
+    encoder = TaxaBindLocationEncoder(device="cpu")
+    embeddings = encoder.encode(LONGITUDES, LATITUDES)
+    assert embeddings.shape == (len(LONGITUDES), 512)
 
 
 @pytest.mark.slow

@@ -47,6 +47,7 @@ EMBEDDING_AGGREGATION_METHODS = [
     "sequence_model",
 ]
 
+EMBEDDING_STATS = ["mean", "min", "max", "std", "slope", "total_variation"]
 LABEL_STATS = ["mean", "min", "max"]
 
 def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
@@ -203,7 +204,7 @@ def dataset_discretization(
     timestamps = rows["timestamp"].to_numpy().reshape(-1, T) # (N, T)
 
     # Aggregate the tasks over time for each (lat, lon, window) group
-    #f or classification tasks, we use the mode of the labels over time
+    # for classification tasks, we use the mode of the labels over time
     # for regression tasks, we use the mean, min, and max of the labels over time
     aggregated = grouped.agg(**{
         f"{task}_{agg}": (task, (lambda s: s.mode().iloc[0]) if agg == "mode" else agg)
@@ -221,7 +222,7 @@ def dataset_discretization(
             for stat in task_val_aggregations
         },
         task_type=dataset.task_type,
-        temporal_resolution=dataset.temporal_resolution,
+        temporal_resolution=TemporalResolution(method),
         year=dataset.year,
         posix_timestamp=timestamps,
         spatial_aggregation_key=dataset.spatial_aggregation_key,
@@ -244,12 +245,17 @@ def _aggregate_embeddings(
         batch_size: Maximum number of observations per encoder call.
 
     Returns:
-        Mapping of "mean", "min" and "max" to tensors of shape (N, D).
+        Mapping of stat name to tensor of shape (N, D).
+        Keys: "mean", "min", "max", "std", "slope", "total_variation".
     """
     T = timestamps.shape[1]
     locations_per_batch = max(1, batch_size // T)
 
-    aggregated_embeddings = {"mean": [], "min": [], "max": []}
+    aggregated_embeddings: dict[str, list[torch.Tensor]] = {s: [] for s in EMBEDDING_STATS}
+
+    # Centered time index for OLS slope
+    t_index = torch.linspace(-1, 1, T)  # (T,)
+    t_var = (t_index**2).sum()
 
     #for start in tqdm(range(0, len(lats), locations_per_batch), desc="Encoding", unit="batch", leave=False):
     for start in track(range(0, len(lats), locations_per_batch), f"Aggregating embeddings"):
@@ -279,17 +285,24 @@ def _aggregate_embeddings(
         mean_embeddings = embeddings.mean(dim=1)
         min_embeddings = embeddings.amin(dim=1)
         max_embeddings = embeddings.amax(dim=1)
+        std_embeddings = embeddings.std(dim=1)
 
-        # just checking that the shapes are correct
-        assert mean_embeddings.shape == min_embeddings.shape == max_embeddings.shape == (B, embeddings.shape[-1]), (
-            f"Expected shape {(B, embeddings.shape[-1])}, got mean {mean_embeddings.shape}, min {min_embeddings.shape}, max {max_embeddings.shape}"
-        )
+        # Per-channel OLS slope against centered time index
+        slope_embeddings = (embeddings * t_index[None, :, None]).sum(dim=1) / t_var
 
+        # Sum of absolute consecutive differences
+        total_variation_embeddings = (embeddings[:, 1:] - embeddings[:, :-1]).abs().sum(dim=1)
+
+        expected = (B, embeddings.shape[-1])
         for stat, value in (
             ("mean", mean_embeddings),
             ("min", min_embeddings),
             ("max", max_embeddings),
+            ("std", std_embeddings),
+            ("slope", slope_embeddings),
+            ("total_variation", total_variation_embeddings),
         ):
+            assert value.shape == expected, f"{stat}: expected {expected}, got {value.shape}"
             aggregated_embeddings[stat].append(value.cpu())
 
     aggregated_embeddings = {
@@ -382,8 +395,10 @@ def temporal_sample_and_aggregate_embeddings(
 
 if __name__ == "__main__":
     # EXAMPLE USAGE
-    from torchgeo_bench.coordbench.datasets import load_era5_ecmwf
-    from torchgeo_bench.coordbench.models import GeoCLIPLocationEncoder
+    from torchgeo_bench.coordbench.datasets import load_era5_ecmwf, load_chelsa_daily
+    from torchgeo_bench.coordbench.models import SinCosLocationEncoder
 
-    (era5,) = load_era5_ecmwf()
-    discretize_dataset_and_aggregate_embeddings(era5, GeoCLIPLocationEncoder(), 'weekly', 'statistics')
+    (era5,) = load_era5_ecmwf(subsample_locations=False)
+    (chelsa,) = load_chelsa_daily(subsample_locations=False)
+    discretize_dataset_and_aggregate_embeddings(era5, SinCosLocationEncoder(), 'weekly', 'statistics')
+    discretize_dataset_and_aggregate_embeddings(chelsa, SinCosLocationEncoder(), 'weekly', 'statistics')

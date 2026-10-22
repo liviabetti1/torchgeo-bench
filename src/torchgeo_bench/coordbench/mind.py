@@ -3,10 +3,10 @@
 MIND (Matryoshka Implicit Neural Distillation) is a lat/lon location encoder
 distilled from four geospatial foundation models (AlphaEarth, Climplicit,
 GeoCLIP, SINR). Given a coordinate it returns a Matryoshka-structured embedding
-with no imagery or labels at inference. Ported from the upstream standalone
-loader so torchgeo-bench needs no dependency on the training repo.
+with no imagery or labels at inference. Ported from ``taylor-geospatial/mind``'s
+``mind_standalone.py`` so torchgeo-bench needs no dependency on the training repo.
 
-Weights: https://huggingface.co/isaaccorley/MIND
+Weights: https://huggingface.co/taylor-geospatial/MIND
 """
 
 import math
