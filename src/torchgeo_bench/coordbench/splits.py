@@ -71,6 +71,7 @@ def _random_temporal(posix_timestamp: np.ndarray, folds: int = 5, seed: int = 42
     Returns:
         Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
+    print("Splitting into random temporal sets (locations of one timestamp stay together) for CV")
     # unique timestamps
     uniq, inverse = np.unique(posix_timestamp, return_inverse=True)
     order = np.random.default_rng(seed).permutation(len(uniq))
@@ -97,6 +98,7 @@ def _grid_temporal(
     Returns:
         Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
+    print("Splitting into temporal grids for CV")
     # partition timestamps into cells, which are blocks of contiguous time
     cell = np.floor(np.asarray(posix_timestamp) / temporal_grid_size).astype(np.int64)
     uniq, inverse = np.unique(cell, return_inverse=True)
@@ -121,6 +123,7 @@ def _forecast_temporal(posix_timestamp: np.ndarray, folds: int = 5) -> np.ndarra
     Returns:
         Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
+    print("Splitting into temporal forecasts for CV")
     uniq, inverse = np.unique(posix_timestamp, return_inverse=True)
 
     # last one will be 0

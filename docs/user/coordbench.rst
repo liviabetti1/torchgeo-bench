@@ -102,8 +102,8 @@ holdout:
    K-fold cross-validation over fixed-width time windows (grid cells along
    the POSIX-timestamp axis), skipped for benchmarks without timestamps.
    ``evaluation.temporal_grid_size`` (``--temporal-grid-size``) names the
-   window width: ``daily``, ``1_week``, ``2_weeks``, ``4_weeks``,
-   ``13_weeks``, or ``annually`` (see ``DISCRETIZATION_METHODS_TO_SECONDS`` 
+   window width: ``daily``, ``weekly``, ``biweekly``, ``4_weeks``,
+   ``13_weeks``, ``monthly``, ``seasonally``, or ``yearly`` (see ``DISCRETIZATION_METHODS_TO_SECONDS`` 
    in ``temporal_aggregation.py``). To sweep several window sizes, set 
    ``evaluation.temporal_grid_sizes`` (``--temporal-grid-sizes``) to a list.
 ``all``

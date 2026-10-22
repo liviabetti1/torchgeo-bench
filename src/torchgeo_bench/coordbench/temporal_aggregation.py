@@ -19,12 +19,10 @@ DAY_SECONDS = 24 * 60 * 60
 
 DISCRETIZATION_METHODS_TO_SECONDS = {
     "daily": DAY_SECONDS,
-    "1_week": 7 * DAY_SECONDS,
-    "2_weeks": 14 * DAY_SECONDS,
-    "4_weeks": 28 * DAY_SECONDS,
-    "13_weeks": 91 * DAY_SECONDS,
     "weekly": 7 * DAY_SECONDS,
     "biweekly": 14 * DAY_SECONDS,
+    "4_weeks": 28 * DAY_SECONDS,
+    "13_weeks": 91 * DAY_SECONDS,
     "monthly": 30 * DAY_SECONDS,
     "seasonally": 90 * DAY_SECONDS,
     "yearly": 365 * DAY_SECONDS,

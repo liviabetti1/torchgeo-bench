@@ -20,7 +20,7 @@ for model in "${MODELS[@]}"; do
         --model "$model" \
         --dataset era5_ecmwf \
         --split all \
-        --temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks \
+        --temporal-discretization-methods weekly biweekly 4_weeks 13_weeks \
         --resume \
         --output "$out" \
         "$@"
@@ -29,7 +29,7 @@ for model in "${MODELS[@]}"; do
         --model "$model" \
         --dataset era5_ecmwf \
         --split all \
-        --temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks \
+        --temporal-discretization-methods weekly biweekly 4_weeks 13_weeks \
         --exclude-antarctica \
         --resume \
         --output "$out" \

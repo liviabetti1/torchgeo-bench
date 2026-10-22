@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from pydantic import ValidationError
 
 from tests.support.numerical import isolated_torch_rng as isolated_torch_rng
 from torchgeo_bench.config.presets import ModelPreset
@@ -322,17 +323,18 @@ def test_run_coordbench_all_split_skips_temporal_without_grid_size(
     assert {"random", "spatial"} <= set(df.split)
 
 
-def test_run_coordbench_explicit_temporal_without_grid_size_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({}, "requires temporal_grid_size"),
+        ({"temporal_grid_sizes": ["weekly", "fortnightly"]}, "Unknown temporal grid sizes"),
+    ],
+)
+def test_coord_config_rejects_invalid_temporal_grid(
+    tmp_path: Path, overrides: dict[str, Any], message: str
 ) -> None:
-    bench = _synthetic_benchmarks()[0]
-    rng = np.random.default_rng(2)
-    bench.posix_timestamp = rng.uniform(0, 10 * 365 * 86400, size=len(bench.lat))
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
-
-    cfg = _coord_cfg(tmp_path, split="temporal")
-    with pytest.raises(KeyError):
-        run_coordbench(cfg)
+    with pytest.raises(ValidationError, match=message):
+        _coord_cfg(tmp_path, split="temporal", **overrides)
 
 
 def test_run_coordbench_cell_degs_sweep_produces_one_row_per_value(
@@ -499,7 +501,7 @@ def test_runtime_method_selection(
         "seed",
         "model_name",
         "model_target",
-        "temporal_embedding_aggregation"
+        "temporal_embedding_aggregation",
     ]
 
 

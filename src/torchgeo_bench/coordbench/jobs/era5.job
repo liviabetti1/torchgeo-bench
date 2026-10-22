@@ -32,7 +32,7 @@ torchgeo-bench coord \
     --model "$MODEL" \
     --dataset era5_ecmwf \
     --split both \
-    --temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks \
+    --temporal-discretization-methods weekly biweekly 4_weeks 13_weeks \
     --resume \
     --output "$RESULTS/coordbench_era5_temporal.csv" \
     --device cuda:0 \

@@ -44,7 +44,7 @@ This dataset is elevation data without timestamps. We can evaluate on it to see 
 
 These datasets were constructed manually at 30K locations for each day in 2017. They were built so that they can be aggregated at different temporal resolutions.
 
-**Supported resolutions:** `1_week`, `2_week`, `4_week`, `13_week`, `annual`
+**Supported resolutions:** `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `monthly`, `seasonally`, `yearly`
 
 **Two ways to aggregate:**
 
@@ -75,9 +75,7 @@ We have two categories of experiments, depending on whether the dataset carries 
 
 ## Datasets with timestamps
 
-Timestamps are discretized into windows of a chosen resolution (e.g. `1_week`, `2_week`). Each location's samples that fall within a window are then aggregated into a single embedding.
-
-Note, you can specify 1_week or weekly, 2_week or biweekly,...
+Timestamps are discretized into windows of a chosen resolution (e.g. `weekly`, `biweekly`). Each location's samples that fall within a window are then aggregated into a single embedding.
 
 ## Datasets without timestamps (static)
 
@@ -92,11 +90,23 @@ We now have two steps to this process:
 1. **Discretization / temporal sampling** — produces a dataset where each row is a `(lat, lon, time_window)` tuple.
 2. **Embedding generation and aggregation** — generates an embedding per timestamp and aggregates across the window. The default aggregation is *statistical*, which returns channelwise mean, max, and min; `run.py` currently uses only the mean.
 
+# Temporal Split Experiments
+
+`--split temporal` cross-validates over time blocks, so each fold holds out whole stretches of time. It is skipped for benchmarks without timestamps. `--temporal-grid-size` (or `--temporal-grid-sizes` for a sweep) sets the block width and is required.
+
+**Grid sizes:** `daily`, `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `monthly`, `seasonally`, `yearly`
+
+```bash
+bash src/torchgeo_bench/coordbench/scripts/run_era5_temporal_split.sh --device cuda:0
+```
+
 ## Summary of flags now
 
 | Flag | Description |
 |------|-------------|
-| `--temporal-discretization-methods` | Window sizes for datasets that already have timestamps (e.g. `1_week`, `2_weeks`, `4_weeks`, `13_weeks`) |
+| `--split temporal` | Cross-validate over time blocks (needs a grid size) |
+| `--temporal-grid-size(s)` | Width of the held-out time blocks; `--temporal-grid-sizes` sweeps several |
+| `--temporal-discretization-methods` | Window sizes for datasets that already have timestamps (e.g. `weekly`, `biweekly`, `4_weeks`, `13_weeks`) |
 | `--temporal-sampling-methods` | Time frame to sample for static datasets (`year`, `spring`, `summer`, `fall`, `winter`) |
 | `--temporal-sampling-year` | Calendar year to sample timestamps from (required for static datasets) |
 | `--temporal-embedding-aggregation-methods` | How to pool per-timestamp embeddings into one vector (default: `statistics`, which computes channelwise mean, min, and max; only the mean is used downstream) |
