@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from pydantic import ValidationError
 
 from tests.support.numerical import isolated_torch_rng as isolated_torch_rng
 from torchgeo_bench.config.presets import ModelPreset
@@ -19,10 +20,12 @@ from torchgeo_bench.coordbench import (
     load_benchmarks,
     run_coordbench,
     spatial_fold_ids,
+    temporal_fold_ids,
 )
 from torchgeo_bench.coordbench import datasets as cb_datasets
 from torchgeo_bench.coordbench.config import CoordConfig
 from torchgeo_bench.coordbench.run import _instantiate_encoder
+from torchgeo_bench.coordbench.temporal_aggregation import DISCRETIZATION_METHODS_TO_SECONDS
 
 pytestmark = pytest.mark.usefixtures("isolated_torch_rng")
 
@@ -180,6 +183,17 @@ def test_spatial_fold_ids_group_by_cell(points: tuple[np.ndarray, np.ndarray]) -
         assert len(np.unique(fa[cell == c])) == 1
 
 
+def test_temporal_fold_ids_grid_groups_by_cell() -> None:
+    rng = np.random.default_rng(0)
+    timestamps = rng.uniform(0, 10 * 365 * 86400, size=400)
+    fa = temporal_fold_ids(timestamps, method="grid", folds=5, temporal_grid_size=86400.0)
+    assert fa.shape == timestamps.shape
+    assert set(np.unique(fa)).issubset(set(range(5)))
+    cell = np.floor(timestamps / 86400.0).astype(np.int64)
+    for c in np.unique(cell):
+        assert len(np.unique(fa[cell == c])) == 1
+
+
 def test_test_mask_split_single_fold(points: tuple[np.ndarray, np.ndarray]) -> None:
     lon, lat = points
     feats = SinCosLocationEncoder(device="cpu").encode(lon, lat)
@@ -238,7 +252,7 @@ def test_run_coordbench_end_to_end(
     monkeypatch.setattr(
         "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: _synthetic_benchmarks()
     )
-    cfg = _coord_cfg(tmp_path, split="both")
+    cfg = _coord_cfg(tmp_path, split="all")
     cfg.output.directory = str(tmp_path / "nested")
     output_path = tmp_path / "coord.csv"
     if not explicit_file:
@@ -269,12 +283,94 @@ def test_run_coordbench_reports_official_test_count(
     bench.test_mask = test_mask
     monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
 
-    cfg = _coord_cfg(tmp_path, split="both")
+    cfg = _coord_cfg(tmp_path, split="all")
     run_coordbench(cfg)
 
     df = pd.read_csv(cfg.output.file)
     assert set(df.split) == {"official"}
     assert set(df.n_test) == {int(test_mask.sum())}
+
+
+def test_run_coordbench_temporal_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bench = _synthetic_benchmarks()[0]
+    rng = np.random.default_rng(2)
+    bench.posix_timestamp = rng.uniform(0, 10 * 365 * 86400, size=len(bench.lat))
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
+
+    cfg = _coord_cfg(tmp_path, split="temporal", temporal_grid_size="monthly")
+    run_coordbench(cfg)
+
+    df = pd.read_csv(cfg.output.file)
+    assert set(df.split) == {"temporal"}
+    assert set(df.temporal_grid_size) == {DISCRETIZATION_METHODS_TO_SECONDS["monthly"]}
+
+
+def test_run_coordbench_all_split_skips_temporal_without_grid_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bench = _synthetic_benchmarks()[0]
+    rng = np.random.default_rng(2)
+    bench.posix_timestamp = rng.uniform(0, 10 * 365 * 86400, size=len(bench.lat))
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
+
+    cfg = _coord_cfg(tmp_path, split="all")
+    run_coordbench(cfg)
+
+    df = pd.read_csv(cfg.output.file)
+    # "all" is best-effort: without a configured grid size, temporal is skipped rather
+    # than crashing the whole run, unlike an explicit `--split temporal` request.
+    assert "temporal" not in set(df.split)
+    assert {"random", "spatial"} <= set(df.split)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({}, "requires temporal_grid_size"),
+        ({"temporal_grid_sizes": ["weekly", "fortnightly"]}, "Unknown temporal grid sizes"),
+    ],
+)
+def test_coord_config_rejects_invalid_temporal_grid(
+    tmp_path: Path, overrides: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        _coord_cfg(tmp_path, split="temporal", **overrides)
+
+
+def test_run_coordbench_cell_degs_sweep_produces_one_row_per_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [_synthetic_benchmarks()[0]]
+    )
+    cfg = _coord_cfg(tmp_path, split="spatial", cell_degs=[5.0, 20.0])
+    run_coordbench(cfg)
+
+    df = pd.read_csv(cfg.output.file)
+    assert set(df.split) == {"spatial"}
+    assert set(df.cell_deg) == {5.0, 20.0}
+
+
+def test_run_coordbench_resume_keeps_distinct_sweep_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [_synthetic_benchmarks()[0]]
+    )
+    output_path = tmp_path / "coord.csv"
+    cfg = _coord_cfg(tmp_path, split="spatial", cell_degs=[5.0])
+    cfg.output.file = str(output_path)
+    cfg.output.resume = True
+    run_coordbench(cfg)
+
+    cfg_more = _coord_cfg(tmp_path, split="spatial", cell_degs=[5.0, 20.0])
+    cfg_more.output.file = str(output_path)
+    cfg_more.output.resume = True
+    run_coordbench(cfg_more)
+
+    df = pd.read_csv(output_path)
+    # The new cell_deg=20.0 value must not be skipped as already completed.
+    assert set(df.cell_deg) == {5.0, 20.0}
 
 
 def test_load_benchmarks_selection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,13 +494,14 @@ def test_runtime_method_selection(
         "ci_upper",
         "n_folds",
         "cell_deg",
+        "temporal_grid_size",
         "feature_dim",
         "n_samples",
         "n_test",
         "seed",
         "model_name",
         "model_target",
-        "temporal_embedding_aggregation"
+        "temporal_embedding_aggregation",
     ]
 
 

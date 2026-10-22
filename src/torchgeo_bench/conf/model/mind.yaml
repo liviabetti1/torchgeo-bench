@@ -2,7 +2,7 @@ name: mind
 target: torchgeo_bench.coordbench.models.MINDLocationEncoder
 track: coord
 kwargs:
-  repo: isaaccorley/MIND
+  repo: taylor-geospatial/MIND
   filename: mind.safetensors
   feature: pooled
   dim: 64

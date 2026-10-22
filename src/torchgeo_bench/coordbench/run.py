@@ -13,7 +13,7 @@ import os
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,7 @@ from torchgeo_bench.coordbench.config_enums import TemporalResolution
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import (
+    DISCRETIZATION_METHODS_TO_SECONDS,
     discretize_dataset_and_aggregate_embeddings,
     temporal_sample_and_aggregate_embeddings,
 )
@@ -39,13 +40,22 @@ from torchgeo_bench.coordbench.probe import (
     knn_probe_score,
     linear_probe_score
 )
-from torchgeo_bench.coordbench.splits import spatial_fold_ids
+from torchgeo_bench.coordbench.splits import spatial_fold_ids, temporal_fold_ids
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.results import append_rows_atomic
 
 logger = logging.getLogger(__name__)
 
-RESUME_KEY_COLS = ("dataset", "task", "method", "model_name", "split", "temporal_embedding_aggregation")
+RESUME_KEY_COLS = (
+    "dataset",
+    "task",
+    "method",
+    "model_name",
+    "split",
+    "temporal_embedding_aggregation",
+    "cell_deg",
+    "temporal_grid_size",
+)
 
 
 @dataclass
@@ -63,6 +73,7 @@ class CoordResult:
     ci_upper: float  # metric_value + std over folds
     n_folds: int
     cell_deg: float
+    temporal_grid_size: float | None
     feature_dim: int
     n_samples: int
     n_test: int
@@ -90,10 +101,10 @@ def _instantiate_encoder(preset: ModelPreset, device: str) -> LocationEncoder:
 
 def _resolve_splits(split: str) -> list[str]:
     """Expand the selected CV modes to run."""
-    if split == "both":
-        return ["random", "spatial"]
-    if split not in ("random", "spatial"):
-        raise ValueError(f"evaluation.split must be random|spatial|both; got {split!r}")
+    if split == "all":
+        return ["random", "spatial", "temporal"]
+    if split not in ("random", "spatial", "temporal"):
+        raise ValueError(f"evaluation.split must be random|spatial|temporal|all; got {split!r}")
     return [split]
 
 
@@ -163,16 +174,49 @@ def _score_one(
     )
 
 
-def _evaluation_split(
-    bench: CoordBenchmark, split: str, coord: CoordEvaluationConfig, seed: int
-) -> tuple[np.ndarray | None, np.ndarray | None, str]:
-    """Use an official holdout when present, otherwise the requested CV split."""
+_SweepValue = TypeVar("_SweepValue", bound="float | str | None")
+
+
+def _sweep_values(scalar: _SweepValue, overrides: Sequence[_SweepValue] | None) -> list[_SweepValue]:
+    """Return explicit sweep overrides if given, else the single scalar value."""
+    return list(overrides) if overrides else [scalar]
+
+
+def _evaluation_splits(
+    bench: CoordBenchmark, coord: CoordEvaluationConfig, seed: int
+) -> list[tuple[str, np.ndarray | None, np.ndarray | None, float, float | None]]:
+    """Build one (split_label, test_mask, fold_assign, cell_deg, temporal_grid_size) run per split.
+
+    An official holdout mask takes precedence over every requested CV split and sweep,
+    and is evaluated exactly once.
+    """
     if bench.test_mask is not None:
-        return bench.test_mask, None, "official"
-    if split == "spatial":
-        assignment = spatial_fold_ids(bench.lat, bench.lon, coord.folds, coord.cell_deg, seed)
-        return None, assignment, "spatial"
-    return None, None, "random"
+        return [("official", bench.test_mask, None, 0.0, 0.0)]
+
+    runs: list[tuple[str, np.ndarray | None, np.ndarray | None, float, float | None]] = []
+    for split in _resolve_splits(coord.split):
+        if split == "random":
+            runs.append(("random", None, None, 0.0, 0.0))
+        elif split == "spatial":
+            for cell_deg in _sweep_values(coord.cell_deg, coord.cell_degs):
+                assignment = spatial_fold_ids(bench.lat, bench.lon, coord.folds, cell_deg, seed)
+                runs.append(("spatial", None, assignment, cell_deg, 0.0))
+        elif split == "temporal":
+            if bench.posix_timestamp is None:
+                continue
+            if coord.split == "all" and coord.temporal_grid_size is None and not coord.temporal_grid_sizes:
+                logger.info(
+                    "%s: skipping temporal split under split=all (no temporal_grid_size set)",
+                    bench.name,
+                )
+                continue
+            for grid_size_name in _sweep_values(coord.temporal_grid_size, coord.temporal_grid_sizes):
+                grid_size = DISCRETIZATION_METHODS_TO_SECONDS[str(grid_size_name)]
+                assignment = temporal_fold_ids(
+                    bench.posix_timestamp, method="grid", folds=coord.folds, temporal_grid_size=grid_size
+                )
+                runs.append(("temporal", None, assignment, 0.0, grid_size))
+    return runs
 
 
 def _expand_temporal(
@@ -313,6 +357,14 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
     logger.info("CoordBench: loaded %d benchmark(s) in %.1fs", len(benchmarks), time.perf_counter() - t0)
 
+    if coord.exclude_antarctica:
+        for bench in benchmarks:
+            n_before = len(bench.lat)
+            bench.filter_by_latitude(-60.0)
+            if len(bench.lat) < n_before:
+                bench.name = f"{bench.name}_no_antarctica"
+                logger.info("Exclude Antarctica: %s %d -> %d points", bench.name, n_before, len(bench.lat))
+
     if temporal_discretization_methods or temporal_sampling_methods:
         all_benchmarks = _expand_temporal(
             benchmarks,
@@ -394,12 +446,24 @@ def _evaluate_benchmark(
         f"{bench.temporal_resolution}/mean" if precomputed_features is not None else ""
     )
 
-    for split in _resolve_splits(coord.split):
-        test_mask, fold_assign, split_label = _evaluation_split(bench, split, coord, seed)
-
+    for split_label, test_mask, fold_assign, cell_deg, temporal_grid_size in _evaluation_splits(
+        bench, coord, seed
+    ):
         for task, labels in bench.tasks.items():
             for method_label, kind in method_kinds:
-                key = (bench.name, task, method_label, preset.name, split_label, temporal_embedding_aggregation)
+                key = tuple(
+                    str(x)
+                    for x in (
+                        bench.name,
+                        task,
+                        method_label,
+                        preset.name,
+                        split_label,
+                        temporal_embedding_aggregation,
+                        cell_deg,
+                        temporal_grid_size,
+                    )
+                )
                 if key in completed:
                     continue
                 if features is None:
@@ -440,7 +504,8 @@ def _evaluate_benchmark(
                     ci_lower=score - std,
                     ci_upper=score + std,
                     n_folds=1 if split_label == "official" else folds,
-                    cell_deg=coord.cell_deg,
+                    cell_deg=cell_deg,
+                    temporal_grid_size=temporal_grid_size,
                     feature_dim=int(features.shape[1]),
                     n_samples=len(labels),
                     n_test=n_test,
@@ -449,6 +514,6 @@ def _evaluate_benchmark(
                     model_target=preset.target,
                     temporal_embedding_aggregation=temporal_embedding_aggregation
                 ).to_row()
-        # An official test set is evaluated once, even when both CV modes were requested.
+        # An official test set is evaluated once, even when multiple CV splits were requested.
         if bench.test_mask is not None:
             break

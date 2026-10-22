@@ -22,9 +22,23 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--methods", choices=("knn", "linear"), nargs="+", default=argparse.SUPPRESS
     )
-    parser.add_argument("--split", choices=("random", "spatial", "both"), default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--split", choices=("random", "spatial", "temporal", "all"), default=argparse.SUPPRESS
+    )
     parser.add_argument("--folds", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--cell-deg", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--cell-degs", type=float, nargs="+", default=argparse.SUPPRESS,
+        help="Sweep of spatial grid-cell sizes (degrees); overrides --cell-deg",
+    )
+    parser.add_argument(
+        "--temporal-grid-size", default=argparse.SUPPRESS,
+        help="Temporal grid-cell width, e.g. weekly, biweekly, monthly, seasonally, yearly",
+    )
+    parser.add_argument(
+        "--temporal-grid-sizes", nargs="+", default=argparse.SUPPRESS,
+        help="Sweep of temporal grid-cell widths (see --temporal-grid-size); overrides it",
+    )
     parser.add_argument(
         "--ridge-alphas", type=float, nargs="+", default=argparse.SUPPRESS,
         help="Positive ridge penalties to CV-select; one value disables alpha tuning",
@@ -44,6 +58,11 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--temporal-sampling-methods", nargs="+", default=argparse.SUPPRESS)
     parser.add_argument(
         "--temporal-embedding-aggregation-methods", nargs="+", default=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--exclude-antarctica",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--from-polygon",

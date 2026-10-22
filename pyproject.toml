@@ -72,7 +72,7 @@ optional-dependencies.all = [
   "torchgeo-bench[terratorch]",
 ]
 optional-dependencies.coordbench = [
-  "rshf>=0.2", # Required by SatCLIP, GeoCLIP, Climplicit, and SINR.
+  "rshf>=0.2", # Required by SatCLIP, GeoCLIP, Climplicit, SINR, and TaxaBind.
   "albumentations",
 ]
 optional-dependencies.dev = [

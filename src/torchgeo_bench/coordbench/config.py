@@ -1,9 +1,17 @@
 """Strict, lightweight configuration for coordinate encoder evaluation."""
 
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
+from pydantic import (
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from torchgeo_bench.config.presets import ModelPreset, load_model_preset
 from torchgeo_bench.config.schema import (
@@ -18,6 +26,7 @@ from torchgeo_bench.config.schema import (
     load_yaml,
 )
 from torchgeo_bench.coordbench.catalog import FAMILY_BENCHMARKS
+from torchgeo_bench.coordbench.config_enums import TemporalResolution
 
 RIDGE_ALPHAS = tuple(10.0 ** (step / 2) for step in range(-8, 13))
 
@@ -39,9 +48,13 @@ class CoordEvaluationConfig(StrictModel):
     """Random/spatial cross-validation and coordinate probe settings."""
 
     methods: Methods = Field(default_factory=default_methods, min_length=1)
-    split: Literal["random", "spatial", "both"] = "random"
+    split: Literal["random", "spatial", "temporal", "all"] = "random"
     folds: StrictInt = Field(default=5, ge=2)
     cell_deg: StrictFloat = Field(default=10.0, gt=0)
+    cell_degs: list[Annotated[StrictFloat, Field(gt=0)]] | None = None
+    # A DISCRETIZATION_METHODS_TO_SECONDS name, e.g. "weekly".
+    temporal_grid_size: StrictStr | None = None
+    temporal_grid_sizes: list[StrictStr] | None = None
     knn_k: StrictInt = Field(default=5, gt=0)
     knn_device: KnnDevice = "cpu"
     ridge_alphas: list[Annotated[StrictFloat, Field(gt=0)]] = Field(
@@ -55,8 +68,23 @@ class CoordEvaluationConfig(StrictModel):
         default_factory=lambda: ["statistics"], min_length=1
     )
 
+    exclude_antarctica: StrictBool = False
+
     from_polygon: StrictBool = False
     spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_temporal_grid(self) -> Self:
+        """Require a known temporal grid size whenever the temporal split is requested alone."""
+        sizes = self.temporal_grid_sizes or (
+            [self.temporal_grid_size] if self.temporal_grid_size else []
+        )
+        unknown = sorted(set(sizes) - {r.value for r in TemporalResolution})
+        if unknown:
+            raise ValueError(f"Unknown temporal grid sizes: {unknown}")
+        if self.split == "temporal" and not sizes:
+            raise ValueError("split='temporal' requires temporal_grid_size or temporal_grid_sizes")
+        return self
 
 
 class CoordConfig(StrictModel):
