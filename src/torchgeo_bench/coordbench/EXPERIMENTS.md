@@ -13,6 +13,24 @@
 
 ---
 
+## Setting up your environment
+You'll need to export paths for:
+- your virtual environment
+- your local torchgeo repository
+- your local satclip repository
+
+For example:
+```bash
+export TORCHGEO_HOME=/u/kplane19/torchgeo-bench
+export TORCHGEO_ENV=/u/kplane19/torchgeo-bench/.venv
+export SATCLIP_HOME=/u/kplane19/satclip
+export RESULTS_HOME=/projects/bgtj/t_satclip/results
+```
+
+The variable names must be TORCHGEO_HOME, TORCHGEO_ENV, SATCLIP_HOME, and RESULTS_HOME for compatibility with our scripts.  For simplicity's sake, you can put these lines in the bottom of your .bashrc file (found inside your /u/username/ directory).  Upon login, they will automatically be added to your environment.  These can (and should) vary from machine to machine as a way to avoid hard-coding relative paths. 
+
+If you are writing your own sbatch .job script, you MUST have the line #sbatch --export=ALL on in order for the job to pick up your local environment variables.
+
 ## 1. US Trees
 
 This dataset has timestamps. We can run all models on it to compare performance, although note that not all models use temporal information. For these models, just the lat/lon is fed in. This is to compare whether adding temporal information helps.

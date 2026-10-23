@@ -4,7 +4,7 @@
 # Pass --device cuda:0 as an extra arg when calling directly.
 set -euo pipefail
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/elevation_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME/elevation_temporal_aggregation # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 STATIC_MODELS=(sincos satclip geoclip mind sinr)

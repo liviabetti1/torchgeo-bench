@@ -94,6 +94,12 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
         for task_name, task_values in dataset.tasks.items():
             dataset.tasks[task_name] = np.delete(task_values, samples_to_ignore)
 
+    if dataset.spatial_aggregation_key is None:
+        new_spatial_agg_key = None
+    else:
+        new_spatial_agg_key = (dataset.spatial_aggregation_key[0],
+                                 np.delete(dataset.spatial_aggregation_key[1], samples_to_ignore))
+
     return CoordBenchmark(
         name=f"{dataset.name}_{discretization}_discretization",
         lat=np.delete(dataset.lat, samples_to_ignore),
@@ -103,8 +109,7 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
         temporal_resolution=dataset.temporal_resolution,
         year=dataset.year,
         posix_timestamp=np.asarray(timestamps),
-        spatial_aggregation_key=(dataset.spatial_aggregation_key[0],
-                                 np.delete(dataset.spatial_aggregation_key[1], samples_to_ignore)),
+        spatial_aggregation_key=new_spatial_agg_key,
     )
 
 #TODO: adjust for weekly, monthly, and yearly datasets; see run_elevation_temporal_sampling.sh for how this is

@@ -5,7 +5,7 @@
 # Pass --device cuda:0 as an extra arg when calling directly.
 set -euo pipefail
 
-RESULTS=/home/libe2152/projects/torchgeo-bench/results/coordbench/era5_temporal_split # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME/era5_temporal_split # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 MODELS=(

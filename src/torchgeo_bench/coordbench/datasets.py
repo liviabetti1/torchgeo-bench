@@ -313,7 +313,7 @@ def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmar
     # polygon, but already comes with 200 points sub_sampled per polygon, so no need to join up with the
     # county dataset
     if subsample_locations:
-        pool = census_data["county"].drop_duplicates().sample(n=1_000, random_state=0) #total counties is 3117
+        pool = census_data["county"].drop_duplicates().sample(n=3_117, random_state=0) #total counties is 3117
         census_data = census_data.merge(pool, on=["county"])
 
     census_data["log_population"] = np.log(census_data["population"].to_numpy(np.float64))
