@@ -209,7 +209,7 @@ def load_sustainbench() -> list[CoordBenchmark]:
     return out
 
 
-def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
+def load_daily_usa_electric_usage(subsample_locations = True, from_polygon=False) -> list[CoordBenchmark]:
 
     counties = load_config_gdf("usa_electric_load","usa_counties")
 
@@ -219,40 +219,39 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
         electrical_load = load_config_temporal("usa_electric_load", filename=f"usa_electrical_load_{year}")
         combined_df = electrical_load.merge(counties, on="county", how="left")
 
-        if subsample_locations:
+        if from_polygon:
+            combined_df.drop(["lat", "lon"], inplace=True)
             combined_df["sub_sampled"] = combined_df["samples"].map(
                 lambda items: items[:10])  # hard-coded, can go up to 1k
             combined_df.drop("samples", axis=1, inplace=True)
 
-            finalized_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
-            finalized_df['lon'] = finalized_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
-            finalized_df['lat'] = finalized_df["sub_sampled"].str[1].astype("float32")
-            finalized_df.drop("sub_sampled", axis=1, inplace=True)
+            combined_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
+            combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
+            combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
+            combined_df.drop("sub_sampled", axis=1, inplace=True)
+            name = "_spatial_agg"
         else:
-            finalized_df = combined_df.explode("samples")  # results in a column of [lon, lat]
-            finalized_df['lon'] = finalized_df["samples"].str[0].astype("float32")  # isolate lon/lat columns
-            finalized_df['lat'] = finalized_df["samples"].str[1].astype("float32")
-            finalized_df.drop("samples", axis=1, inplace=True)
+            name = "_from_centroid"
 
         tasks = {}
         # do log_norm
         for task_name in ELECTRIC_LOAD_VARIABLES:
-            if task_name not in finalized_df.columns:
+            if task_name not in combined_df.columns:
                 continue
-            tasks[task_name] = finalized_df[task_name].to_numpy(np.float64)
-            finalized_df[task_name] += 1 # to avoid div/0 for log
-            tasks[f"{task_name}_log"] = np.log(finalized_df[task_name].to_numpy(np.float64))
+            tasks[task_name] = combined_df[task_name].to_numpy(np.float64)
+            combined_df[task_name] += 1 # to avoid div/0 for log
+            tasks[f"{task_name}_log"] = np.log(combined_df[task_name].to_numpy(np.float64))
 
 
         ds = CoordBenchmark(
-            name=f"usa_daily_electric_load_{year}",
-            lat=finalized_df["lat"].to_numpy(np.float64),
-            lon=finalized_df["lon"].to_numpy(np.float64),
+            name=f"usa_daily_electric_load_{year}{name}",
+            lat=combined_df["lat"].to_numpy(np.float64),
+            lon=combined_df["lon"].to_numpy(np.float64),
             tasks=tasks,
             # kept float64 for posix since it will lose second-level precision in float32
-            posix_timestamp=finalized_df["timestamp"].to_numpy(np.float64),
+            posix_timestamp=combined_df["timestamp"].to_numpy(np.float64),
             temporal_resolution=TemporalResolution.DAILY,
-            spatial_aggregation_key=("county", finalized_df["county"])
+            spatial_aggregation_key=("county", combined_df["county"])
         )
 
         benchmarks.append(ds)
@@ -260,7 +259,7 @@ def load_daily_usa_electric_usage(subsample_locations = True) -> list[CoordBench
     return benchmarks
 
 
-def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenchmark]:
+def load_weekly_usa_electric_usage(subsample_locations = True, from_polygon=False) -> list[CoordBenchmark]:
     counties = load_config_gdf("usa_electric_load", filename="usa_counties")
     electrical_load = load_config_temporal("usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
     combined_df = electrical_load.merge(counties, on="county", how="left")
@@ -269,68 +268,92 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
         pool = combined_df["county"].drop_duplicates().sample(n=1_500, random_state=0) #total counties is 3117
         combined_df = combined_df.merge(pool, on=["county"])
 
-    if subsample_locations:
+    if from_polygon:
+        combined_df.drop(["lat", "lon"], inplace=True)
         combined_df["sub_sampled"] = combined_df["samples"].map(
             lambda items: items[:10])  # hard-coded, can go up to 1k
         combined_df.drop("samples", axis=1, inplace=True)
 
-        finalized_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
-        finalized_df['lon'] = finalized_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
-        finalized_df['lat'] = finalized_df["sub_sampled"].str[1].astype("float32")
-        finalized_df.drop("sub_sampled", axis=1, inplace=True)
+        combined_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
+        combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
+        combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
+        combined_df.drop("sub_sampled", axis=1, inplace=True)
+        name = "_spatial_agg"
     else:
-        finalized_df = combined_df.explode("samples")  # results in a column of [lon, lat]
-        finalized_df['lon'] = finalized_df["samples"].str[0].astype("float32")  # isolate lon/lat columns
-        finalized_df['lat'] = finalized_df["samples"].str[1].astype("float32")
-        finalized_df.drop("samples", axis=1, inplace=True)
+        name = "_from_centroid"
 
     tasks = {}
     # do log_norm
     for task_name in ELECTRIC_LOAD_VARIABLES:
-        if task_name not in finalized_df.columns:
+        if task_name not in combined_df.columns:
             continue
-        tasks[task_name] = finalized_df[task_name].to_numpy(np.float64) #remove if log norm is the better task
-        finalized_df[task_name] += 1
-        tasks[f"{task_name}_log"] = np.log(finalized_df[task_name].to_numpy(np.float64))
+        tasks[task_name] = combined_df[task_name].to_numpy(np.float64) #remove if log norm is the better task
+        combined_df[task_name] += 1
+        tasks[f"{task_name}_log"] = np.log(combined_df[task_name].to_numpy(np.float64))
 
     ds = CoordBenchmark(
-        name="usa_weekly_electric_load",
-        lat=finalized_df["lat"].to_numpy(np.float64),
-        lon=finalized_df["lon"].to_numpy(np.float64),
+        name=f"usa_weekly_electric_load{name}",
+        lat=combined_df["lat"].to_numpy(np.float64),
+        lon=combined_df["lon"].to_numpy(np.float64),
         tasks=tasks,
         # kept float64 for posix since it will lose second-level precision in float32
-        posix_timestamp=finalized_df["start_timestamp"].to_numpy(np.float64),
-        end_timestamp=finalized_df["end_timestamp"].to_numpy(np.float64),
+        posix_timestamp=combined_df["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=combined_df["end_timestamp"].to_numpy(np.float64),
         temporal_resolution=TemporalResolution.WEEKLY,
-        spatial_aggregation_key=("county", finalized_df["county"])
+        spatial_aggregation_key=("county", combined_df["county"])
     )
 
     return [ds]
 
-def load_usa_census_data(subsample_locations: bool = True) -> list[CoordBenchmark]:
-    census_data = load_config_temporal("usa_census_data_2010_2025")
 
-    # polygon, but already comes with 200 points sub_sampled per polygon, so no need to join up with the
-    # county dataset
+def load_usa_census_data(subsample_locations: bool = True, from_polygon=False) -> list[CoordBenchmark]:
+    dfs = []
+
+    for dates in ["2010_2019", ["2020_2025"]]:
+        counties = load_config_temporal("usa_census_data_2010_2025", filename=f"counties_{dates}")
+        data = load_config_temporal("usa_census_data_2010_2025", filename=f"usa_census_{dates}.parquet")
+        combined = data.merge(counties, on=["NAMELSAD", "STATEFP"], how="left")
+        dfs.append(combined)
+
+    combined_df = pd.concat(dfs, ignore_index=True)
+
     if subsample_locations:
-        pool = census_data["county"].drop_duplicates().sample(n=3_117, random_state=0) #total counties is 3117
-        census_data = census_data.merge(pool, on=["county"])
+        pool = combined_df["county"].drop_duplicates().sample(n=1_500, random_state=0)  # total counties is 3117
+        combined_df = combined_df.merge(pool, on=["county"])
 
-    census_data["log_population"] = np.log(census_data["population"].to_numpy(np.float64))
+    #if we want to do spatial sampling/pooling
+    if from_polygon:
+        combined_df.drop(["lat", "lon"], inplace=True) # lat/lon refer to centroid
 
-    ds = CoordBenchmark(
-        name="usa_census_data",
-        lat=census_data["lat"].to_numpy(np.float64),
-        lon=census_data["lon"].to_numpy(np.float64),
-        tasks={"population": census_data["population"].to_numpy(np.float64),
-               "log_population": census_data["log_population"].to_numpy(np.float64)},
+        combined_df["sub_sampled"] = combined_df["sampled"].map(lambda items: items[:10])  # hard-coded, can go up to 1k
+        combined_df.drop("sampled", axis=1, inplace=True)
+
+        combined_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
+        combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
+        combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
+        combined_df.drop("sub_sampled", axis=1, inplace=True)
+        name = "_spatial_agg"
+    else:
+        name = "_from_centroid"
+
+    #otherwise, default to lat/lon in file that refer to centroid
+
+    combined_df["log_population"] = np.log(combined_df["population"].to_numpy(np.float64))
+
+    bench = CoordBenchmark(
+        name=f"usa_yearly_census{name}",
+        lat=combined_df["lat"].to_numpy(np.float64),
+        lon=combined_df["lon"].to_numpy(np.float64),
+        tasks={"log_population": combined_df["log_population"].to_numpy(np.float64)},
         # kept float64 for posix since it will lose second-level precision in float32
-        posix_timestamp=census_data["start_timestamp"].to_numpy(np.float64),
-        end_timestamp=census_data["end_timestamp"].to_numpy(np.float64),
+        posix_timestamp=combined_df["start_timestamp"].to_numpy(np.float64),
+        end_timestamp=combined_df["end_timestamp"].to_numpy(np.float64),
         temporal_resolution=TemporalResolution.YEARLY,
-        spatial_aggregation_key=("county", census_data["county"])
+        spatial_aggregation_key=("county", combined_df["county"].to_numpy())
     )
-    return [ds]
+
+    return [bench]
+
 
 def load_global_population(subsample_locations: bool = True) -> list[CoordBenchmark]:
 
@@ -710,6 +733,12 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "viirs_night_lights": load_viirs_night_lights,
 }
 
+POLYGON_BENCH = [
+    "usa_census",
+    "usa_electric_load_daily",
+    "usa_electric_load_weekly"
+]
+
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
 }
@@ -725,7 +754,7 @@ def list_benchmarks() -> list[str]:
     return [name for family in FAMILY_LOADERS for name in FAMILY_BENCHMARKS[family]]
 
 
-def load_benchmarks(names: str | list[str] = "all") -> list[CoordBenchmark]:
+def load_benchmarks(names: str | list[str] = "all", from_polygon=False) -> list[CoordBenchmark]:
     """Expand a selection into a flat list of :class:`CoordBenchmark`.
 
     Args:
@@ -733,6 +762,7 @@ def load_benchmarks(names: str | list[str] = "all") -> list[CoordBenchmark]:
             family name (loads every benchmark in it) or an individual benchmark
             name (loads only its family, then keeps just that benchmark). Only
             the families needed to satisfy the selection are fetched.
+        from_polygon: False, denotes whether this dataset can/should perform spatial pooling
 
     Returns:
         Flat list of benchmarks, deduplicated by name, in family order.
@@ -768,7 +798,11 @@ def load_benchmarks(names: str | list[str] = "all") -> list[CoordBenchmark]:
     seen: set[str] = set()
     for family in families_to_load:
         wanted = name_filter.get(family, set())
-        for bench in FAMILY_LOADERS[family]():
+        if family in POLYGON_BENCH:
+            loaded = FAMILY_LOADERS[family](from_polygon = from_polygon)
+        else:
+            loaded = FAMILY_LOADERS[family]()
+        for bench in loaded:
             if bench.name in seen or (wanted and bench.name not in wanted):
                 continue
             seen.add(bench.name)
