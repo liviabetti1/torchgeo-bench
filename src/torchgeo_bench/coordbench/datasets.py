@@ -69,6 +69,19 @@ def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
     lat_col = next(c for c in ("lat", "latitude", "Lat", "y") if c in df.columns)
     return lon_col, lat_col
 
+def _polygon_helper(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
+    df.drop(["lat", "lon"], inplace=True)
+    df["sub_sampled"] = df[col_name].map(
+        lambda items: items[:10])  # hard-coded, can go up to 1k
+    df.drop("samples", axis=1, inplace=True)
+
+    combined_df = df.explode("sub_sampled")  # results in a column of [lon, lat]
+    combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
+    combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
+    combined_df.drop("sub_sampled", axis=1, inplace=True)
+
+    return combined_df
+
 
 def _first_col(df: pd.DataFrame, *names: str) -> str | None:
     return next((n for n in names if n in df.columns), None)
@@ -220,15 +233,7 @@ def load_daily_usa_electric_usage(subsample_locations = True, from_polygon=False
         combined_df = electrical_load.merge(counties, on="county", how="left")
 
         if from_polygon:
-            combined_df.drop(["lat", "lon"], inplace=True)
-            combined_df["sub_sampled"] = combined_df["samples"].map(
-                lambda items: items[:10])  # hard-coded, can go up to 1k
-            combined_df.drop("samples", axis=1, inplace=True)
-
-            combined_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
-            combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
-            combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
-            combined_df.drop("sub_sampled", axis=1, inplace=True)
+            combined_df = _polygon_helper(combined_df, "samples")
             name = "_spatial_agg"
         else:
             name = "_from_centroid"
@@ -269,15 +274,7 @@ def load_weekly_usa_electric_usage(subsample_locations = True, from_polygon=Fals
         combined_df = combined_df.merge(pool, on=["county"])
 
     if from_polygon:
-        combined_df.drop(["lat", "lon"], inplace=True)
-        combined_df["sub_sampled"] = combined_df["samples"].map(
-            lambda items: items[:10])  # hard-coded, can go up to 1k
-        combined_df.drop("samples", axis=1, inplace=True)
-
-        combined_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
-        combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
-        combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
-        combined_df.drop("sub_sampled", axis=1, inplace=True)
+        combined_df = _polygon_helper(combined_df, "samples")
         name = "_spatial_agg"
     else:
         name = "_from_centroid"
@@ -323,15 +320,7 @@ def load_usa_census_data(subsample_locations: bool = True, from_polygon=False) -
 
     #if we want to do spatial sampling/pooling
     if from_polygon:
-        combined_df.drop(["lat", "lon"], inplace=True) # lat/lon refer to centroid
-
-        combined_df["sub_sampled"] = combined_df["sampled"].map(lambda items: items[:10])  # hard-coded, can go up to 1k
-        combined_df.drop("sampled", axis=1, inplace=True)
-
-        combined_df = combined_df.explode("sub_sampled")  # results in a column of [lon, lat]
-        combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
-        combined_df['lat'] = combined_df["sub_sampled"].str[1].astype("float32")
-        combined_df.drop("sub_sampled", axis=1, inplace=True)
+        combined_df = _polygon_helper(combined_df, "sampled")
         name = "_spatial_agg"
     else:
         name = "_from_centroid"
