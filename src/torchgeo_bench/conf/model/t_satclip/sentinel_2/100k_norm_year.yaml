@@ -1,0 +1,6 @@
+name: t_satclip_s2_100k_norm_year
+target: torchgeo_bench.coordbench.models.TemporalSatCLIPEncoder
+track: coord
+kwargs:
+  ckpt_path: t_satclip-ckpts/tsatclip-s2-100k-norm_year/checkpoints/last.ckpt
+  model_name: #TODO

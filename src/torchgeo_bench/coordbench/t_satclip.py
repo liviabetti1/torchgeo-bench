@@ -17,6 +17,7 @@ def load_t_satclip(
 ) -> nn.Module:
     # overwrite repo path with local os variables
     repo_path = os.environ["SATCLIP_HOME"]
+    checkpoint_home = os.environ["CKPT_HOME"]
 
     for p in (repo_path, os.path.join(repo_path, "satclip")):
         if p not in sys.path:
@@ -28,7 +29,7 @@ def load_t_satclip(
 
     model = TemporalSatCLIPWrapper(
         model_name=model_name,
-        ckpt_path=ckpt_path,
+        ckpt_path=os.path.join(checkpoint_home, ckpt_path),
         device=device,
         posix_min_time=posix_min_time,
         posix_max_time=posix_max_time,

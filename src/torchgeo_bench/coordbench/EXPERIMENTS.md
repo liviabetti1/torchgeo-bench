@@ -25,9 +25,10 @@ export TORCHGEO_HOME=/u/kplane19/torchgeo-bench
 export TORCHGEO_ENV=/u/kplane19/torchgeo-bench/.venv
 export SATCLIP_HOME=/u/kplane19/satclip
 export RESULTS_HOME=/projects/bgtj/t_satclip/results
+export CKPT_HOME=/projects/bgtj/t_satclip/ckpts
 ```
 
-The variable names must be TORCHGEO_HOME, TORCHGEO_ENV, SATCLIP_HOME, and RESULTS_HOME for compatibility with our scripts.  For simplicity's sake, you can put these lines in the bottom of your .bashrc file (found inside your /u/username/ directory).  Upon login, they will automatically be added to your environment.  These can (and should) vary from machine to machine as a way to avoid hard-coding relative paths. 
+The variable names must be TORCHGEO_HOME, TORCHGEO_ENV, SATCLIP_HOME, CKPT_HOME, RESULTS_HOME for compatibility with our scripts.  For simplicity's sake, you can put these lines in the bottom of your .bashrc file (found inside your /u/username/ directory).  Upon login, they will automatically be added to your environment.  These can (and should) vary from machine to machine as a way to avoid hard-coding relative paths. 
 
 If you are writing your own sbatch .job script, you MUST have the line #sbatch --export=ALL on in order for the job to pick up your local environment variables.
 
