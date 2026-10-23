@@ -347,7 +347,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
     t0 = time.perf_counter()
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
-    benchmarks = load_benchmarks(names)
+    benchmarks = load_benchmarks(names, from_polygon)
 
     if coord.temporal_sampling_year is not None:
         for bench in benchmarks:
