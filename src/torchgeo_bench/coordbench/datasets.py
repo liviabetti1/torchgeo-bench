@@ -70,10 +70,11 @@ def _lonlat_cols(df: pd.DataFrame) -> tuple[str, str]:
     return lon_col, lat_col
 
 def _polygon_helper(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
-    df.drop(["lat", "lon"], inplace=True)
+    df.drop(["lon", "lat"], axis=1, inplace=True)
     df["sub_sampled"] = df[col_name].map(
         lambda items: items[:10])  # hard-coded, can go up to 1k
-    df.drop("samples", axis=1, inplace=True)
+
+    df.drop(col_name, axis=1, inplace=True)
 
     combined_df = df.explode("sub_sampled")  # results in a column of [lon, lat]
     combined_df['lon'] = combined_df["sub_sampled"].str[0].astype("float32")  # isolate lon/lat columns
@@ -222,7 +223,7 @@ def load_sustainbench() -> list[CoordBenchmark]:
     return out
 
 
-def load_daily_usa_electric_usage(subsample_locations = True, from_polygon=False) -> list[CoordBenchmark]:
+def load_daily_usa_electric_usage(subsample_locations = False, from_polygon=False) -> list[CoordBenchmark]:
 
     counties = load_config_gdf("usa_electric_load","usa_counties")
 
@@ -231,6 +232,10 @@ def load_daily_usa_electric_usage(subsample_locations = True, from_polygon=False
     for year in range(2016, 2024):
         electrical_load = load_config_temporal("usa_electric_load", filename=f"usa_electrical_load_{year}")
         combined_df = electrical_load.merge(counties, on="county", how="left")
+
+        if subsample_locations:
+            pool = combined_df["county"].drop_duplicates().sample(n=1_500, random_state=0)  # total counties is 3117
+            combined_df = combined_df.merge(pool, on=["county"])
 
         if from_polygon:
             combined_df = _polygon_helper(combined_df, "samples")
@@ -264,7 +269,7 @@ def load_daily_usa_electric_usage(subsample_locations = True, from_polygon=False
     return benchmarks
 
 
-def load_weekly_usa_electric_usage(subsample_locations = True, from_polygon=False) -> list[CoordBenchmark]:
+def load_weekly_usa_electric_usage(subsample_locations = False, from_polygon=False) -> list[CoordBenchmark]:
     counties = load_config_gdf("usa_electric_load", filename="usa_counties")
     electrical_load = load_config_temporal("usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
     combined_df = electrical_load.merge(counties, on="county", how="left")
@@ -303,12 +308,12 @@ def load_weekly_usa_electric_usage(subsample_locations = True, from_polygon=Fals
     return [ds]
 
 
-def load_usa_census_data(subsample_locations: bool = True, from_polygon=False) -> list[CoordBenchmark]:
+def load_usa_census_data(subsample_locations: bool = False, from_polygon=False) -> list[CoordBenchmark]:
     dfs = []
 
-    for dates in ["2010_2019", ["2020_2025"]]:
+    for dates in ["2010_2019", "2020_2025"]:
         counties = load_config_temporal("usa_census_data_2010_2025", filename=f"counties_{dates}")
-        data = load_config_temporal("usa_census_data_2010_2025", filename=f"usa_census_{dates}.parquet")
+        data = load_config_temporal("usa_census_data_2010_2025", filename=f"usa_census_{dates}")
         combined = data.merge(counties, on=["NAMELSAD", "STATEFP"], how="left")
         dfs.append(combined)
 
@@ -344,7 +349,7 @@ def load_usa_census_data(subsample_locations: bool = True, from_polygon=False) -
     return [bench]
 
 
-def load_global_population(subsample_locations: bool = True) -> list[CoordBenchmark]:
+def load_global_population(subsample_locations: bool = False) -> list[CoordBenchmark]:
 
     benchmarks = []
     for land_mass in ["africa", "europe", "asia", "oceania", "north_america", "south_america", "global"]:
@@ -368,7 +373,7 @@ def load_global_population(subsample_locations: bool = True) -> list[CoordBenchm
     return benchmarks
 
 
-def load_chelsa_monthly(subsample_locations: bool = True) -> list[CoordBenchmark]:
+def load_chelsa_monthly(subsample_locations: bool = False) -> list[CoordBenchmark]:
     """Monthly CHELSA 1km resolution climate data from 2011 to 2018"""
     df = load_config_temporal("chelsa_monthly")
 
@@ -600,8 +605,12 @@ def load_soilgrids() -> list[CoordBenchmark]:
         if p in df.columns
     ]
 
-def load_viirs_night_lights() -> list[CoordBenchmark]:
+def load_viirs_night_lights(subsample_locations:bool = False) -> list[CoordBenchmark]:
     df = load_config_temporal("viirs_night_lights")
+
+    if subsample_locations:
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10_000, random_state=0)
+        df = df.merge(pool, on=["lat", "lon"])
 
     task = CoordBenchmark(
         name="viirs_night_lights",
@@ -615,7 +624,7 @@ def load_viirs_night_lights() -> list[CoordBenchmark]:
 
     return [task]
 
-def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
+def load_era5_ecmwf(subsample_locations: bool = False) -> list[CoordBenchmark]:
     """"""
     df = load_config_temporal("era5_ecmwf_2017_daily")
     task_cols = [v for v in ERA5_ECMWF_LABELS if v in df.columns]
@@ -636,7 +645,7 @@ def load_era5_ecmwf(subsample_locations: bool = True) -> list[CoordBenchmark]:
     )
     return [daily]
 
-def load_chelsa_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
+def load_chelsa_daily(subsample_locations: bool = False) -> list[CoordBenchmark]:
     """"""
     df = load_config_temporal("chelsa_2017_daily")
     task_cols = [v for v in CHELSA_LABELS if v in df.columns]
@@ -728,6 +737,16 @@ POLYGON_BENCH = [
     "usa_electric_load_weekly"
 ]
 
+CAN_SUBSAMPLE = [
+    "era5_ecmwf",
+    "usa_electric_load_daily",
+    "usa_electric_load_weekly",
+    "chelsa_monthly",
+    "usa_census",
+    "global_population",
+    "viirs_night_lights"
+]
+
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
 }
@@ -743,7 +762,7 @@ def list_benchmarks() -> list[str]:
     return [name for family in FAMILY_LOADERS for name in FAMILY_BENCHMARKS[family]]
 
 
-def load_benchmarks(names: str | list[str] = "all", from_polygon=False) -> list[CoordBenchmark]:
+def load_benchmarks(names: str | list[str] = "all", from_polygon=False, should_subsample=False) -> list[CoordBenchmark]:
     """Expand a selection into a flat list of :class:`CoordBenchmark`.
 
     Args:
@@ -752,6 +771,7 @@ def load_benchmarks(names: str | list[str] = "all", from_polygon=False) -> list[
             name (loads only its family, then keeps just that benchmark). Only
             the families needed to satisfy the selection are fetched.
         from_polygon: False, denotes whether this dataset can/should perform spatial pooling
+        should_subsample: False, denotes whether this dataset should be subsampled down; only available for some spatiotemporal datasets
 
     Returns:
         Flat list of benchmarks, deduplicated by name, in family order.
@@ -787,8 +807,12 @@ def load_benchmarks(names: str | list[str] = "all", from_polygon=False) -> list[
     seen: set[str] = set()
     for family in families_to_load:
         wanted = name_filter.get(family, set())
-        if family in POLYGON_BENCH:
+        if family in POLYGON_BENCH and family in CAN_SUBSAMPLE:
+            loaded = FAMILY_LOADERS[family](from_polygon  = from_polygon, subsample_locations = should_subsample)
+        elif family in POLYGON_BENCH:
             loaded = FAMILY_LOADERS[family](from_polygon = from_polygon)
+        elif family in CAN_SUBSAMPLE:
+            loaded = FAMILY_LOADERS[family](subsample_locations = should_subsample)
         else:
             loaded = FAMILY_LOADERS[family]()
         for bench in loaded:
