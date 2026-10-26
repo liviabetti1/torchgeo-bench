@@ -1,10 +1,10 @@
 # Running USA census data
 # yearly info from 2010-2025 at the county level
-set -euo pipefail
+#set -euo pipefail
 
 source $TORCHGEO_ENV/bin/activate torchgeo-bench
 
-RESULTS=$RESULTS_HOME/temporal_split # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 # defaults to centroid; can do --from-polygon flag and --spatial-aggregation-methods to do spatial sampling
