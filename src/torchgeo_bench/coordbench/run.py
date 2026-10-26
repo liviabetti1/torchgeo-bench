@@ -329,6 +329,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
     temporal_sampling_methods = list(coord.temporal_sampling_methods)
     temporal_embedding_aggregation_methods = list(coord.temporal_embedding_aggregation_methods)
     from_polygon = coord.from_polygon
+    should_subsample = coord.subsample
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
     model_target = preset.target
@@ -347,7 +348,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
     t0 = time.perf_counter()
     names = "all" if cfg.datasets == ["all"] else cfg.datasets
-    benchmarks = load_benchmarks(names)
+    benchmarks = load_benchmarks(names, from_polygon, should_subsample)
 
     if coord.temporal_sampling_year is not None:
         for bench in benchmarks:

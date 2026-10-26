@@ -24,11 +24,12 @@ def load_t_satclip(
 
     from load_temporal_satclip_wrapper import TemporalSatCLIPWrapper
 
-
+    checkpoint_home = os.environ["CKPT_HOME"]
+    finalized_path = os.path.join(checkpoint_home, ckpt_path)
 
     model = TemporalSatCLIPWrapper(
         model_name=model_name,
-        ckpt_path=ckpt_path,
+        ckpt_path=finalized_path,
         device=device,
         posix_min_time=posix_min_time,
         posix_max_time=posix_max_time,

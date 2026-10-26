@@ -19,6 +19,7 @@ DAY_SECONDS = 24 * 60 * 60
 
 DISCRETIZATION_METHODS_TO_SECONDS = {
     "daily": DAY_SECONDS,
+    "two_days": DAY_SECONDS * 2,
     "weekly": 7 * DAY_SECONDS,
     "biweekly": 14 * DAY_SECONDS,
     "4_weeks": 28 * DAY_SECONDS,

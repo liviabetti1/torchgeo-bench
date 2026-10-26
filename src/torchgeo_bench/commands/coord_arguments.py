@@ -70,6 +70,11 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
         default=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--subsample",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--spatial-aggregation-methods", nargs="+", default=argparse.SUPPRESS
     )
     parser.add_argument("--device", default=argparse.SUPPRESS)

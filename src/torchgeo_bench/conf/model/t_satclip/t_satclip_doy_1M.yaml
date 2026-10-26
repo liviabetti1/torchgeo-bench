@@ -2,5 +2,5 @@ name: t_satclip_doy_1M
 target: torchgeo_bench.coordbench.models.TemporalSatCLIPEncoder
 track: coord
 kwargs:
-  ckpt_path: /projects/bgtj/t_satclip/ckpts/t_satclip-ckpts/tsatclip-doy-1M.ckpt
+  ckpt_path: t_satclip-ckpts/tsatclip-doy-1M.ckpt
   model_name: tsatclip/doy
