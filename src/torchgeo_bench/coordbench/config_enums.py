@@ -12,3 +12,6 @@ class TemporalResolution(Enum):
     DAYS_365 = "days_365"
     MONTHLY = "monthly"
     YEARLY = "yearly"
+    TWO_YEARS = "2_years"
+    THREE_YEARS = "3_years"
+    FOUR_YEARS = "4_years"

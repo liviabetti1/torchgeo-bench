@@ -108,9 +108,9 @@ CHELSA_MONTHLY_LABELS = (
 
 
 ELECTRIC_LOAD_VARIABLES = (
-    "mean",
-    "min",
-    "max",
+    # "mean",
+    # "min",
+    # "max",
     "median",
 )
 

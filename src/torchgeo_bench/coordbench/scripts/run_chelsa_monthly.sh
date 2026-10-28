@@ -1,7 +1,43 @@
 #!/usr/bin/env bash
 # CHELSA monthly: each month embedded at weekly and daily timestamps, then pooled. Pass --device cuda:0 (or cpu) as an extra arg.
 set -euo pipefail
-mkdir -p results/coordbench/temporal
-for m in sincos satclip geoclip mind sinr climplicit gtloc t_satclip/t_satclip_doy_1M; do
-    torchgeo-bench coord --model "$m" --dataset chelsa_monthly --split all --temporal-grid-sizes days_30 13_weeks days_365 --temporal-discretization-methods weekly daily --resume --output results/coordbench/temporal/chelsa_monthly.csv "$@"
+
+RESULTS=$RESULTS_HOME/factor_in_year # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+mkdir -p "$RESULTS"
+
+MODELS=(
+  climplicit
+  gtloc
+  "t_satclip/t_satclip_doy_1M"
+  "t_satclip/t_satclip_landsat_toy_300k"
+  "t_satclip/t_satclip_landsat_toy_y_300k"
+  "t_satclip/t_satclip_landsat_y_300k"
+  "t_satclip/t_satclip_toy_200k"
+  "t_satclip/t_satclip_toy_300k"
+  "t_satclip/t_satclip_toy_y_100k"
+  "t_satclip/t_satclip_toy_y_150k"
+  "t_satclip/t_satclip_toy_y_200k"
+  "t_satclip/t_satclip_toy_y_200k_satcliploss"
+  "t_satclip/t_satclip_toy_y_200k_softloss"
+  "t_satclip/t_satclip_toy_y_250k"
+#  "t_satclip/t_satclip_toy_y_250k_softloss"
+  "t_satclip/t_satclip_toy_y_300k"
+  "t_satclip/t_satclip_toy_y_300k_satcliploss"
+  "t_satclip/t_satclip_toy_y_300k_softloss"
+  "t_satclip/t_satclip_y_200k"
+  "t_satclip/t_satclip_y_300k"
+)
+
+out="$RESULTS/chelsa_monthly.csv"
+for model in "${MODELS[@]}"; do
+    torchgeo-bench coord \
+        --model "$model" \
+        --dataset chelsa_monthly \
+        --split all \
+        --exclude-antarctica \
+        --output "$out" \
+        --temporal-grid-sizes monthly seasonally yearly 2_years 3_years 4_years \
+        "$@"
+
+    rm -f "${out}.lock"
 done

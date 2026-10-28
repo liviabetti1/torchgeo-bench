@@ -360,7 +360,6 @@ class TemporalSatCLIPEncoder(LocationEncoder):
     def __init__(
         self,
         ckpt_path: str,
-        repo_path: str,
         model_name: str = "tsatclip/doy",
         dim: int | None = None,
         device: str = "cpu",
@@ -370,7 +369,7 @@ class TemporalSatCLIPEncoder(LocationEncoder):
         from torchgeo_bench.coordbench.t_satclip import load_t_satclip
 
         self.model = load_t_satclip(
-            ckpt_path, repo_path=repo_path, model_name=model_name, device=self.device
+            ckpt_path, model_name=model_name, device=self.device
         )
         self.dim = int(dim) if dim is not None else self.model.embedding_dim
 

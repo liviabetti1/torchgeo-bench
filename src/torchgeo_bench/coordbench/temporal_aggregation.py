@@ -1,6 +1,8 @@
 """Temporal discretization of CoordBenchmark datasets."""
 
 import time
+from typing import Sequence, Iterator
+
 import numpy as np
 import pandas as pd
 import torch
@@ -9,6 +11,7 @@ from rich.progress import track
 from torchgeo_bench.coordbench.benchmark import CoordBenchmark
 from torchgeo_bench.coordbench.config_enums import TemporalResolution
 from torchgeo_bench.coordbench.models import LocationEncoder
+import copy
 
 GROUP_KEYS = ["lat", "lon", "window_index"]  # keys to group by when discretizing/aggregating over time
 
@@ -17,12 +20,16 @@ DAY_SECONDS = 24 * 60 * 60
 
 DISCRETIZATION_METHODS_TO_SECONDS = {
     "daily": DAY_SECONDS,
+    "two_days": DAY_SECONDS * 2,
     "weekly": 7 * DAY_SECONDS,
     "biweekly": 14 * DAY_SECONDS,
     "4_weeks": 28 * DAY_SECONDS,
     "13_weeks": 91 * DAY_SECONDS,
     "days_30": 30 * DAY_SECONDS,
     "days_365": 365 * DAY_SECONDS,
+    "2_years": 365 * 2 * DAY_SECONDS,
+    "3_years": 365 * 3 * DAY_SECONDS,
+    "4_years": 365 * 4 * DAY_SECONDS,
 }
 # Calendar windows, so their length follows the actual month or (leap) year
 CALENDAR_PERIODS = {"monthly": "M", "yearly": "Y"}
@@ -64,6 +71,57 @@ EMBEDDING_AGGREGATION_METHODS = [*POOLED_STATS, "temporal_filter", "sequence_mod
 
 EMBEDDING_STATS = ["mean", "min", "max", "std", "slope", "total_variation"]
 LABEL_STATS = ["mean", "min", "max"]
+
+def temporal_checkerboard(datasets: Sequence[tuple[CoordBenchmark, np.ndarray]]) -> Iterator[tuple[CoordBenchmark, np.ndarray]]:
+    for benchmark, embeddings in datasets:
+        num_years = (np.max(benchmark.posix_timestamp) - np.min(benchmark.posix_timestamp)) // DAY_SECONDS * 365
+        masks = spin_up_checkerboard(benchmark, num_years)
+        for mask_name, test_mask in masks.items():
+            checkerboarded_benchmark = copy.copy(benchmark)
+            checkerboarded_benchmark.test_mask = test_mask
+            checkerboarded_benchmark.name = f"{benchmark.name}_{mask_name}"
+            yield checkerboarded_benchmark, embeddings
+
+
+
+def spin_up_checkerboard(benchmark: CoordBenchmark, num_years: int):
+    dates = pd.to_datetime(benchmark.posix_timestamp, unit="s", utc=True)
+
+    day_index = np.asarray(dates.floor("D").astype("int64") // 86400)
+    day_mask = (day_index % 2 == 0)
+
+    week_index = (
+            dates.floor("D") - pd.Timedelta(days=0)
+    ).to_period("W-SUN").astype("int64")
+    week_mask = (week_index % 2 == 0)
+    month_mask = (dates.year * 12 + dates.month) % 2 == 0
+    season_mask = (week_index // 13) % 2 == 0
+    year_mask = (dates.year % 2 == 0)
+    two_year_mask = (dates.year // 2 % 2 == 0)
+    four_year_mask = (dates.year // 4 % 2 == 0)
+
+    masks = {}
+    res_in_seconds = DISCRETIZATION_METHODS_TO_SECONDS[benchmark.temporal_resolution.value]
+    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.DAILY.value]:
+        masks["daily_blocks"] = day_mask
+    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.WEEKLY.value]:
+        masks["weekly_blocks"] = week_mask
+    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.MONTHLY.value]:
+        masks["monthly_blocks"] = month_mask
+    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.SEASONALLY.value]:
+        masks["seasonal_blocks"] = season_mask
+    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.YEARLY.value]:
+        if num_years > 2:
+            masks["yearly_blocks"] = year_mask
+        if num_years > 4:
+            masks["2_year_blocks"] = two_year_mask
+        if num_years > 6:
+            masks["4_year_blocks"] = four_year_mask
+
+    return masks
+
+
+
 
 def pool_embeddings(embeddings: dict[str, torch.Tensor], method: str) -> np.ndarray:
     """Concatenate the statistics `method` pools into probe features of shape (N, len(stats) * D)."""
@@ -127,6 +185,17 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str, se
         column, values = spatial_aggregation_key
         spatial_aggregation_key = (column, values[keep].reset_index(drop=True))
 
+    if dataset.spatial_aggregation_key is None:
+        new_spatial_agg_key = None
+    else:
+        new_spatial_agg_key = (dataset.spatial_aggregation_key[0],
+                                 np.delete(dataset.spatial_aggregation_key[1], samples_to_ignore))
+
+    if dataset.test_mask is None:
+        new_test_mask = None
+    else:
+        new_test_mask = np.delete(dataset.test_mask, samples_to_ignore)
+
     return CoordBenchmark(
         name=f"{dataset.name}_{season}_{discretization}_discretization",
         lat=dataset.lat[keep],
@@ -136,6 +205,47 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str, se
         temporal_resolution=dataset.temporal_resolution,
         year=dataset.year,
         posix_timestamp=np.asarray(timestamps),
+        spatial_aggregation_key=new_spatial_agg_key,
+        test_mask=new_test_mask
+    )
+
+#TODO: adjust for weekly, monthly, and yearly datasets; see run_elevation_temporal_sampling.sh for how this is
+# wired up in coords
+def no_timestamp_temporal_sampling(
+    dataset: CoordBenchmark, method: str, discretization: str
+) -> CoordBenchmark:
+    """Used on datasets without timestamps.
+    For now, must specify a dataset year.
+    This function will assign each observation a regular grid of timestamps over a window of `dataset.year`.
+    """
+    if dataset.year is None:
+        raise ValueError("Dataset must have a year to be temporally sampled.")
+
+    if method not in TEMPORAL_SAMPLING_MONTHS:
+        raise ValueError(f"Unknown temporal sampling method: {method}")
+
+    if discretization not in DISCRETIZATION_METHODS_TO_SECONDS:
+        raise ValueError(f"Unknown discretization method: {discretization}")
+
+    step = DISCRETIZATION_METHODS_TO_SECONDS[discretization]
+
+    times = []
+    for month in TEMPORAL_SAMPLING_MONTHS[method]:
+        start = pd.Timestamp(year=dataset.year, month=month, day=1, tz="UTC")
+        end = start + pd.offsets.MonthBegin(1)
+        times.append(np.arange(int(start.timestamp()), int(end.timestamp()), step))
+    times = np.concatenate(times)
+
+    return CoordBenchmark(
+        name=f"{dataset.name}_{method}_{discretization}",
+        lat=dataset.lat,
+        lon=dataset.lon,
+        tasks=dataset.tasks,
+        task_type=dataset.task_type,
+        temporal_resolution=dataset.temporal_resolution,
+        year=dataset.year,
+        posix_timestamp=np.tile(times, (len(dataset.lat), 1)),
+        spatial_aggregation_key=dataset.spatial_aggregation_key,
         spatial_aggregation_key=spatial_aggregation_key,
     )
 

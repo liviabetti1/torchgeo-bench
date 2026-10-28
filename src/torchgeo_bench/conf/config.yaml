@@ -41,6 +41,8 @@ coord:
   temporally_aggregate_embeddings: true
   from_polygon: false
   spatial_aggregation_methods: []
+  subsample: false
+  temporal_checkerboard: false
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers

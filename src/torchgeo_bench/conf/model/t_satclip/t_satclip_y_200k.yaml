@@ -1,0 +1,6 @@
+name: t_satclip_y_200k
+target: torchgeo_bench.coordbench.models.TemporalSatCLIPEncoder
+track: coord
+kwargs:
+  ckpt_path: t_satclip-ckpts/tsatclip-s2-200k-norm_year/checkpoints/last.ckpt # EDIT THIS TO LOCAL T-SATCLIP CKPT PATH
+  model_name: tsatclip/y

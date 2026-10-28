@@ -1,0 +1,6 @@
+name: t_satclip_toy_y_250k_softloss
+target: torchgeo_bench.coordbench.models.TemporalSatCLIPEncoder
+track: coord
+kwargs:
+  ckpt_path: t_satclip-ckpts/tsatclip-s2-250k-toy_norm_year-soft_loss/checkpoints/last.ckpt # EDIT THIS TO LOCAL T-SATCLIP CKPT PATH
+  model_name: tsatclip/toy_y

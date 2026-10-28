@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mem=16g
+#SBATCH --mem=12g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1    # <- match to OMP_NUM_THREADS
@@ -11,16 +11,17 @@
 ##SBATCH --mail-user=kevin.lane@colorado.edu
 ##SBATCH --mail-type="BEGIN,END" See sbatch or srun man pages for more email options
 #SBATCH --output=slurm_logs/%x_%A_%a.out
-#SBATCH --job-name=chelsa-runs
+#SBATCH --job-name=test-job
+#SBATCH --export=ALL
 
 set -x
 export OMP_NUM_THREADS=1
 
-cd /u/kplane19/torchgeo-bench/src/torchgeo_bench/coordbench/scripts/
-source /u/kplane19/torchgeo-bench/.venv/bin/activate
+cd $TORCHGEO_HOME/src/torchgeo_bench/coordbench/scripts/
+source $TORCHGEO_ENV/bin/activate
 
-
-torchgeo-bench coord --model climplicit --dataset usa_census --split both \
-    --temporal-discretization-methods weekly \
-    --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
-    --output results/coordbench_usa_electrical_load.csv "$@"
+for model in t_satclip/t_satclip_doy_1M gtloc climplicit; do
+  torchgeo-bench coord --model "$model" --dataset viirs_night_lights --split both \
+    --temporal-discretization-methods weekly 2_weeks monthly seasonally \
+    --output results/viirs_night_lights.csv "$@"
+done
