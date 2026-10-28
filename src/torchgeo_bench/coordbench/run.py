@@ -33,7 +33,7 @@ from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_ME
 from torchgeo_bench.coordbench.temporal_aggregation import (
     DISCRETIZATION_METHODS_TO_SECONDS,
     discretize_dataset_and_aggregate_embeddings,
-    temporal_sample_and_aggregate_embeddings,
+    temporal_sample_and_aggregate_embeddings, temporal_checkerboard,
 )
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
@@ -190,7 +190,9 @@ def _evaluation_splits(
     An official holdout mask takes precedence over every requested CV split and sweep,
     and is evaluated exactly once.
     """
+    print(bench.test_mask)
     if bench.test_mask is not None:
+        print("SHOULD EXECUTE")
         return [("official", bench.test_mask, None, 0.0, 0.0)]
 
     runs: list[tuple[str, np.ndarray | None, np.ndarray | None, float, float | None]] = []
@@ -333,6 +335,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
     model_name = preset.name
     model_target = preset.target
+    use_temporal_checkerboarding = coord.temporal_checkerboard
 
     output_path = resolve_output_path(
         cfg.output.directory, cfg.output.file, "coordbench_results.csv"
@@ -390,6 +393,9 @@ def run_coordbench(cfg: CoordConfig) -> None:
             for b, emb in all_benchmarks
             if b.posix_timestamp is not None or emb is not None
         )
+
+    if use_temporal_checkerboarding:
+        all_benchmarks = temporal_checkerboard(all_benchmarks)
 
     with Progress() as progress:
         task_id = progress.add_task(
