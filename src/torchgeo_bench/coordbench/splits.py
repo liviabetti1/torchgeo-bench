@@ -87,26 +87,37 @@ def _random_temporal(posix_timestamp: np.ndarray, folds: int = 5, seed: int = 42
 def _grid_temporal(
     posix_timestamp: np.ndarray, temporal_grid_size: float, folds: int = 5, seed: int = 42
 ) -> np.ndarray:
-    """Assign each point a fold by its position in a fixed-size temporal grid.
+    """Assign each point a fold by its cell in a fixed-size temporal grid (blockCV-style).
+
+    The grid starts at the earliest timestamp, and all points in a cell share a fold, so train
+    and test sets are temporally disjoint.
 
     Args:
         posix_timestamp: POSIX timestamps, shape ``(N,)``.
         temporal_grid_size: Width of each temporal grid cell (currently in POSIX seconds).
         folds: Number of folds.
-        seed: Random seed controlling the offset of the first grid cell.
+        seed: Random seed for the cell -> fold assignment.
 
     Returns:
         Per-point fold id in ``[0, folds)``, shape ``(N,)``.
     """
     print("Splitting into temporal grids for CV")
-    # partition timestamps into cells, which are blocks of contiguous time
-    cell = np.floor(np.asarray(posix_timestamp) / temporal_grid_size).astype(np.int64)
+    timestamps = np.asarray(posix_timestamp)
+    # partition timestamps into cells, which are blocks of contiguous time starting at the data
+    elapsed = (timestamps - timestamps.min()) / temporal_grid_size
+    num_cells = max(1, round(elapsed.max()))
+    if num_cells < folds:
+        raise ValueError(
+            f"temporal_grid_size spans only {num_cells} cells in the data, fewer than "
+            f"folds={folds}; use a smaller grid size"
+        )
+    cell = np.minimum(np.floor(elapsed), num_cells - 1).astype(np.int64)
     uniq, inverse = np.unique(cell, return_inverse=True)
 
-    # to vary which fold is first
-    offset = np.random.default_rng(seed).integers(folds)
-    # get folds, randomly varying placement
-    fold_of_uniq = (uniq - offset) % folds
+    # deal the shuffled cells out to folds so fold sizes differ by at most one cell
+    order = np.random.default_rng(seed).permutation(len(uniq))
+    fold_of_uniq = np.empty(len(uniq), dtype=np.int64)
+    fold_of_uniq[order] = np.arange(len(uniq)) % folds
     return fold_of_uniq[inverse]
 
 
@@ -133,3 +144,41 @@ def _forecast_temporal(posix_timestamp: np.ndarray, folds: int = 5) -> np.ndarra
     # the lowest fold is held out first
     # but note that after the first fold, the collection of the remaining folds will not be contiguous...
     return fold_of_uniq[inverse]
+
+
+if __name__ == "__main__":
+    # EXAMPLE USAGE: inspect the temporal grid folds on the daily and monthly datasets
+    from datetime import UTC, datetime
+
+    from torchgeo_bench.coordbench.datasets import (
+        load_chelsa_daily,
+        load_chelsa_monthly,
+        load_era5_ecmwf,
+    )
+    from torchgeo_bench.coordbench.temporal_aggregation import DISCRETIZATION_METHODS_TO_SECONDS
+
+    (era5,) = load_era5_ecmwf(subsample_locations=False)
+    (chelsa_daily,) = load_chelsa_daily(subsample_locations=False)
+    (chelsa_monthly,) = load_chelsa_monthly(subsample_locations=False)
+
+    for label, bench in (
+        ("era5_daily", era5),
+        ("chelsa_daily", chelsa_daily),
+        ("chelsa_monthly", chelsa_monthly),
+    ):
+        for grid_name in ("weekly", "days_30", "13_weeks"):
+            try:
+                folds = temporal_fold_ids(
+                    bench.posix_timestamp,
+                    method="grid",
+                    folds=5,
+                    temporal_grid_size=DISCRETIZATION_METHODS_TO_SECONDS[grid_name],
+                )
+            except ValueError as err:  # allow-except: report grid sizes too coarse for the data
+                print(f"{label} / {grid_name}: {err}")
+                continue
+            print(f"{label} / {grid_name}: points per fold = {np.bincount(folds).tolist()}")
+            for fold in range(5):
+                times = np.unique(bench.posix_timestamp[folds == fold])
+                dates = [datetime.fromtimestamp(t, tz=UTC).strftime("%Y-%m-%d") for t in times]
+                print(f"  fold {fold}: {len(times)} timestamps, {dates[0]} ... {dates[-1]}")

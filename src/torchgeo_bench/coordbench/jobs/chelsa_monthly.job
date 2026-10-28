@@ -34,7 +34,7 @@ torchgeo-bench coord \
     --model "$MODEL" \
     --dataset chelsa_monthly \
     --split both \
-    --temporal-discretization-methods monthly seasonally yearly \
+    --temporal-discretization-methods days_30 days_365 \
     --resume \
     --output "$RESULTS/coordbench_chelsa_monthly_temporal.csv" \
     --device cuda:0 \

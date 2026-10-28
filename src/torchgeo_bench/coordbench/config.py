@@ -65,7 +65,7 @@ class CoordEvaluationConfig(StrictModel):
     temporal_sampling_methods: list[StrictStr] = Field(default_factory=list)
     temporal_discretization_methods: list[StrictStr] = Field(default_factory=list)
     temporal_embedding_aggregation_methods: list[StrictStr] = Field(
-        default_factory=lambda: ["statistics"], min_length=1
+        default_factory=lambda: ["mean"], min_length=1
     )
 
     exclude_antarctica: StrictBool = False

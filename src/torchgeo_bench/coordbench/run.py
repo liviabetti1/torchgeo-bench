@@ -33,6 +33,7 @@ from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_ME
 from torchgeo_bench.coordbench.temporal_aggregation import (
     DISCRETIZATION_METHODS_TO_SECONDS,
     discretize_dataset_and_aggregate_embeddings,
+    pool_embeddings,
     temporal_sample_and_aggregate_embeddings,
 )
 from torchgeo_bench.coordbench.models import LocationEncoder
@@ -219,11 +220,19 @@ def _evaluation_splits(
     return runs
 
 
+def _pooled(
+    bench: CoordBenchmark, embeddings: dict[str, torch.Tensor], aggregation: str
+) -> tuple[CoordBenchmark, np.ndarray]:
+    """Pool the embeddings and name the benchmark so each aggregation keeps its own result rows."""
+    bench.name = f"{bench.name}_{aggregation}"
+    return bench, pool_embeddings(embeddings, aggregation)
+
+
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     discretization_methods: Sequence[str],
     temporal_sampling_methods: Sequence[str],
-    embedding_aggregation_methods: Sequence[str] = ("statistics",),
+    embedding_aggregation_methods: Sequence[str],
     *,
     encoder: LocationEncoder,
 ) -> Iterator[tuple[CoordBenchmark, np.ndarray | None]]:
@@ -237,19 +246,19 @@ def _expand_temporal(
                     sampled, embeddings = temporal_sample_and_aggregate_embeddings(
                         bench, encoder, sampling, discretization, aggregation
                     )
-                    print("For now, only returning the mean embeddings")
-                    yield sampled, embeddings["mean"].numpy()
+                    yield _pooled(sampled, embeddings, aggregation)
             else:
                 yield bench, None
             continue
 
         elif bench.temporal_resolution != TemporalResolution.DAILY:
-            for discretization, aggregation in itertools.product(discretization_methods, embedding_aggregation_methods):
-                # sampling and discretization are hard-coded for the time being
+            for season, discretization, aggregation in itertools.product(
+                temporal_sampling_methods or ["year"], discretization_methods, embedding_aggregation_methods
+            ):
                 sampled, embeddings = temporal_sample_and_aggregate_embeddings(
-                    bench, encoder, "", discretization, aggregation
+                    bench, encoder, season, discretization, aggregation
                 )
-                yield sampled, embeddings["mean"].numpy()
+                yield _pooled(sampled, embeddings, aggregation)
             continue
 
 
@@ -264,11 +273,7 @@ def _expand_temporal(
                     for name, values in discretized.tasks.items()
                     if name.endswith(f"_{label_stat}")
                 }
-                # For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.
-                # Or another method...
-                print(f"Expanded {bench.name} with {discretization} discretization and {aggregation} aggregation: {discretized.name}, {embeddings['mean'].shape}")
-                print(f"For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.")
-                yield discretized, embeddings["mean"].numpy()
+                yield _pooled(discretized, embeddings, aggregation)
                 del discretized, embeddings
 
 
@@ -289,7 +294,17 @@ def _expected_benchmark_count(
         * len(coord.temporal_discretization_methods)
         * len(coord.temporal_embedding_aggregation_methods)
     )
-    count = with_timestamp * methods_per_timestamp + without_timestamp + sampled
+    coarse = sum(
+        b.posix_timestamp is not None and b.temporal_resolution != TemporalResolution.DAILY
+        for b in benchmarks
+    )
+    seasons_per_coarse = max(1, len(coord.temporal_sampling_methods))
+    count = (
+        with_timestamp * methods_per_timestamp
+        + coarse * methods_per_timestamp * (seasons_per_coarse - 1)
+        + without_timestamp
+        + sampled
+    )
     if coord.from_polygon:
         count *= sum(m in SPATIAL_AGGREGATION_METHODS for m in coord.spatial_aggregation_methods)
     return count

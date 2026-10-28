@@ -27,7 +27,7 @@ coord:
   split: random            # random | spatial | temporal | all (block-CV holdout)
   folds: 5
   cell_deg: 10.0           # spatial-block grid-cell size in degrees; cell_degs sweeps several
-  temporal_grid_size: null # temporal-block grid-cell width: daily|weekly|biweekly|4_weeks|13_weeks|monthly|seasonally|yearly; temporal_grid_sizes sweeps several
+  temporal_grid_size: null # temporal-block grid-cell width: daily|weekly|biweekly|4_weeks|13_weeks|days_30|days_365; temporal_grid_sizes sweeps several
   knn_k: 5
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
   skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)

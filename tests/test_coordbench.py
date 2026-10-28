@@ -189,9 +189,18 @@ def test_temporal_fold_ids_grid_groups_by_cell() -> None:
     fa = temporal_fold_ids(timestamps, method="grid", folds=5, temporal_grid_size=86400.0)
     assert fa.shape == timestamps.shape
     assert set(np.unique(fa)).issubset(set(range(5)))
-    cell = np.floor(timestamps / 86400.0).astype(np.int64)
+    elapsed = (timestamps - timestamps.min()) / 86400.0
+    cell = np.minimum(np.floor(elapsed), round(elapsed.max()) - 1).astype(np.int64)
     for c in np.unique(cell):
         assert len(np.unique(fa[cell == c])) == 1
+    cells_per_fold = np.bincount(fa[np.unique(cell, return_index=True)[1]], minlength=5)
+    assert cells_per_fold.max() - cells_per_fold.min() <= 1
+
+
+def test_temporal_fold_ids_grid_rejects_fewer_cells_than_folds() -> None:
+    timestamps = np.arange(365) * 86400.0
+    with pytest.raises(ValueError, match="fewer than folds=5"):
+        temporal_fold_ids(timestamps, method="grid", folds=5, temporal_grid_size=91 * 86400.0)
 
 
 def test_test_mask_split_single_fold(points: tuple[np.ndarray, np.ndarray]) -> None:
@@ -297,12 +306,12 @@ def test_run_coordbench_temporal_split(tmp_path: Path, monkeypatch: pytest.Monke
     bench.posix_timestamp = rng.uniform(0, 10 * 365 * 86400, size=len(bench.lat))
     monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
 
-    cfg = _coord_cfg(tmp_path, split="temporal", temporal_grid_size="monthly")
+    cfg = _coord_cfg(tmp_path, split="temporal", temporal_grid_size="days_30")
     run_coordbench(cfg)
 
     df = pd.read_csv(cfg.output.file)
     assert set(df.split) == {"temporal"}
-    assert set(df.temporal_grid_size) == {DISCRETIZATION_METHODS_TO_SECONDS["monthly"]}
+    assert set(df.temporal_grid_size) == {DISCRETIZATION_METHODS_TO_SECONDS["days_30"]}
 
 
 def test_run_coordbench_all_split_skips_temporal_without_grid_size(

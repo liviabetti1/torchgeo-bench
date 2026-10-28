@@ -1,8 +1,8 @@
-# Running USA census data
-# yearly info from 2010-2025 at the county level
+#!/usr/bin/env bash
+# USA census (annual, per county polygon): each year embedded at monthly, weekly and daily timestamps, then pooled. Pass --device cuda:0 (or cpu) as an extra arg.
+# maybe add weekly or daily aggregation?
 set -euo pipefail
-for model in climplicit; do
-  torchgeo-bench coord --model "$model" --dataset usa_census --split both \
-    --from-polygon --spatial-aggregation-methods statistical median_and_iqr mean \
-    --output results/coordbench_usa_electrical_load.csv "$@"
+mkdir -p results/coordbench/temporal
+for m in sincos satclip geoclip mind sinr climplicit gtloc t_satclip/t_satclip_doy_1M; do
+    torchgeo-bench coord --model "$m" --dataset usa_census --split all --temporal-grid-sizes days_365 --temporal-discretization-methods monthly --from-polygon --spatial-aggregation-methods statistical median_and_iqr --resume --output results/coordbench/temporal/usa_census.csv "$@"
 done

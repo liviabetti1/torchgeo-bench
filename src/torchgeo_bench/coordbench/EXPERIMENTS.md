@@ -2,13 +2,13 @@
 
 | # | Dataset | Temporal info | Run script |
 |---|---------|---------------|------------|
-| 1 | US Trees | Timestamps | `src/torchgeo_bench/coordbench/scripts/run_dm_us_trees.sh` |
+| 1 | US Trees | Timestamps | `src/torchgeo_bench/coordbench/scripts/run_dm-us_trees.sh` |
 | 2 | SatCLIP Elevation | None (static) | |
-| 3 | ERA5 / CHELSA daily | Daily, 2017 | |
-| 4 | CHELSA monthly | Monthly, 2011-2018 | **TODO:** still needed |
-| 5 | Electrical load | Daily, 2016-2023 | **TODO:** still needed |
-| 6 | USA population | Yearly, 2010-2025 | **TODO:** still needed |
-| 7 | VIIRS Nightlights | ?| **TODO:** still needed |
+| 3 | ERA5 / CHELSA daily | Daily, 2017 | `src/torchgeo_bench/coordbench/scripts/run_era5_ecmwf.sh`, `src/torchgeo_bench/coordbench/scripts/run_chelsa_daily.sh` |
+| 4 | CHELSA monthly | Monthly, 2011-2018 | `src/torchgeo_bench/coordbench/scripts/run_chelsa_monthly.sh` |
+| 5 | Electrical load | Daily, 2016-2023 | `src/torchgeo_bench/coordbench/scripts/run_usa_electric_load_daily.sh`, `src/torchgeo_bench/coordbench/scripts/run_usa_electric_load_weekly.sh` |
+| 6 | USA population | Yearly, 2010-2025 | `src/torchgeo_bench/coordbench/scripts/run_global_population.sh`, `src/torchgeo_bench/coordbench/scripts/run_usa_census.sh` |
+| 7 | VIIRS Nightlights | Yearly, 2015-2021 | `src/torchgeo_bench/coordbench/scripts/run_viirs_night_lights.sh` |
 | 8 | GHCNd | ? | **TODO:** still needed |
 
 ---
@@ -20,7 +20,7 @@ This dataset has timestamps. We can run all models on it to compare performance,
 **To run:**
 
 ```bash
-bash src/torchgeo_bench/coordbench/scripts/run_dm_us_trees.sh
+bash src/torchgeo_bench/coordbench/scripts/run_dm-us_trees.sh
 ```
 
 ## 2. SatCLIP Elevation
@@ -44,7 +44,7 @@ This dataset is elevation data without timestamps. We can evaluate on it to see 
 
 These datasets were constructed manually at 30K locations for each day in 2017. They were built so that they can be aggregated at different temporal resolutions.
 
-**Supported resolutions:** `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `monthly`, `seasonally`, `yearly`
+**Supported resolutions:** `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `days_30`, `days_365`, `monthly`, `yearly`
 
 **Two ways to aggregate:**
 
@@ -55,19 +55,13 @@ These datasets were constructed manually at 30K locations for each day in 2017. 
 
 A multiyear dataset from 2011-2018, used to test trends over multiple years.
 
-> **TODO:** still need a bash script for this.
-
 ## 5. Electrical Load
 
 Electrical load data in the US from 2016-2023. This is daily data at the county level. We use spatial aggregation for this: we sample 100 points per county and have different spatial aggregation methods.
 
-> **TODO:** still need a bash script for this.
-
 ## 6. USA Population
 
 Yearly USA population data from 2010-2025.
-
-> **TODO:** still need a bash script for this.
 
 # Temporal Aggregation Experiments
 
@@ -94,10 +88,10 @@ We now have two steps to this process:
 
 `--split temporal` cross-validates over time blocks, so each fold holds out whole stretches of time. It is skipped for benchmarks without timestamps. `--temporal-grid-size` (or `--temporal-grid-sizes` for a sweep) sets the block width and is required.
 
-**Grid sizes:** `daily`, `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `monthly`, `seasonally`, `yearly`
+**Grid sizes:** `daily`, `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `days_30`, `days_365`, `monthly`, `yearly`
 
 ```bash
-bash src/torchgeo_bench/coordbench/scripts/run_era5_temporal_split.sh --device cuda:0
+bash src/torchgeo_bench/coordbench/scripts/run_era5_ecmwf.sh --device cuda:0
 ```
 
 ## Summary of flags now
@@ -109,5 +103,5 @@ bash src/torchgeo_bench/coordbench/scripts/run_era5_temporal_split.sh --device c
 | `--temporal-discretization-methods` | Window sizes for datasets that already have timestamps (e.g. `weekly`, `biweekly`, `4_weeks`, `13_weeks`) |
 | `--temporal-sampling-methods` | Time frame to sample for static datasets (`year`, `spring`, `summer`, `fall`, `winter`) |
 | `--temporal-sampling-year` | Calendar year to sample timestamps from (required for static datasets) |
-| `--temporal-embedding-aggregation-methods` | How to pool per-timestamp embeddings into one vector (default: `statistics`, which computes channelwise mean, min, and max; only the mean is used downstream) |
+| `--temporal-embedding-aggregation-methods` | How to pool per-timestamp embeddings into one vector (default: `mean`, the channelwise mean over time; `mean_std_slope_tv` concatenates the channelwise mean, std, slope, and total variation). Each method gets its own result rows, since its name is appended to the benchmark name |
 | `--skip-no-timestamps` | Skip benchmarks that have no native timestamps (useful when only temporal models are being evaluated) |

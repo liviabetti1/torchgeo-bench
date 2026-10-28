@@ -188,11 +188,11 @@ def load_satclip() -> list[CoordBenchmark]:
 def load_sustainbench() -> list[CoordBenchmark]:
     """SustainBench DHS SDG indices — 6 socioeconomic regressions at cluster centroids.
 
-    Uses the dataset's official trainval/test split (``test_mask``), matching the
-    SustainBench protocol rather than k-fold CV.
+    Evaluated with the random and spatial CV splits over trainval and test clusters together.
     """
-    df = load_config("sustainbench")  # merged table; split == "trainval" | "test"
-    is_test = (df["split"] == "test").to_numpy()
+    # changed this so we're not using the official test mask
+    # and instead, using out own
+    df = load_config("sustainbench")
     out: list[CoordBenchmark] = []
     for key, col in SUSTAINBENCH_TASKS.items():
         m = df[col].notna() & df["lat"].notna() & df["lon"].notna()
@@ -203,7 +203,6 @@ def load_sustainbench() -> list[CoordBenchmark]:
                 lat=sub["lat"].to_numpy(np.float64),
                 lon=sub["lon"].to_numpy(np.float64),
                 tasks={col: sub[col].to_numpy(np.float64)},
-                test_mask=is_test[m.to_numpy()],
             )
         )
     return out
@@ -264,11 +263,7 @@ def load_weekly_usa_electric_usage(subsample_locations = True) -> list[CoordBenc
     counties = load_config_gdf("usa_electric_load", filename="usa_counties")
     electrical_load = load_config_temporal("usa_electric_load", filename=f"weekly_usa_electrical_load_2016_2023")
     combined_df = electrical_load.merge(counties, on="county", how="left")
-
-    if subsample_locations:
-        pool = combined_df["county"].drop_duplicates().sample(n=1_500, random_state=0) #total counties is 3117
-        combined_df = combined_df.merge(pool, on=["county"])
-
+    
     if subsample_locations:
         combined_df["sub_sampled"] = combined_df["samples"].map(
             lambda items: items[:10])  # hard-coded, can go up to 1k

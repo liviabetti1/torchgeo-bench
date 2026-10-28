@@ -33,7 +33,7 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--temporal-grid-size", default=argparse.SUPPRESS,
-        help="Temporal grid-cell width, e.g. weekly, biweekly, monthly, seasonally, yearly",
+        help="Temporal grid-cell width, e.g. weekly, biweekly, days_30, days_365",
     )
     parser.add_argument(
         "--temporal-grid-sizes", nargs="+", default=argparse.SUPPRESS,
