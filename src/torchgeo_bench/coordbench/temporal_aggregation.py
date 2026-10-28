@@ -140,39 +140,6 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str, se
     )
 
 
-def no_timestamp_temporal_sampling(
-    dataset: CoordBenchmark, season: str, discretization: str
-) -> CoordBenchmark:
-    """Give every observation of a dataset without timestamps the same grid of timestamps.
-
-    The grid covers `dataset.year`, is spaced by `discretization`, and is restricted to `season`.
-    """
-    if dataset.year is None:
-        raise ValueError("Dataset must have a year to be temporally sampled.")
-
-    if season not in SEASONAL_PERIODS:
-        raise ValueError(f"Unknown season: {season}")
-
-    if discretization not in DISCRETIZATION_METHODS_TO_SECONDS and discretization not in CALENDAR_PERIODS:
-        raise ValueError(f"Unknown discretization method: {discretization}")
-
-    start = pd.Timestamp(year=dataset.year, month=1, day=1, tz="UTC")
-    end = pd.Timestamp(year=dataset.year + 1, month=1, day=1, tz="UTC")
-    times = _sample_times(int(start.timestamp()), int(end.timestamp()), discretization, season)
-
-    return CoordBenchmark(
-        name=f"{dataset.name}_{season}_{discretization}",
-        lat=dataset.lat,
-        lon=dataset.lon,
-        tasks=dataset.tasks,
-        task_type=dataset.task_type,
-        temporal_resolution=dataset.temporal_resolution,
-        year=dataset.year,
-        posix_timestamp=np.tile(times, (len(dataset.lat), 1)),
-        spatial_aggregation_key=dataset.spatial_aggregation_key,
-    )
-
-
 def dataset_discretization(
     dataset: CoordBenchmark,
     method: str,
