@@ -11,3 +11,6 @@ class TemporalResolution(Enum):
     MONTHLY = "monthly"
     SEASONALLY = "seasonally"
     YEARLY = "yearly"
+    TWO_YEARS = "2_years"
+    THREE_YEARS = "3_years"
+    FOUR_YEARS = "4_years"
