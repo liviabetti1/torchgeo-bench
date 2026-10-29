@@ -24,6 +24,10 @@ from torchgeo_bench.devices import resolve_device
 
 logger = logging.getLogger(__name__)
 
+from torchgeo_bench.coordbench.t_satclip import (
+    DEFAULT_POSIX_MAX_TIME,
+    DEFAULT_POSIX_MIN_TIME,
+)
 
 def _date_to_posix_timestamp(year: int, month: int, day: int) -> float:
     """POSIX timestamp (UTC) for a date."""
@@ -364,12 +368,18 @@ class TemporalSatCLIPEncoder(LocationEncoder):
         dim: int | None = None,
         device: str = "cpu",
         batch_size: int = 8192,
+        posix_min_time: float = DEFAULT_POSIX_MIN_TIME,
+        posix_max_time: float = DEFAULT_POSIX_MAX_TIME,
     ) -> None:
         super().__init__(device=device, batch_size=batch_size)
         from torchgeo_bench.coordbench.t_satclip import load_t_satclip
 
         self.model = load_t_satclip(
-            ckpt_path, model_name=model_name, device=self.device
+            ckpt_path, 
+            model_name=model_name, 
+            device=self.device,
+            posix_min_time=posix_min_time,
+            posix_max_time=posix_max_time,
         )
         self.dim = int(dim) if dim is not None else self.model.embedding_dim
 
