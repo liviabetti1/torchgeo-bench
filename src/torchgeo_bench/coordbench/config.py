@@ -74,6 +74,7 @@ class CoordEvaluationConfig(StrictModel):
     spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
     subsample: StrictBool = False
     temporal_checkerboard: StrictBool = False
+    save_predictions: StrictBool = False
 
     @model_validator(mode="after")
     def validate_temporal_grid(self) -> Self:

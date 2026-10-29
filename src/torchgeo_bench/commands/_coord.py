@@ -30,6 +30,7 @@ _FLAG_OVERRIDES = (
     FlagOverride("exclude_antarctica", ("evaluation", "exclude_antarctica")),
     FlagOverride("from_polygon", ("evaluation", "from_polygon")),
     FlagOverride("temporal_checkerboard", ("evaluation", "temporal_checkerboard")),
+    FlagOverride("save_predictions", ("evaluation", "save_predictions")),
     FlagOverride("subsample", ("evaluation", "subsample")),
     FlagOverride("spatial_aggregation_methods", ("evaluation", "spatial_aggregation_methods")),
     FlagOverride("device", ("runtime", "device")),

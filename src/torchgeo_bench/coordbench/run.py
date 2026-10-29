@@ -13,6 +13,7 @@ import os
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
@@ -190,9 +191,7 @@ def _evaluation_splits(
     An official holdout mask takes precedence over every requested CV split and sweep,
     and is evaluated exactly once.
     """
-    print(bench.test_mask)
     if bench.test_mask is not None:
-        print("SHOULD EXECUTE")
         return [("official", bench.test_mask, None, 0.0, 0.0)]
 
     runs: list[tuple[str, np.ndarray | None, np.ndarray | None, float, float | None]] = []
@@ -336,6 +335,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
     model_name = preset.name
     model_target = preset.target
     use_temporal_checkerboarding = coord.temporal_checkerboard
+    save_predictions = coord.save_predictions
 
     output_path = resolve_output_path(
         cfg.output.directory, cfg.output.file, "coordbench_results.csv"
@@ -405,7 +405,7 @@ def run_coordbench(cfg: CoordConfig) -> None:
             progress.update(task_id, description=f"CoordBench: {bench.name}")
             bench_t0 = time.perf_counter()
             n_rows = 0
-            for row in _evaluate_benchmark(bench, encoder, cfg, preset, completed, emb):
+            for row in _evaluate_benchmark(bench, encoder, cfg, preset, completed, save_predictions, output_path, emb):
                 append_rows_atomic(output_path, [row])
                 n_rows += 1
             logger.info(
@@ -436,7 +436,9 @@ def _evaluate_benchmark(
     cfg: CoordConfig,
     preset: ModelPreset,
     completed: set[tuple[str, ...]],
-    precomputed_features: np.ndarray | None = None
+    save_predictions: bool,
+    output_path: str,
+    precomputed_features: np.ndarray | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Embed one benchmark once and probe every (task, method, split) combination."""
     coord = cfg.evaluation
@@ -487,7 +489,7 @@ def _evaluate_benchmark(
                         fold_assign=fold_assign,
                     )
                 else:
-                    score, fold_scores = linear_probe_score(
+                    score, fold_scores, predictions = linear_probe_score(
                         features,
                         np.asarray(labels),
                         bench.task_type,
@@ -498,6 +500,21 @@ def _evaluate_benchmark(
                         test_mask=test_mask,
                         fold_assign=fold_assign,
                     )
+                    if save_predictions:
+                        padded_predictions = []
+                        j = 0
+                        for is_test in test_mask:
+                            if is_test:
+                                padded_predictions.append(predictions[j][0])
+                                j+= 1
+                            else:
+                                padded_predictions.append(0)
+                        results_dir = Path(output_path).parent
+
+                        df = pd.DataFrame({"labels": labels, "predictions": padded_predictions, "mask": test_mask,
+                                           "lat": bench.lat, "lon": bench.lon, "timestamp": bench.posix_timestamp})
+                        os.makedirs(f"{results_dir}/predictions/{preset.name}", exist_ok=True)
+                        df.to_parquet(f"{results_dir}/predictions/{preset.name}/{bench.name}_{task}.parquet")
                 std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
                 n_test = test_sample_count(labels, bench.task_type, test_mask)
                 yield CoordResult(
