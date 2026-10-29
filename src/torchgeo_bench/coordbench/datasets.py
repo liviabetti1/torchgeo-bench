@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
+# Integrate with coordbench (right now, this is my personal repo)
+COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "Temporal-Coordbench") # REMOVE 
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
@@ -705,6 +707,35 @@ def load_deepmind() -> list[CoordBenchmark]:
         )
     return out
 
+def load_ghcn_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
+    """GHCN-Daily — 26k global stations, daily temperature/precipitation from 1992 to 2024"""
+
+    df = load_config_temporal("ghcn_daily", columns=["lat", "lon", "posix_timestamp", "tmax", "tmin", "tmean"])
+
+    if subsample_locations:
+        # Drops locations
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=1_000, random_state=0)
+        df = df.merge(pool, on=["lat", "lon"])
+
+        # Further subsamples the time series to 1k per location, silly pandas groupby + sample syntax
+        df = df.sample(frac=1, random_state=42).groupby(["lat", "lon"]).head(1_000)
+
+    # from huggingface_hub import hf_hub_download
+    # path = hf_hub_download(COORDBENCH_EXTENSION_REPO, f"ghcn_daily/data.parquet", repo_type="dataset")
+    # df = pd.read_parquet(path, columns=["lat", "lon", "posix_timestamp", "tmax", "tmin", "tmean"])
+
+    # df = load_config_extended("ghcn_daily")
+    lon_col, lat_col = _lonlat_cols(df)
+    task_cols = ["tmax", "tmin", "tmean"]
+    return [
+        CoordBenchmark(
+            name="ghcn-daily",
+            lat=df[lat_col].to_numpy(np.float64),
+            lon=df[lon_col].to_numpy(np.float64),
+            tasks={c: df[c].to_numpy(np.float64) for c in task_cols},
+            posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+        )
+    ]
 
 # Family name -> loader. A family groups benchmarks that share a source/protocol.
 FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
@@ -729,6 +760,7 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "usa_census": load_usa_census_data,
     "global_population": load_global_population,
     "viirs_night_lights": load_viirs_night_lights,
+    "ghcn_daily": load_ghcn_daily,
 }
 
 POLYGON_BENCH = [
@@ -746,6 +778,39 @@ CAN_SUBSAMPLE = [
     "global_population",
     "viirs_night_lights"
 ]
+# Benchmark names each family emits; lets a selection load only the needed family,
+# and lets callers enumerate the suite without a download.
+FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
+    "pdfm": ("pdfm-conus27",),
+    "air_temp": ("satclip-air-temp",),
+    "california_housing": ("california-housing",),
+    "satclip": (
+        "satclip-country",
+        "satclip-ecoregion",
+        "satclip-biome",
+        "satclip-population",
+        "satclip-elevation",
+    ),
+    "sustainbench": tuple(f"sustainbench-{k}" for k in SUSTAINBENCH_TASKS),
+    "better_together": (
+        "bt-cropharvest",
+        "bt-biomass",
+        "bt-landcover",
+        "bt-bioclim",
+        "bt-population",
+        "bt-distroad",
+    ),
+    "cdc_places": tuple(f"places-{k}" for k in CDC_PLACES_MEASURES),
+    "usavars": tuple(f"mosaiks-{label}" for label in USAVARS_LABELS),
+    "country": ("country",),
+    "ecoregions": ("ecoregions",),
+    "worldclim": ("worldclim-bio1", "worldclim-bio12"),
+    "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
+    "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
+    "era5_ecmwf": ("era5_ecmwf",),
+    "chelsa": ("chelsa",),
+    "ghcn_daily": ("ghcn-daily",),
+}
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names
