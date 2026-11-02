@@ -4,16 +4,16 @@
 
 source $TORCHGEO_ENV/bin/activate torchgeo-bench
 
-RESULTS=$RESULTS_HOME/factor_in_year # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME/year_patch # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 MODELS=(
   climplicit
   gtloc
   "t_satclip/t_satclip_doy_1M"
-  "t_satclip/t_satclip_landsat_toy_300k"
-  "t_satclip/t_satclip_landsat_toy_y_300k"
-  "t_satclip/t_satclip_landsat_y_300k"
+#  "t_satclip/t_satclip_landsat_toy_300k"
+#  "t_satclip/t_satclip_landsat_toy_y_300k"
+#  "t_satclip/t_satclip_landsat_y_300k"
   "t_satclip/t_satclip_toy_200k"
   "t_satclip/t_satclip_toy_300k"
   "t_satclip/t_satclip_toy_y_100k"
@@ -37,6 +37,6 @@ for model in "${MODELS[@]}"; do
   --dataset usa_census \
   --split all \
   --temporal-discretization-methods monthly \
-  --temporal-grid-sizes yearly 2_years 3_years 4_years \
+  --temporal-checkerboard \
   --output "$out" "$@"
 done
