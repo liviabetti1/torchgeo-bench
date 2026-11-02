@@ -35,7 +35,8 @@ for model in "${MODELS[@]}"; do
   torchgeo-bench coord --model "$model" \
   --dataset usa_electric_load_weekly \
   --temporal-discretization-methods two_days \
-  --subsample \
   --temporal-checkerboard \
+  --save-predictions \
+  --subsample \
   --output "$out" "$@"
 done
