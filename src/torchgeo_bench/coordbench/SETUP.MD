@@ -46,18 +46,24 @@ git checkout temporal
 
 ## 4. Configure models
 
-### Temporal SatCLIP
+### Setting up your environment
+You'll need to export paths for:
+- your virtual environment
+- your local torchgeo repository
+- your local satclip repository
 
-Edit the relevant model config:
-
+For example, when running on rails, I do the following:
+```bash
+export TORCHGEO_HOME=/u/kplane19/torchgeo-bench
+export TORCHGEO_ENV=/u/kplane19/torchgeo-bench/.venv
+export SATCLIP_HOME=/u/kplane19/satclip
+export RESULTS_HOME=/projects/bgtj/t_satclip/results
+export CKPT_HOME=/projects/bgtj/t_satclip/ckpts
 ```
-src/torchgeo_bench/conf/model/t_satclip/{model}.yaml
-```
 
-Update:
+The variable names must be TORCHGEO_HOME, TORCHGEO_ENV, SATCLIP_HOME, RESULTS_HOME, and CKPT_HOME for compatibility with our scripts.  For simplicity's sake, you can put these lines in the bottom of your .bashrc file (found inside your /u/username/ directory).  Upon login, they will automatically be added to your environment.  These can (and should) vary from machine to machine as a way to avoid hard-coding relative paths. 
 
-- `repo-path` to point to your local satclip repository.
-- The checkpoint path to point to the desired temporal SatCLIP checkpoint. (This should be the same for all of us at some point, but right now I'm just playing around with a test checkpoint.)
+If you are writing your own sbatch .job script, you MUST have the line #sbatch --export=ALL on in order for the job to pick up your local environment variables.
 
 ### GTLoc
 
@@ -66,12 +72,6 @@ From [https://github.com/dshatwell23/gtloc/tree/main](https://github.com/dshatwe
 ```bash
 pip install gdown
 gdown --id 170wGyCYLSF3DWOvITIAbtN1OkmDlS4v6 -O /path/to/ckpts/gtloc.pt
-```
-
-If needed, edit `conf/models/gtloc.yaml`. It currently assumes the checkpoint is at:
-
-```
-/projects/bgtj/t_satclip/ckpts/gtloc/gtloc.pt
 ```
 
 ## 5. Run CoordBench
