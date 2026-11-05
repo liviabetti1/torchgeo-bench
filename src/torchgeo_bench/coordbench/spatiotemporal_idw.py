@@ -81,12 +81,15 @@ def knn_predict_multi(
     # sqrt_c = np.sqrt(c_param)
     # t_tr = sqrt_c * (np.asarray(time_tr) - mu) / sigma
     # t_te = sqrt_c * (np.asarray(time_te) - mu) / sigma
+    sqrt_c = np.sqrt(c_param)
+    t_tr = sqrt_c * np.asarray(time_tr)
+    t_te = sqrt_c * np.asarray(time_te)
 
     # Keep lat/lon in degrees; 
     # distance function converts to radians
     # check wrapping with test?
-    S = np.stack([lat_tr, lon_tr, time_tr], axis=1)
-    S0 = np.stack([lat_te, lon_te, time_te], axis=1)
+    S = np.stack([lat_tr, lon_tr, t_tr], axis=1)
+    S0 = np.stack([lat_te, lon_te, t_te], axis=1)
 
     # k is the same as n_neigh in idwST
     # restrict to kmax
