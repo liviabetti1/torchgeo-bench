@@ -82,8 +82,17 @@ env/
 *.ipynb
 **/notebooks/shapefiles/
 
-# Keep notebooks under any debugging directory
-!**/debugging/*.ipynb
+# Keep the coordbench notebooks
+!src/torchgeo_bench/coordbench/notebooks/**/*.ipynb
+
+# Shapefiles
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
 
 # Testing
 .pytest_cache/
