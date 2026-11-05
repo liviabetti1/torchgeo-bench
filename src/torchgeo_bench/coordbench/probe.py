@@ -120,15 +120,18 @@ def ridge_scores(
     alphas: tuple[float, ...],
     *,
     standardize: bool,
-) -> list[float]:
+    get_predictions: bool
+) -> tuple[list[float], list[float]]:
+
     """Score each alpha on a held-out fold with R^2 or classification accuracy."""
-    predictions = ridge_predictions(data, train_idx, test_idx, alphas, standardize=standardize)
+    predictions = list(ridge_predictions(data, train_idx, test_idx, alphas, standardize=standardize))
+    pretty_predictions = predictions[0].tolist() if get_predictions else []
     if data.class_indices is None:
         y_te = data.targets[test_idx]
         ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
-        return [float(1.0 - ((y_te - pred) ** 2).sum() / ss_tot) for pred in predictions]
+        return [float(1.0 - ((y_te - pred) ** 2).sum() / ss_tot) for pred in predictions], pretty_predictions
     class_indices = data.class_indices[test_idx]
-    return [float((pred.argmax(1) == class_indices).float().mean()) for pred in predictions]
+    return [float((pred.argmax(1) == class_indices).float().mean()) for pred in predictions], pretty_predictions
 
 
 def _ridge_eval(
@@ -166,7 +169,7 @@ def _cv_alpha_scores(
     scores_by_alpha: list[list[float]] = [[] for _ in alphas]
     for f, test_idx in enumerate(fold_ids):
         train_idx = torch.cat([fold_ids[j] for j in range(nf) if j != f])
-        fold_scores = ridge_scores(data, train_idx, test_idx, alphas, standardize=standardize)
+        fold_scores, _ = ridge_scores(data, train_idx, test_idx, alphas, standardize=standardize, get_predictions=False)
         for scores, score in zip(scores_by_alpha, fold_scores, strict=True):
             scores.append(score)
     best_alpha, best_mean, best_scores = alphas[0], -1e30, []
@@ -194,7 +197,7 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
     fold_assign: np.ndarray | None = None,
     *,
     standardize: bool = True,
-) -> tuple[float, list[float]]:
+) -> tuple[float, list[float], list[float]]:
     """Closed-form ridge linear probe (regression R^2 / one-hot-ridge accuracy).
 
     Center features and targets on each training fold and restore the target mean
@@ -241,15 +244,15 @@ def linear_probe_score(  # noqa: PLR0913 - public probe options.
         best_alpha = alphas[0]
         if len(alphas) > 1:
             best_alpha, _ = _cv_alpha_scores(data, inner, alphas, standardize=standardize)
-        score = ridge_scores(data, train_pool, test_idx, (best_alpha,), standardize=standardize)[0]
-        return score, [score]
+        scores, predictions = ridge_scores(data, train_pool, test_idx, (best_alpha,), standardize=standardize, get_predictions=True)
+        return scores[0], scores, predictions
 
     fa = None if fold_assign is None else np.asarray(fold_assign)[valid]
     fold_ids = [
         torch.as_tensor(idx, device=dev) for idx in _fold_indices(feats.shape[0], folds, seed, fa)
     ]
     _, fold_scores = _cv_alpha_scores(data, fold_ids, alphas, standardize=standardize)
-    return float(np.mean(fold_scores)), fold_scores
+    return float(np.mean(fold_scores)), fold_scores, []
 
 
 def knn_probe_score(  # noqa: PLR0913 - public probe options.
