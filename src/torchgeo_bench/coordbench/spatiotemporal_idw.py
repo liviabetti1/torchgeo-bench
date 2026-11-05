@@ -4,7 +4,7 @@ import torch
 KS = (1, 5, 20)
 EARTH_R_KM = 6371.0
 
-def pairwise_haversine_plus_time(s, s0, squared=False):
+def pairwise_haversine_plus_time(s, s0, squared=False, return_separate=False):
     """Pairwise spatiotemporal distances.
 
     s: (N, 3), s0: (M, 3)
@@ -25,26 +25,44 @@ def pairwise_haversine_plus_time(s, s0, squared=False):
     d_space = 2 * EARTH_R_KM * torch.asin(torch.sqrt(a.clamp(0, 1)))
     d_time = s[None, :, 2] - s0[:, None, 2]  # (M, N) broadcasting
 
+    if return_separate:
+        return d_space, d_time
+
     d2 = d_space**2 + d_time**2
     return d2 if squared else torch.sqrt(d2)
         
 def pairwise_haversine_plus_time_chunked(
-    s, s0, k, batch_size=128, device="cuda"
+    s, s0, k, batch_size=128, device="cuda", return_separate=False
 ):
     """Exact kNN search using chunked pairwise distances."""
     s = torch.as_tensor(s, dtype=torch.float32, device=device)
     s0 = torch.as_tensor(s0, dtype=torch.float32, device=device)
 
     all_dist, all_idx = [], []
+    haversine_dist = []
+    time_dist = []
 
     for start in range(0, len(s0), batch_size):
         q = s0[start:start + batch_size]
 
-        d2 = pairwise_haversine_plus_time(s, q, squared=True)
-        vals, idx = torch.topk(d2, k, largest=False, sorted=True)
+        if return_separate:
+            d_space, d_time = pairwise_haversine_plus_time(s, q, squared=True, return_separate=True)
+            vals_space, _ = torch.topk(d_space, k, largest=False, sorted=True)
+            vals_time, _ = torch.topk(d_time, k, largest=False, sorted=True)
+
+            haversine_dist.append(torch.sqrt(vals_space).cpu().numpy())
+            time_dist.append(torch.sqrt(vals_time).cpu().numpy())
+            continue
+
+        dist = pairwise_haversine_plus_time(s, q, squared=True, return_separate=return_separate)
+        vals, idx = torch.topk(dist, k, largest=False, sorted=True)
 
         all_dist.append(torch.sqrt(vals).cpu().numpy())
         all_idx.append(idx.cpu().numpy())
+
+    if return_separate:
+        # use to see if haversine and time are on comparable scales
+        return np.concatenate(haversine_dist), np.concatenate(time_dist)
 
     return np.concatenate(all_dist), np.concatenate(all_idx)
 
