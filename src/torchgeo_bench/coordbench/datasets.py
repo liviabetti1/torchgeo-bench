@@ -734,6 +734,7 @@ def load_ghcn_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
             lon=df[lon_col].to_numpy(np.float64),
             tasks={c: df[c].to_numpy(np.float64) for c in task_cols},
             posix_timestamp=df["posix_timestamp"].to_numpy(np.float64),
+            temporal_resolution=TemporalResolution.DAILY,
         )
     ]
 
@@ -809,7 +810,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
     "era5_ecmwf": ("era5_ecmwf",),
     "chelsa": ("chelsa",),
-    "ghcn_daily": ("ghcn-daily",),
+    "ghcn_daily": ("ghcn_daily",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
