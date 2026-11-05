@@ -26,7 +26,7 @@ def pairwise_haversine_plus_time(s, s0, squared=False, return_separate=False):
     d_time = s[None, :, 2] - s0[:, None, 2]  # (M, N) broadcasting
 
     if return_separate:
-        return d_space, d_time
+        return d_space.abs(), d_time.abs()
 
     d2 = d_space**2 + d_time**2
     return d2 if squared else torch.sqrt(d2)
@@ -46,18 +46,18 @@ def pairwise_haversine_plus_time_chunked(
         q = s0[start:start + batch_size]
 
         if return_separate:
-            d_space, d_time = pairwise_haversine_plus_time(s, q, squared=True, return_separate=True)
+            d_space, d_time = pairwise_haversine_plus_time(s, q, squared=False, return_separate=True)
             vals_space, _ = torch.topk(d_space, k, largest=False, sorted=True)
             vals_time, _ = torch.topk(d_time, k, largest=False, sorted=True)
 
-            haversine_dist.append(torch.sqrt(vals_space).cpu().numpy())
-            time_dist.append(torch.sqrt(vals_time).cpu().numpy())
+            haversine_dist.append(vals_space.cpu().numpy())
+            time_dist.append(vals_time.cpu().numpy())
             continue
 
-        dist = pairwise_haversine_plus_time(s, q, squared=True, return_separate=return_separate)
+        dist = pairwise_haversine_plus_time(s, q, squared=False, return_separate=return_separate)
         vals, idx = torch.topk(dist, k, largest=False, sorted=True)
 
-        all_dist.append(torch.sqrt(vals).cpu().numpy())
+        all_dist.append(vals.cpu().numpy())
         all_idx.append(idx.cpu().numpy())
 
     if return_separate:
@@ -72,20 +72,21 @@ def knn_predict_multi(
     """Predict with inverse great-circle distance weights for each k, sharing one query.
     Based on https://github.com/taylor-geospatial/mind/blob/main/scripts/paper/coord_interp_baseline.py"""
 
+    # not sure what/if to standardize...
     # standardize time only
     # because haversine is in km
-    mu = np.mean(time_tr)
-    sigma = np.std(time_tr, ddof=1)
+    # mu = np.mean(time_tr)
+    # sigma = np.std(time_tr, ddof=1)
 
-    sqrt_c = np.sqrt(c_param)
-    t_tr = sqrt_c * (np.asarray(time_tr) - mu) / sigma
-    t_te = sqrt_c * (np.asarray(time_te) - mu) / sigma
+    # sqrt_c = np.sqrt(c_param)
+    # t_tr = sqrt_c * (np.asarray(time_tr) - mu) / sigma
+    # t_te = sqrt_c * (np.asarray(time_te) - mu) / sigma
 
     # Keep lat/lon in degrees; 
     # distance function converts to radians
     # check wrapping with test?
-    S = np.stack([lat_tr, lon_tr, t_tr], axis=1)
-    S0 = np.stack([lat_te, lon_te, t_te], axis=1)
+    S = np.stack([lat_tr, lon_tr, time_tr], axis=1)
+    S0 = np.stack([lat_te, lon_te, time_te], axis=1)
 
     # k is the same as n_neigh in idwST
     # restrict to kmax
