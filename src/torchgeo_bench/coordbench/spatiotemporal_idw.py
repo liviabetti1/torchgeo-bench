@@ -66,14 +66,9 @@ def pairwise_haversine_plus_time_chunked(
 
     return np.concatenate(all_dist), np.concatenate(all_idx)
 
-def knn_predict_multi(
-    lat_tr, lon_tr, time_tr, y_tr, lat_te, lon_te, time_te, ks, task_type: str, n_classes: int, c_param: float
-) -> dict:
-    """Predict with inverse great-circle distance weights for each k, sharing one query.
-    Based on https://github.com/taylor-geospatial/mind/blob/main/scripts/paper/coord_interp_baseline.py"""
-
-    # not sure what/if to standardize...
-    # standardize time only
+def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, device="cuda"):
+    # not sure what/if to standardize...for now no standardization
+    # maybe later: standardize time only
     # because haversine is in km
     # mu = np.mean(time_tr)
     # sigma = np.std(time_tr, ddof=1)
@@ -81,9 +76,14 @@ def knn_predict_multi(
     # sqrt_c = np.sqrt(c_param)
     # t_tr = sqrt_c * (np.asarray(time_tr) - mu) / sigma
     # t_te = sqrt_c * (np.asarray(time_te) - mu) / sigma
-    sqrt_c = np.sqrt(c_param)
-    t_tr = sqrt_c * np.asarray(time_tr)
-    t_te = sqrt_c * np.asarray(time_te)
+    if time_tr is None or time_te is None:
+        print("No time provided, using spatial only")
+        t_tr = np.zeros_like(lat_tr)
+        t_te = np.zeros_like(lat_te)
+    else:
+        sqrt_c = np.sqrt(c_param)
+        t_tr = sqrt_c * np.asarray(time_tr)
+        t_te = sqrt_c * np.asarray(time_te)
 
     # Keep lat/lon in degrees; 
     # distance function converts to radians
@@ -94,7 +94,6 @@ def knn_predict_multi(
     # k is the same as n_neigh in idwST
     # restrict to kmax
     # mind implementation does kmax = min(max(ks), len(lat_tr))
-    kmax = max(ks)
     assert kmax <= len(lat_tr), "Invalid choice of k (number of neighbors)"
 
     # mind implementation parallelizes jobs
@@ -103,12 +102,19 @@ def knn_predict_multi(
 
     # Exact nearest neighbors on GPU
     distances, indices = pairwise_haversine_plus_time_chunked(
-        S, S0, k=kmax
+        S, S0, k=kmax, device=device
     )
+
+    return distances, indices
+
+def knn_predict(distances, indices, ks, y_tr, lat_te, lon_te, task_type: str, n_classes: int) -> dict:
+    """ """
+    kmax = max(ks)
 
     # A 10 m floor bounds weights for coincident coordinates.
     # not sure what this is, but mind does it?
     inv = 1.0 / np.maximum(distances, 0.01)
+    # indices are from the training set, so we can index into y_tr to get the neighbor labels
     neigh = np.asarray(y_tr)[indices]
 
     out = {}
@@ -127,3 +133,14 @@ def knn_predict_multi(
             np.add.at(votes, (np.arange(len(lat_te)), nb[:, j]), w[:, j])
         out[k] = votes.argmax(axis=1)
     return out
+
+def find_knn_and_predict(
+    lat_tr, lon_tr, time_tr, y_tr, lat_te, lon_te, time_te, ks, task_type: str, n_classes: int, c_param: float, device: str = "cuda"
+) -> dict:
+    """Predict with inverse great-circle distance weights for each k, sharing one query.
+    Based on https://github.com/taylor-geospatial/mind/blob/main/scripts/paper/coord_interp_baseline.py"""
+
+    kmax = max(ks)
+    distances, indices = find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param=c_param, device=device)
+
+    return knn_predict(distances, indices, ks, y_tr, lat_te, lon_te, task_type=task_type, n_classes=n_classes)

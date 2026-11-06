@@ -21,6 +21,8 @@ from sklearn.preprocessing import StandardScaler
 from torchgeo_bench.coordbench.config import RIDGE_ALPHAS
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.knn import KNNClassifier
+from torchgeo_bench.coordbench.spatiotemporal_idw import find_knn, knn_predict
+from sklearn.metrics import r2_score
 
 logger = logging.getLogger(__name__)
 
@@ -296,3 +298,81 @@ def knn_probe_score(  # noqa: PLR0913 - public probe options.
     all_idx = np.arange(len(features))
     fold_scores = [_eval(np.setdiff1d(all_idx, test_idx), test_idx) for test_idx in fold_ids]
     return float(np.mean(fold_scores)), fold_scores
+
+@dataclass(frozen=True)
+class IDWData:
+    """Coordinates, optional timestamps, and labels aligned on one row axis."""
+
+    lat: np.ndarray
+    lon: np.ndarray
+    timestamp: np.ndarray | None
+    labels: np.ndarray
+    task_type: str
+
+@dataclass(frozen=True)
+class IDWSplit:
+    train: np.ndarray
+    val: np.ndarray
+    test: np.ndarray
+
+@dataclass(frozen=True)
+class IDWResult:
+    test_score: float
+    best_k: int
+    best_c: float
+
+def idw_probe_score(data: IDWData, split: IDWSplit, ks, cs, device) -> IDWResult:
+    """Run the spatiotemporal IDW probe on the given data and return the best score and corresponding hyperparameters."""
+
+    best_score = -np.inf
+    best_k = None
+    best_c = None
+
+    for c in cs:
+        # if timestamps are None, then find_knn will use zeros
+        distances, indices = find_knn(data.lat[split.train], data.lon[split.train], data.timestamp[split.train],
+                                       data.lat[split.val], data.lon[split.val], data.timestamp[split.val],
+                                       kmax=max(ks), c_param=c, device=device)
+
+        out_per_k = knn_predict(distances, indices, ks, data.labels[split.train], data.lat[split.val], data.lon[split.val], data.task_type, n_classes=len(np.unique(data.labels)))
+        if data.task_type == "regression":
+            scores_per_k = {k: r2_score(data.labels[split.val], pred) for k, pred in out_per_k.items()}
+        elif data.task_type == "classification":
+            # For classification, compute accuracy
+            scores_per_k = {k: (pred == data.labels[split.val]).mean() for k, pred in out_per_k.items()}
+
+        for k, score in scores_per_k.items():
+            if score > best_score:
+                best_score = score
+                best_k = k
+                best_c = c
+
+    # After finding the best hyperparameters, evaluate on the test set
+    # need to recompute distances, indices for test set
+    train_and_val = np.concatenate([split.train, split.val])
+
+    distances, indices = find_knn(
+        data.lat[train_and_val], data.lon[train_and_val], data.timestamp[train_and_val],
+        data.lat[split.test], data.lon[split.test], data.timestamp[split.test],
+        kmax=best_k, c_param=best_c, device=device
+    )
+
+    pred = knn_predict(
+        distances, indices, [best_k],
+        data.labels[train_and_val],
+        data.lat[split.test], data.lon[split.test],
+        data.task_type,
+        n_classes=len(np.unique(data.labels))
+    )[best_k]
+
+
+    if data.task_type == "regression":
+        test_score = r2_score(data.labels[split.test], pred)
+    elif data.task_type == "classification":
+        test_score = (pred == data.labels[split.test]).mean()
+
+    return IDWResult(
+        test_score=float(test_score),
+        best_k=best_k,
+        best_c=best_c,
+    )
