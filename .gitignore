@@ -84,6 +84,7 @@ env/
 
 # Keep notebooks under any debugging directory
 !**/debugging/*.ipynb
+!**/visualizations/*.ipynb
 
 # Testing
 .pytest_cache/
