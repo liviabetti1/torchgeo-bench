@@ -19,23 +19,32 @@ def lat_lon_to_xyz(lat, lon):
 
 # the following code is from VeeVee
 # at https://github.com/arizonat/satclip/blob/temporal/satclip/load_temporal_satclip_wrapper.py
-def time_to_normalized_year(posix_time):
-    year = ((posix_time / SECONDS_IN_A_YEAR).long() + 1970)
-    return (year.int() - self.posix_min_time) / (self.posix_max_time - self.posix_min_time)  # Normalize to [0, 1]
+def time_to_normalized_year(posix_time, posix_min_time, posix_max_time):
+    # the 1970 epoch offset cancels in the normalization
+    y, y0, y1 = (np.floor(np.asarray(t) / SECONDS_IN_A_YEAR) for t in (posix_time, posix_min_time, posix_max_time))
+    return (y - y0) / (y1 - y0)  # Normalize to [0, 1]
 
-def time_to_normalized_day_of_year(posix_time):
-    day_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).long() + 1
-    return (day_of_year.int() - 1) / 364.0  # Normalize to [0, 1]
+def time_to_normalized_day_of_year(posix_time, posix_min_time, posix_max_time):
+    day_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).astype(int) + 1
+    return (day_of_year - 1) / 364.0  # Normalize to [0, 1]
 
-def time_to_normalized_time_of_year(posix_time):
-    time_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).long() + 1
+def time_to_normalized_time_of_year(posix_time, posix_min_time, posix_max_time):
+    time_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).astype(int) + 1
     return (time_of_year - 1) / 364.0  # Normalize to [0, 1]
 
-def time_normalized(posix_time):
-    normalized_time = (posix_time - self.posix_min_time) / (self.posix_max_time - self.posix_min_time)
+def time_normalized(posix_time, posix_min_time, posix_max_time):
+    normalized_time = (posix_time - posix_min_time) / (posix_max_time - posix_min_time)
     return normalized_time
 
-def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, device="cuda"):
+def time_of_year_and_year(posix_time, posix_min_time, posix_max_time):
+    return np.column_stack([
+        time_to_normalized_time_of_year(posix_time, posix_min_time, posix_max_time),
+        time_to_normalized_year(posix_time, posix_min_time, posix_max_time),
+    ])
+
+def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, device="cuda", time_fn=None):
+    # time_fn: optional (posix_time, posix_min_time, posix_max_time) -> (n,) or (n, d) array
+    
     # not sure what/if to standardize...for now no standardization
     # maybe later: standardize time only
 
@@ -49,6 +58,9 @@ def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, de
     else:
         time_tr = np.asarray(time_tr, dtype=np.float64)
         time_te = np.asarray(time_te, dtype=np.float64)
+        if time_fn is not None:
+            tmin, tmax = time_tr.min(), time_tr.max()
+            time_tr, time_te = time_fn(time_tr, tmin, tmax), time_fn(time_te, tmin, tmax)
         t0 = time_tr.min()
         sqrt_c = np.sqrt(c_param)
         # subtract t0 to avoid float32 overflow for large timestamps
@@ -111,12 +123,12 @@ def knn_predict(distances, indices, ks, y_tr, lat_te, lon_te, task_type: str, n_
     return out
 
 def find_knn_and_predict(
-    lat_tr, lon_tr, time_tr, y_tr, lat_te, lon_te, time_te, ks, task_type: str, n_classes: int, c_param: float, device: str = "cuda"
+    lat_tr, lon_tr, time_tr, y_tr, lat_te, lon_te, time_te, ks, task_type: str, n_classes: int, c_param: float, device: str = "cuda", time_fn=None
 ) -> dict:
     """Predict with inverse great-circle distance weights for each k, sharing one query.
     Based on https://github.com/taylor-geospatial/mind/blob/main/scripts/paper/coord_interp_baseline.py"""
 
     kmax = max(ks)
-    distances, indices = find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param=c_param, device=device)
+    distances, indices = find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param=c_param, device=device, time_fn=time_fn)
 
     return knn_predict(distances, indices, ks, y_tr, lat_te, lon_te, task_type=task_type, n_classes=n_classes)
