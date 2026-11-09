@@ -136,29 +136,6 @@ def ridge_scores(
     return [float((pred.argmax(1) == class_indices).float().mean()) for pred in predictions], pretty_predictions
 
 
-def _ridge_eval(
-    gram: torch.Tensor,
-    xty: torch.Tensor,
-    x_te: torch.Tensor,
-    y_te: torch.Tensor,
-    eye: torch.Tensor,
-    alpha: float,
-    class_indices: torch.Tensor | None,
-    test_idx: torch.Tensor
-) -> float:
-    """Fit closed-form ridge on ``train_idx``, score on ``test_idx`` (R^2 or accuracy)."""
-    weight = torch.linalg.solve(
-        x_tr.T @ x_tr + alpha * eye, x_tr.T @ data.targets[train_idx].double()
-    )
-    pred = x_te @ weight
-    if data.class_indices is None:
-        y_te = data.targets[test_idx]
-        ss_res = ((y_te - pred) ** 2).sum()
-        ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
-        return float(1.0 - ss_res / ss_tot)
-    return float((pred.argmax(1) == data.class_indices[test_idx]).float().mean())
-
-
 def _cv_alpha_scores(
     data: RidgeData,
     fold_ids: list[torch.Tensor],
@@ -187,7 +164,7 @@ def _cv_alpha_scores(
     return best_alpha, best_scores
 
 
-def linear_probe_score(  # noqa: PLR0913 - public probe options.
+def linear_probe_score( 
     features: np.ndarray,
     labels: np.ndarray,
     task_type: str,

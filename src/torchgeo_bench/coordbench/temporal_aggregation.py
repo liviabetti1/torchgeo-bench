@@ -209,46 +209,6 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str, se
         test_mask=new_test_mask
     )
 
-#TODO: adjust for weekly, monthly, and yearly datasets; see run_elevation_temporal_sampling.sh for how this is
-# wired up in coords
-def no_timestamp_temporal_sampling(
-    dataset: CoordBenchmark, method: str, discretization: str
-) -> CoordBenchmark:
-    """Used on datasets without timestamps.
-    For now, must specify a dataset year.
-    This function will assign each observation a regular grid of timestamps over a window of `dataset.year`.
-    """
-    if dataset.year is None:
-        raise ValueError("Dataset must have a year to be temporally sampled.")
-
-    if method not in TEMPORAL_SAMPLING_MONTHS:
-        raise ValueError(f"Unknown temporal sampling method: {method}")
-
-    if discretization not in DISCRETIZATION_METHODS_TO_SECONDS:
-        raise ValueError(f"Unknown discretization method: {discretization}")
-
-    step = DISCRETIZATION_METHODS_TO_SECONDS[discretization]
-
-    times = []
-    for month in TEMPORAL_SAMPLING_MONTHS[method]:
-        start = pd.Timestamp(year=dataset.year, month=month, day=1, tz="UTC")
-        end = start + pd.offsets.MonthBegin(1)
-        times.append(np.arange(int(start.timestamp()), int(end.timestamp()), step))
-    times = np.concatenate(times)
-
-    return CoordBenchmark(
-        name=f"{dataset.name}_{method}_{discretization}",
-        lat=dataset.lat,
-        lon=dataset.lon,
-        tasks=dataset.tasks,
-        task_type=dataset.task_type,
-        temporal_resolution=dataset.temporal_resolution,
-        year=dataset.year,
-        posix_timestamp=np.tile(times, (len(dataset.lat), 1)),
-        spatial_aggregation_key=dataset.spatial_aggregation_key,
-        spatial_aggregation_key=spatial_aggregation_key,
-    )
-
 
 def dataset_discretization(
     dataset: CoordBenchmark,

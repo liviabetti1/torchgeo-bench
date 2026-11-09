@@ -1,95 +1,43 @@
 import numpy as np
-import torch
+import faiss
 
 KS = (1, 5, 20)
 EARTH_R_KM = 6371.0
 
-def pairwise_haversine_plus_time(s, s0, squared=False, return_separate=False):
-    """Pairwise spatiotemporal distances.
-
-    s: (N, 3), s0: (M, 3)
-    Spatial distances in km; scaled_time in km-equivalent units.
-    """
-    lat0 = torch.deg2rad(s0[:, 0])[:, None]
-    lon0 = torch.deg2rad(s0[:, 1])[:, None]
-    lat = torch.deg2rad(s[:, 0])[None, :]
-    lon = torch.deg2rad(s[:, 1])[None, :]
-
-    dlat = lat - lat0
-    dlon = lon - lon0
-
-    a = (
-        torch.sin(dlat / 2) ** 2
-        + torch.cos(lat0) * torch.cos(lat) * torch.sin(dlon / 2) ** 2
-    )
-    d_space = 2 * EARTH_R_KM * torch.asin(torch.sqrt(a.clamp(0, 1)))
-    d_time = s[None, :, 2] - s0[:, None, 2]  # (M, N) broadcasting
-
-    if return_separate:
-        return d_space.abs(), d_time.abs()
-
-    d2 = d_space**2 + d_time**2
-    return d2 if squared else torch.sqrt(d2)
-        
-def pairwise_haversine_plus_time_chunked(
-    s, s0, k, batch_size=128, device="cuda", return_separate=False
-):
-    """Exact kNN search using chunked pairwise distances."""
-    s = torch.as_tensor(s, dtype=torch.float32, device=device)
-    s0 = torch.as_tensor(s0, dtype=torch.float32, device=device)
-
-    all_dist, all_idx = [], []
-    haversine_dist = []
-    time_dist = []
-
-    for start in range(0, len(s0), batch_size):
-        q = s0[start:start + batch_size]
-
-        if return_separate:
-            d_space, d_time = pairwise_haversine_plus_time(s, q, squared=False, return_separate=True)
-            vals_space, _ = torch.topk(d_space, k, largest=False, sorted=True)
-            vals_time, _ = torch.topk(d_time, k, largest=False, sorted=True)
-
-            haversine_dist.append(vals_space.cpu().numpy())
-            time_dist.append(vals_time.cpu().numpy())
-            continue
-
-        dist = pairwise_haversine_plus_time(s, q, squared=False, return_separate=return_separate)
-        vals, idx = torch.topk(dist, k, largest=False, sorted=True)
-
-        all_dist.append(vals.cpu().numpy())
-        all_idx.append(idx.cpu().numpy())
-
-    if return_separate:
-        # use to see if haversine and time are on comparable scales
-        return np.concatenate(haversine_dist), np.concatenate(time_dist)
-
-    return np.concatenate(all_dist), np.concatenate(all_idx)
+def lat_lon_to_xyz(lat, lon):
+    """Convert lat/lon to 3D Cartesian coordinates."""
+    lat_rad = np.radians(lat)
+    lon_rad = np.radians(lon)
+    x = EARTH_R_KM * np.cos(lat_rad) * np.cos(lon_rad)
+    y = EARTH_R_KM * np.cos(lat_rad) * np.sin(lon_rad)
+    z = EARTH_R_KM * np.sin(lat_rad)
+    return np.stack([x, y, z], axis=1)
 
 def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, device="cuda"):
     # not sure what/if to standardize...for now no standardization
     # maybe later: standardize time only
-    # because haversine is in km
-    # mu = np.mean(time_tr)
-    # sigma = np.std(time_tr, ddof=1)
 
-    # sqrt_c = np.sqrt(c_param)
-    # t_tr = sqrt_c * (np.asarray(time_tr) - mu) / sigma
-    # t_te = sqrt_c * (np.asarray(time_te) - mu) / sigma
+    cartesian_tr = lat_lon_to_xyz(lat_tr, lon_tr)
+    cartesian_te = lat_lon_to_xyz(lat_te, lon_te)
+
     if time_tr is None or time_te is None:
         print("No time provided, using spatial only")
         t_tr = np.zeros_like(lat_tr)
         t_te = np.zeros_like(lat_te)
     else:
+        time_tr = np.asarray(time_tr, dtype=np.float64)
+        time_te = np.asarray(time_te, dtype=np.float64)
+        t0 = time_tr.min()
         sqrt_c = np.sqrt(c_param)
-        t_tr = sqrt_c * np.asarray(time_tr)
-        t_te = sqrt_c * np.asarray(time_te)
+        # subtract t0 to avoid float32 overflow for large timestamps
+        t_tr = sqrt_c * (time_tr - t0)
+        t_te = sqrt_c * (time_te - t0)
 
     # Keep lat/lon in degrees; 
     # distance function converts to radians
     # check wrapping with test?
-    S = np.stack([lat_tr, lon_tr, t_tr], axis=1)
-    S0 = np.stack([lat_te, lon_te, t_te], axis=1)
+    S = np.column_stack([cartesian_tr, t_tr]).astype(np.float32)
+    S0 = np.column_stack([cartesian_te, t_te]).astype(np.float32)
 
     # k is the same as n_neigh in idwST
     # restrict to kmax
@@ -101,11 +49,17 @@ def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, de
     # this is a later problem...
 
     # Exact nearest neighbors on GPU
-    distances, indices = pairwise_haversine_plus_time_chunked(
-        S, S0, k=kmax, device=device
-    )
+    index = faiss.IndexFlatL2(S.shape[1])
 
-    return distances, indices
+    if device == "cuda":
+        res = faiss.StandardGpuResources()
+        # assumes gpu id is 0
+        index = faiss.index_cpu_to_gpu(res, 0, index)
+
+    index.add(S)
+    distances_sq, indices = index.search(S0, kmax)
+
+    return np.sqrt(distances_sq), indices
 
 def knn_predict(distances, indices, ks, y_tr, lat_te, lon_te, task_type: str, n_classes: int) -> dict:
     """ """
