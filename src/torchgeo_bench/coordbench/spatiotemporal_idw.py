@@ -4,6 +4,10 @@ import faiss
 KS = (1, 5, 20)
 EARTH_R_KM = 6371.0
 
+SECONDS_IN_A_HOUR = 3600
+SECONDS_IN_A_DAY = 86400
+SECONDS_IN_A_YEAR = 31556952 # Gregorian year 365.2425 days
+
 def lat_lon_to_xyz(lat, lon):
     """Convert lat/lon to 3D Cartesian coordinates."""
     lat_rad = np.radians(lat)
@@ -12,6 +16,24 @@ def lat_lon_to_xyz(lat, lon):
     y = EARTH_R_KM * np.cos(lat_rad) * np.sin(lon_rad)
     z = EARTH_R_KM * np.sin(lat_rad)
     return np.stack([x, y, z], axis=1)
+
+# the following code is from VeeVee
+# at https://github.com/arizonat/satclip/blob/temporal/satclip/load_temporal_satclip_wrapper.py
+def time_to_normalized_year(posix_time):
+    year = ((posix_time / SECONDS_IN_A_YEAR).long() + 1970)
+    return (year.int() - self.posix_min_time) / (self.posix_max_time - self.posix_min_time)  # Normalize to [0, 1]
+
+def time_to_normalized_day_of_year(posix_time):
+    day_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).long() + 1
+    return (day_of_year.int() - 1) / 364.0  # Normalize to [0, 1]
+
+def time_to_normalized_time_of_year(posix_time):
+    time_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).long() + 1
+    return (time_of_year - 1) / 364.0  # Normalize to [0, 1]
+
+def time_normalized(posix_time):
+    normalized_time = (posix_time - self.posix_min_time) / (self.posix_max_time - self.posix_min_time)
+    return normalized_time
 
 def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, device="cuda"):
     # not sure what/if to standardize...for now no standardization
