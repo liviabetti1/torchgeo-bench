@@ -175,4 +175,5 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "viirs_night_lights": ("viirs_night_lights",),
     "usa_census": ("usa_census",),
     "ghcn_daily": ("ghcn-daily",),
+    "twsa": ("twsa",),
 }

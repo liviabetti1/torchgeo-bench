@@ -738,6 +738,37 @@ def load_ghcn_daily(subsample_locations: bool = True) -> list[CoordBenchmark]:
         )
     ]
 
+
+def load_twsa(subsample_locations: bool = True) -> list[CoordBenchmark]:
+    """TWSA - total water storage anomaly monthly dataset from 2002 04 to 2026 08 (with gaps).
+    Sources: TELLUS Level-3 land grids (1 degree, ocean masked): GRACE (2002-04 to 2017-06) and GRACE-FO (2018-06 on)
+    Pre-processing:
+        1) sample 500k random points on a globe
+        2) filter points for land
+        3) extract TWSA values for all available months.
+        """
+    df = load_config_temporal("total_water_storage_anomaly", columns=["lat", "lon", "timestamp", "end_timestamp", "lwe"])
+
+    if subsample_locations:
+        # Drops locations
+        pool = df[["lat", "lon"]].drop_duplicates().sample(n=10, random_state=0)
+        df = df.merge(pool, on=["lat", "lon"])
+
+    lon_col, lat_col = _lonlat_cols(df)
+    task_cols = ['lwe']
+    return [
+        CoordBenchmark(
+            name="twsa",
+            lat=df[lat_col].to_numpy(np.float64),
+            lon=df[lon_col].to_numpy(np.float64),
+            tasks={c: df[c].to_numpy(np.float64) for c in task_cols},
+            posix_timestamp=df["timestamp"].to_numpy(np.float64),
+            end_timestamp=df["end_timestamp"].to_numpy(np.float64),
+            temporal_resolution=TemporalResolution.MONTHLY,
+        )
+    ]
+
+
 # Family name -> loader. A family groups benchmarks that share a source/protocol.
 FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "pdfm": load_pdfm,
@@ -762,6 +793,7 @@ FAMILY_LOADERS: dict[str, Callable[[], list[CoordBenchmark]]] = {
     "global_population": load_global_population,
     "viirs_night_lights": load_viirs_night_lights,
     "ghcn_daily": load_ghcn_daily,
+    "twsa": load_twsa,
 }
 
 POLYGON_BENCH = [
@@ -777,7 +809,8 @@ CAN_SUBSAMPLE = [
     "chelsa_monthly",
     "usa_census",
     "global_population",
-    "viirs_night_lights"
+    "viirs_night_lights",
+    "twsa"
 ]
 # Benchmark names each family emits; lets a selection load only the needed family,
 # and lets callers enumerate the suite without a download.
@@ -811,6 +844,7 @@ FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
     "era5_ecmwf": ("era5_ecmwf",),
     "chelsa": ("chelsa",),
     "ghcn_daily": ("ghcn_daily",),
+    "twsa": ("twsa",),
 }
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
