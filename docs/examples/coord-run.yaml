@@ -8,10 +8,12 @@ model:
 datasets: [california_housing]
 evaluation:
   methods: [linear]
+  split_test_type: nested_cv
   split: random
+  inner_split: random
   folds: 2
-  cell_deg: 10.0
-  knn_k: 5
+  inner_folds: 2
+  knn_ks: [5]
   knn_device: cpu
 runtime:
   device: cpu

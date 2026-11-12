@@ -141,20 +141,3 @@ def test_non_daily_sampling_drops_partial_weeks_across_every_field():
     assert column == "county"
     assert values.iloc[2] == "c"
     assert len(values) == 3
-
-
-def test_expand_temporal_samples_a_season_of_untimestamped_benchmarks():
-    bench = CoordBenchmark(
-        name="static", lat=np.zeros(3), lon=np.zeros(3), tasks={"y": np.arange(3.0)}, year=2017
-    )
-    ((sampled, features),) = _expand_temporal(
-        [bench], ["weekly"], ["summer"], ["mean"], encoder=DayEncoder()
-    )
-
-    # Weekly grid over 2017 (Jan 1 + 7k days), restricted to June-August.
-    grid = pd.date_range("2017-01-01", "2018-01-01", freq="7D", inclusive="left")
-    summer = grid[grid.month.isin([6, 7, 8])]
-    expected_mean = np.mean((summer - pd.Timestamp(0)) / pd.Timedelta(days=1))
-
-    assert sampled.name == "static_summer_weekly_mean"
-    np.testing.assert_allclose(features.ravel(), [expected_mean] * 3)

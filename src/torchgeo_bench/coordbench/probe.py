@@ -1,57 +1,53 @@
 """Frozen-encoder probes for the CoordBench location-encoder track.
 
 Freeze the encoder, embed a labeled dataset's ``(lon, lat)``, fit a head, report a
-held-out score. Two heads: ``linear`` (closed-form ridge in torch, CV-selected L2;
-R^2 for regression, one-hot-ridge accuracy for classification) and ``knn`` (FAISS
-k-NN on standardized features, classification only).
+held-out score. Three heads: ``linear`` (closed-form ridge in torch, CV-selected L2;
+R^2 for regression, one-hot-ridge accuracy for classification), ``knn`` (FAISS
+k-NN on standardized features, classification only), and ``idw`` (spatiotemporal
+inverse-distance weighting on coordinates).
 
-Split precedence: official ``test_mask``, else ``fold_assign`` spatial-block CV, else
-random k-fold.
+Each ``*_predictor`` returns ``predict(train, test, grid)`` giving one prediction array per grid
+point; :func:`evaluate` tunes the grid on each outer fold's inner pairs and scores the outer test
+rows. For splits, see splits.py.
 """
 
-import logging
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
 
-from torchgeo_bench.coordbench.config import RIDGE_ALPHAS
+from torchgeo_bench.coordbench.spatiotemporal_idw import find_knn, knn_predict
+from torchgeo_bench.coordbench.splits import OuterFold
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.knn import KNNClassifier
-from torchgeo_bench.coordbench.spatiotemporal_idw import find_knn, knn_predict
-from sklearn.metrics import r2_score
-
-logger = logging.getLogger(__name__)
 
 
-def spatial_fold_ids(
-    lat: np.ndarray, lon: np.ndarray, folds: int = 5, cell_deg: float = 10.0, seed: int = 0
-) -> np.ndarray:
-    """Assign each point a fold by its lat/lon grid cell (blockCV-style holdout).
+@dataclass(frozen=True)
+class ProbeData:
+    """Features and labels for one probe, aligned on the benchmark's row axis."""
 
-    All points in a ``cell_deg`` block share a fold, so train and test sets are
-    spatially disjoint.
+    features: np.ndarray
+    labels: np.ndarray
+    task_type: str  # "regression" or "classification"
+    class_indices: np.ndarray | None  # (N,) class ids for classification
 
-    Args:
-        lat: Latitudes, shape ``(N,)``.
-        lon: Longitudes, shape ``(N,)``.
-        folds: Number of folds.
-        cell_deg: Grid-cell size in degrees.
-        seed: RNG seed for the cell -> fold assignment.
+    @property
+    def y(self) -> np.ndarray:
+        """Scoring targets: class ids for classification, float labels for regression."""
+        return self.labels if self.class_indices is None else self.class_indices
 
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
-    """
-    cell = np.floor(np.asarray(lat) / cell_deg).astype(np.int64) * 100003 + np.floor(
-        np.asarray(lon) / cell_deg
-    ).astype(np.int64)
-    uniq = np.unique(cell)
-    order = np.random.default_rng(seed).permutation(len(uniq))
-    fold_of = {int(c): int(order[i] % folds) for i, c in enumerate(uniq)}
-    return np.array([fold_of[int(c)] for c in cell], dtype=np.int64)
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """Outer-fold scores of one probe, with the tuned grid point per fold."""
+
+    test_score: float  # mean over outer folds
+    fold_scores: list[float]
+    best_params: list
+    predictions: np.ndarray  # out-of-fold, NaN for rows never tested
 
 
 def _valid_mask(features: np.ndarray, labels: np.ndarray, task_type: str) -> np.ndarray:
@@ -63,36 +59,52 @@ def _valid_mask(features: np.ndarray, labels: np.ndarray, task_type: str) -> np.
     return valid & np.isfinite(features).all(axis=1)
 
 
-def _fold_indices(
-    n: int, folds: int, seed: int, fold_assign: np.ndarray | None
-) -> list[np.ndarray]:
-    """Index arrays for each CV fold — spatial groups if given, else random partition."""
-    if fold_assign is not None:
-        groups = [np.where(fold_assign == f)[0] for f in np.unique(fold_assign)]
-        return [g for g in groups if g.size > 0]
-    perm = np.random.default_rng(seed).permutation(n)
-    return [perm[i::folds] for i in range(folds)]
+def _score(y_true: np.ndarray, pred: np.ndarray, task_type: str) -> float:
+    """R^2 for regression, accuracy for classification."""
+    if task_type == "regression":
+        ss_tot = max(float(((y_true - y_true.mean()) ** 2).sum()), 1e-12)
+        return 1.0 - float(((y_true - pred) ** 2).sum()) / ss_tot
+    return float((pred == y_true).mean())
 
 
-@dataclass(frozen=True)
-class RidgeData:
-    """Feature matrix and encoded labels shared by ridge fits."""
+def evaluate(
+    predict: Callable[[np.ndarray, np.ndarray, list], list[np.ndarray]],
+    grid: list,
+    folds: list[OuterFold],
+    data: ProbeData,
+) -> ProbeResult:
+    """Tune on each outer fold's inner pairs, refit the best point on its train, score its test."""
+    y, task_type = data.y, data.task_type
+    fold_scores, best_params = [], []
+    predictions = np.full(len(y), np.nan)
+    for fold in folds:
+        best = grid[0]
+        if len(grid) > 1:
+            inner = [
+                [_score(y[val], pred, task_type) for pred in predict(train, val, grid)]
+                for train, val in fold.inner
+            ]
+            best = grid[int(np.argmax(np.mean(inner, axis=0)))]  # ties keep the first grid point
+            if not isinstance(best, tuple) and best in (grid[0], grid[-1]):
+                warnings.warn(f"{best} selected at grid edge; widen the grid", stacklevel=2)
+        (pred,) = predict(fold.train, fold.test, [best])
+        fold_scores.append(_score(y[fold.test], pred, task_type))
+        best_params.append(best)
+        predictions[fold.test] = pred
+    return ProbeResult(float(np.mean(fold_scores)), fold_scores, best_params, predictions)
 
-    features: torch.Tensor
-    targets: torch.Tensor
-    class_indices: torch.Tensor | None
 
-
-def ridge_predictions(
-    data: RidgeData,
+def ridge_predictions(  # noqa: PLR0913 - data, fold indices, grid, and standardization.
+    features: torch.Tensor,
+    targets: torch.Tensor,
     train_idx: torch.Tensor,
     test_idx: torch.Tensor,
-    alphas: tuple[float, ...],
+    alphas: list[float],
     *,
     standardize: bool,
 ) -> Iterator[torch.Tensor]:
     """Predict each alpha from shared fold statistics with an unpenalized intercept."""
-    x_tr, x_te = data.features[train_idx], data.features[test_idx]
+    x_tr, x_te = features[train_idx], features[test_idx]
     if standardize:
         mean, std = x_tr.mean(0, keepdim=True), x_tr.std(0, keepdim=True).clamp_min(1e-6)
         x_tr.sub_(mean).div_(std)
@@ -100,7 +112,7 @@ def ridge_predictions(
     # float64 normal equations: for high-dim features a small alpha is otherwise lost to
     # float32 rounding and the Gram matrix goes singular.
     x_tr, x_te = x_tr.double(), x_te.double()
-    y_tr = data.targets[train_idx].double()
+    y_tr = targets[train_idx].double()
     x_mean, y_mean = x_tr.mean(0, keepdim=True), y_tr.mean(0, keepdim=True)
     x_tr.sub_(x_mean)
     x_te.sub_(x_mean)
@@ -115,241 +127,76 @@ def ridge_predictions(
         yield (x_te @ weight).add_(y_mean)
 
 
-def ridge_scores(
-    data: RidgeData,
-    train_idx: torch.Tensor,
-    test_idx: torch.Tensor,
-    alphas: tuple[float, ...],
-    *,
-    standardize: bool,
-    get_predictions: bool
-) -> tuple[list[float], list[float]]:
-
-    """Score each alpha on a held-out fold with R^2 or classification accuracy."""
-    predictions = list(ridge_predictions(data, train_idx, test_idx, alphas, standardize=standardize))
-    pretty_predictions = predictions[0].tolist() if get_predictions else []
-    if data.class_indices is None:
-        y_te = data.targets[test_idx]
-        ss_tot = ((y_te - y_te.mean()) ** 2).sum().clamp_min(1e-12)
-        return [float(1.0 - ((y_te - pred) ** 2).sum() / ss_tot) for pred in predictions], pretty_predictions
-    class_indices = data.class_indices[test_idx]
-    return [float((pred.argmax(1) == class_indices).float().mean()) for pred in predictions], pretty_predictions
-
-
-def _cv_alpha_scores(
-    data: RidgeData,
-    fold_ids: list[torch.Tensor],
-    alphas: tuple[float, ...],
-    *,
-    standardize: bool,
-) -> tuple[float, list[float]]:
-    """Pick the alpha with the best mean CV score; return it plus its per-fold scores."""
-    nf = len(fold_ids)
-    scores_by_alpha: list[list[float]] = [[] for _ in alphas]
-    for f, test_idx in enumerate(fold_ids):
-        train_idx = torch.cat([fold_ids[j] for j in range(nf) if j != f])
-        fold_scores, _ = ridge_scores(data, train_idx, test_idx, alphas, standardize=standardize, get_predictions=False)
-        for scores, score in zip(scores_by_alpha, fold_scores, strict=True):
-            scores.append(score)
-    best_alpha, best_mean, best_scores = alphas[0], -1e30, []
-    for a, scores in zip(alphas, scores_by_alpha, strict=True):
-        mean_score = float(np.mean(scores))
-        if mean_score > best_mean:
-            best_mean, best_alpha, best_scores = mean_score, a, scores
-    if len(alphas) > 1 and best_alpha in (alphas[0], alphas[-1]):
-        warnings.warn(
-            "ridge alpha selected at grid edge; widen RIDGE_ALPHAS",
-            stacklevel=2,
-        )
-    return best_alpha, best_scores
-
-
-def linear_probe_score( 
-    features: np.ndarray,
-    labels: np.ndarray,
-    task_type: str,
-    folds: int = 5,
-    seed: int = 0,
-    device: str = "cpu",
-    alphas: tuple[float, ...] = RIDGE_ALPHAS,
-    test_mask: np.ndarray | None = None,
-    fold_assign: np.ndarray | None = None,
-    *,
-    standardize: bool = True,
-) -> tuple[float, list[float], list[float]]:
-    """Closed-form ridge linear probe (regression R^2 / one-hot-ridge accuracy).
-
-    Center features and targets on each training fold and restore the target mean
-    after prediction, leaving the intercept unpenalized as in sklearn Ridge.
-
-    Args:
-        features: Feature matrix ``(N, D)``.
-        labels: Per-point labels ``(N,)``.
-        task_type: ``"regression"`` or ``"classification"``.
-        folds: CV folds; with ``test_mask``, tune alpha on train data and score the holdout once.
-        seed: RNG seed.
-        device: Torch device or ``auto`` for current CUDA when available, otherwise CPU.
-        alphas: L2 grid to CV-select from.
-        test_mask: Official held-out boolean mask; takes precedence over CV.
-        fold_assign: Per-point fold ids for spatial-block CV; else random k-fold.
-        standardize: z-score features per train fold.
-
-    Returns:
-        ``(score, fold_scores)`` — the reported metric and the per-fold scores it
-        was averaged over (a single element under ``test_mask``).
-
-    Raises:
-        ValueError: If the device is invalid, or explicit CUDA is unavailable or out of range.
-    """
+def ridge_predictor(
+    data: ProbeData, device: str, *, standardize: bool = True
+) -> Callable[[np.ndarray, np.ndarray, list[float]], list[np.ndarray]]:
+    """Ridge on the target (regression) or one-hot class ids (classification); grid = alphas."""
     dev = resolve_device(device)
-    valid = _valid_mask(features, labels, task_type)
-    feats = torch.as_tensor(features[valid], dtype=torch.float32, device=dev)
-    class_idx: torch.Tensor | None = None
-    if task_type == "regression":
-        targets = torch.as_tensor(labels[valid].astype(np.float64), dtype=torch.float32, device=dev)
-        targets = targets[:, None]
+    x = torch.as_tensor(data.features, dtype=torch.float32, device=dev)
+    if data.class_indices is None:
+        targets = torch.as_tensor(data.labels, dtype=torch.float32, device=dev)[:, None]
     else:
-        _, inverse = np.unique(labels[valid], return_inverse=True)
-        class_idx = torch.as_tensor(inverse, device=dev)
-        targets = torch.nn.functional.one_hot(class_idx).float()
+        classes = torch.as_tensor(data.class_indices.clip(min=0), device=dev)
+        targets = torch.nn.functional.one_hot(classes, int(data.class_indices.max()) + 1).float()
 
-    data = RidgeData(feats, targets, class_idx)
-    all_idx = torch.arange(feats.shape[0], device=dev)
-    if test_mask is not None:
-        is_test = torch.as_tensor(np.asarray(test_mask)[valid], device=dev, dtype=torch.bool)
-        train_pool, test_idx = all_idx[~is_test], all_idx[is_test]
-        tp = train_pool.cpu().numpy()
-        inner = [torch.as_tensor(tp[i::folds], device=dev) for i in range(folds)]
-        best_alpha = alphas[0]
-        if len(alphas) > 1:
-            best_alpha, _ = _cv_alpha_scores(data, inner, alphas, standardize=standardize)
-        scores, predictions = ridge_scores(data, train_pool, test_idx, (best_alpha,), standardize=standardize, get_predictions=True)
-        return scores[0], scores, predictions
+    def predict(train: np.ndarray, test: np.ndarray, alphas: list[float]) -> list[np.ndarray]:
+        tr, te = torch.as_tensor(train, device=dev), torch.as_tensor(test, device=dev)
+        preds = ridge_predictions(x, targets, tr, te, alphas, standardize=standardize)
+        if data.class_indices is None:
+            return [p[:, 0].cpu().numpy() for p in preds]
+        return [p.argmax(1).cpu().numpy() for p in preds]
 
-    fa = None if fold_assign is None else np.asarray(fold_assign)[valid]
-    fold_ids = [
-        torch.as_tensor(idx, device=dev) for idx in _fold_indices(feats.shape[0], folds, seed, fa)
-    ]
-    _, fold_scores = _cv_alpha_scores(data, fold_ids, alphas, standardize=standardize)
-    return float(np.mean(fold_scores)), fold_scores, []
+    return predict
 
 
-def knn_probe_score(  # noqa: PLR0913 - public probe options.
-    features: np.ndarray,
-    labels: np.ndarray,
-    folds: int = 5,
-    seed: int = 0,
-    k: int = 5,
-    device: str = "cpu",
-    test_mask: np.ndarray | None = None,
-    fold_assign: np.ndarray | None = None,
-) -> tuple[float, list[float]]:
-    """k-NN classification accuracy on standardized features (FAISS backend).
+def knn_predictor(
+    data: ProbeData, device: str
+) -> Callable[[np.ndarray, np.ndarray, list[int]], list[np.ndarray]]:
+    """k-NN classifier on features standardized per train fold; grid = ks."""
+    if data.class_indices is None:
+        raise ValueError("knn probe is classification-only")
 
-    Non-parametric: measures how well the embedding's local neighborhoods align
-    with the label. Split precedence matches :func:`linear_probe_score`
-    (``test_mask`` > ``fold_assign`` > random k-fold).
+    def predict(train: np.ndarray, test: np.ndarray, ks: list[int]) -> list[np.ndarray]:
+        scaler = StandardScaler().fit(data.features[train])
+        x_tr = scaler.transform(data.features[train]).astype(np.float32)
+        x_te = scaler.transform(data.features[test]).astype(np.float32)
+        preds = []
+        for k in ks:
+            clf = KNNClassifier(n_neighbors=k, device=device, metric="l2")
+            clf.fit(x_tr, data.class_indices[train])
+            preds.append(np.asarray(clf.predict(x_te)).ravel())
+        return preds
 
-    Returns:
-        ``(accuracy, fold_scores)`` — mean held-out accuracy and per-fold scores.
-    """
-    valid = _valid_mask(features, labels, "classification")
-    features, labels = features[valid], labels[valid]
-    _, y = np.unique(labels, return_inverse=True)  # contiguous int class ids
-
-    def _eval(train_idx: np.ndarray, test_idx: np.ndarray) -> float:
-        scaler = StandardScaler().fit(features[train_idx])
-        x_tr = scaler.transform(features[train_idx]).astype(np.float32)
-        x_te = scaler.transform(features[test_idx]).astype(np.float32)
-        clf = KNNClassifier(n_neighbors=k, device=device, metric="l2")
-        clf.fit(x_tr, y[train_idx])
-        pred = np.asarray(clf.predict(x_te)).ravel()
-        return float((pred == y[test_idx]).mean())
-
-    if test_mask is not None:
-        is_test = np.asarray(test_mask)[valid]
-        return (score := _eval(np.where(~is_test)[0], np.where(is_test)[0])), [score]
-
-    fa = None if fold_assign is None else np.asarray(fold_assign)[valid]
-    fold_ids = _fold_indices(len(features), folds, seed, fa)
-    all_idx = np.arange(len(features))
-    fold_scores = [_eval(np.setdiff1d(all_idx, test_idx), test_idx) for test_idx in fold_ids]
-    return float(np.mean(fold_scores)), fold_scores
-
-@dataclass(frozen=True)
-class IDWData:
-    """Coordinates, optional timestamps, and labels aligned on one row axis."""
-
-    lat: np.ndarray
-    lon: np.ndarray
-    timestamp: np.ndarray | None
-    labels: np.ndarray
-    task_type: str
-
-@dataclass(frozen=True)
-class IDWSplit:
-    train: np.ndarray
-    val: np.ndarray
-    test: np.ndarray
-
-@dataclass(frozen=True)
-class IDWResult:
-    test_score: float
-    best_k: int
-    best_c: float
-
-def idw_probe_score(data: IDWData, split: IDWSplit, ks, cs, device) -> IDWResult:
-    """Run the spatiotemporal IDW probe on the given data and return the best score and corresponding hyperparameters."""
-
-    best_score = -np.inf
-    best_k = None
-    best_c = None
-
-    for c in cs:
-        # if timestamps are None, then find_knn will use zeros
-        distances, indices = find_knn(data.lat[split.train], data.lon[split.train], data.timestamp[split.train],
-                                       data.lat[split.val], data.lon[split.val], data.timestamp[split.val],
-                                       kmax=max(ks), c_param=c, device=device)
-
-        out_per_k = knn_predict(distances, indices, ks, data.labels[split.train], data.lat[split.val], data.lon[split.val], data.task_type, n_classes=len(np.unique(data.labels)))
-        if data.task_type == "regression":
-            scores_per_k = {k: r2_score(data.labels[split.val], pred) for k, pred in out_per_k.items()}
-        elif data.task_type == "classification":
-            # For classification, compute accuracy
-            scores_per_k = {k: (pred == data.labels[split.val]).mean() for k, pred in out_per_k.items()}
-
-        for k, score in scores_per_k.items():
-            if score > best_score:
-                best_score = score
-                best_k = k
-                best_c = c
-
-    # After finding the best hyperparameters, evaluate on the test set
-    # need to recompute distances, indices for test set
-    train_and_val = np.concatenate([split.train, split.val])
-
-    distances, indices = find_knn(
-        data.lat[train_and_val], data.lon[train_and_val], data.timestamp[train_and_val],
-        data.lat[split.test], data.lon[split.test], data.timestamp[split.test],
-        kmax=best_k, c_param=best_c, device=device
-    )
-
-    pred = knn_predict(
-        distances, indices, [best_k],
-        data.labels[train_and_val],
-        data.lat[split.test], data.lon[split.test],
-        data.task_type,
-        n_classes=len(np.unique(data.labels))
-    )[best_k]
+    return predict
 
 
-    if data.task_type == "regression":
-        test_score = r2_score(data.labels[split.test], pred)
-    elif data.task_type == "classification":
-        test_score = (pred == data.labels[split.test]).mean()
+def idw_predictor(
+    data: ProbeData,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    timestamp: np.ndarray | None,
+    device: str,
+) -> Callable[[np.ndarray, np.ndarray, list[tuple[int, float]]], list[np.ndarray]]:
+    """Spatiotemporal IDW on coordinates; grid = ``(k, c)`` pairs, one neighbor search per c."""
+    y = data.y
+    n_classes = 0 if data.class_indices is None else int(y.max()) + 1
 
-    return IDWResult(
-        test_score=float(test_score),
-        best_k=best_k,
-        best_c=best_c,
-    )
+    def predict(
+        train: np.ndarray, test: np.ndarray, grid: list[tuple[int, float]]
+    ) -> list[np.ndarray]:
+        t_tr = None if timestamp is None else timestamp[train]
+        t_te = None if timestamp is None else timestamp[test]
+        preds = {}
+        for c in {c for _, c in grid}:
+            ks = [k for k, grid_c in grid if grid_c == c]
+            distances, indices = find_knn(
+                lat[train], lon[train], t_tr, lat[test], lon[test], t_te,
+                kmax=max(ks), c_param=c, device=device,
+            )  # fmt: skip
+            per_k = knn_predict(
+                distances, indices, ks, y[train], lat[test], lon[test], data.task_type, n_classes
+            )
+            preds.update({(k, c): pred for k, pred in per_k.items()})
+        return [preds[point] for point in grid]
+
+    return predict

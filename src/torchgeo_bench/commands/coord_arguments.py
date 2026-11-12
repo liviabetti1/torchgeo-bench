@@ -20,31 +20,36 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
         help="Benchmark names or families, or all",
     )
     parser.add_argument(
-        "--methods", choices=("knn", "linear"), nargs="+", default=argparse.SUPPRESS
+        "--methods", choices=("knn", "linear", "idw"), nargs="+", default=argparse.SUPPRESS
     )
     parser.add_argument(
-        "--split", choices=("random", "spatial", "temporal", "all"), default=argparse.SUPPRESS
+        "--split-test-type", choices=("official", "nested_cv"), default=argparse.SUPPRESS
+    )
+    parser.add_argument("--split", default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--inner-split", default=argparse.SUPPRESS, help="Splitter for inner tuning folds"
     )
     parser.add_argument("--folds", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--inner-folds", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--cell-deg", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--time-unit", default=argparse.SUPPRESS)
+    parser.add_argument("--time-unit-size", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
-        "--cell-degs", type=float, nargs="+", default=argparse.SUPPRESS,
-        help="Sweep of spatial grid-cell sizes (degrees); overrides --cell-deg",
+        "--reset-year", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS
     )
+    parser.add_argument("--max-train-size", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
-        "--temporal-grid-size", default=argparse.SUPPRESS,
-        help="Temporal grid-cell width, e.g. weekly, biweekly, days_30, days_365",
-    )
-    parser.add_argument(
-        "--temporal-grid-sizes", nargs="+", default=argparse.SUPPRESS,
-        help="Sweep of temporal grid-cell widths (see --temporal-grid-size); overrides it",
+        "--test-size", type=int, default=argparse.SUPPRESS,
+        help="Time units per eval window for the temporal_forecast splits",
     )
     parser.add_argument(
         "--ridge-alphas", type=float, nargs="+", default=argparse.SUPPRESS,
         help="Positive ridge penalties to CV-select; one value disables alpha tuning",
     )
-    parser.add_argument("--knn-k", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--knn-ks", type=int, nargs="+", default=argparse.SUPPRESS)
     parser.add_argument("--knn-device", default=argparse.SUPPRESS)
+    parser.add_argument("--idw-ks", type=int, nargs="+", default=argparse.SUPPRESS)
+    parser.add_argument("--idw-cs", type=float, nargs="+", default=argparse.SUPPRESS)
     parser.add_argument(
         "--skip-no-timestamps",
         action=argparse.BooleanOptionalAction,
@@ -71,11 +76,6 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--subsample",
-        action=argparse.BooleanOptionalAction,
-        default=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--temporal-checkerboard",
         action=argparse.BooleanOptionalAction,
         default=argparse.SUPPRESS,
     )

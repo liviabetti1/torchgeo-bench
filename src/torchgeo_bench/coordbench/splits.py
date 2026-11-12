@@ -1,184 +1,190 @@
-"""Spatial and temporal fold assignment for CoordBench's blockCV-style evaluation splits."""
+"""Row partitioning for CoordBench: splitters and the official / nested-CV evaluation protocols."""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import numpy as np
+from sklearn.model_selection import (
+    GroupKFold,
+    KFold,
+    PredefinedSplit,
+    TimeSeriesSplit,
+)
+
+from torchgeo_bench.coordbench.benchmark import CoordBenchmark
+from torchgeo_bench.coordbench.config import CoordEvaluationConfig
+
+SPLITS = (
+    "random",
+    "spatial",
+    "temporal_forecast",
+    "temporal_checkerboard",
+    "temporal_forecast_block",
+    "temporal_contiguous_block",
+)
+TIME_UNITS = ("timestamp", "day", "week", "month", "season", "year")
 
 
-def spatial_fold_ids(
-    lat: np.ndarray, lon: np.ndarray, folds: int = 5, cell_deg: float = 10.0, seed: int = 0
+@dataclass(frozen=True)
+class OuterFold:
+    """One outer train/test split and the tuning pairs inside its train rows."""
+
+    train: np.ndarray  # global row ids
+    test: np.ndarray
+    inner: list[tuple[np.ndarray, np.ndarray]]  # (train, val) for each inner fold, all inside `train`
+
+def spatial_cell_ids(
+    lat: np.ndarray, lon: np.ndarray, cell_deg: float = 10.0
 ) -> np.ndarray:
-    """Assign each point a fold by its lat/lon grid cell (blockCV-style holdout).
-
-    All points in a ``cell_deg`` block share a fold, so train and test sets are
-    spatially disjoint.
-
-    Args:
-        lat: Latitudes, shape ``(N,)``.
-        lon: Longitudes, shape ``(N,)``.
-        folds: Number of folds.
-        cell_deg: Grid-cell size in degrees.
-        seed: RNG seed for the cell -> fold assignment.
-
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
+    """Returns a unique cell id for each lat/lon pair, based on a grid of ``cell_deg`` x ``cell_deg`` cells.
     """
     # deg x deg cells assignments of lat lons
     cell = np.floor(np.asarray(lat) / cell_deg).astype(np.int64) * 100003 + np.floor(
         np.asarray(lon) / cell_deg
     ).astype(np.int64)
-    uniq = np.unique(cell)
+    return cell
 
-    # random order the cells
-    order = np.random.default_rng(seed).permutation(len(uniq))
-    # assigns each cell to a fold
-    fold_of = {int(c): int(order[i] % folds) for i, c in enumerate(uniq)}
-
-    # assign each lat,lon to a fold
-    return np.array([fold_of[int(c)] for c in cell], dtype=np.int64)
-
-
-def temporal_fold_ids(
-    posix_timestamp: np.ndarray, method: str, folds: int = 5, **kwargs
+# maybe want to use this for temporal aggregation too...
+def time_unit_ids(
+    timestamp: np.ndarray,
+    unit_str: str,
+    size: int = 1,
+    *,
+    reset_year: bool = True,
 ) -> np.ndarray:
-    """Assign each point a fold based on the timestamp.
+    """Calendar-unit IDs; optionally reset windows at each year boundary."""
+    if size < 1:
+        raise ValueError("size must be >= 1")
+    if unit_str == "timestamp":
+        return np.asarray(timestamp)
 
-    Args:
-        posix_timestamp: POSIX timestamps, shape ``(N,)``.
-        method: Splitting strategy, ``"random"``, ``"grid"``, or ``"forecast"``.
-        folds: Number of folds.
-        **kwargs: Forwarded to the method-specific helper.
+    dt = [datetime.fromtimestamp(t, UTC) for t in timestamp]
 
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
+    if unit_str == "day":
+        ids = [
+            d.year * 400 + (d.timetuple().tm_yday - 1) // size
+            if reset_year
+            else (d.toordinal() - 1) // size
+            for d in dt
+        ]
+    elif unit_str == "week":
+        ids = [
+            d.year * 54 + (d.timetuple().tm_yday - 1) // (7 * size)
+            if reset_year
+            else (d.toordinal() - 1) // (7 * size)
+            for d in dt
+        ]
+    elif unit_str == "month":
+        ids = [
+            d.year * 12 + (d.month - 1) // size
+            if reset_year
+            else (d.year * 12 + d.month - 1) // size
+            for d in dt
+        ]
+    elif unit_str == "season":
+        ids = [
+            d.year * 4 + ((d.month - 1) // 3) // size
+            if reset_year
+            else (d.year * 4 + (d.month - 1) // 3) // size
+            for d in dt
+        ]
+    elif unit_str == "year":
+        ids = [d.year // size for d in dt]
+    else:
+        raise ValueError(f"Unknown time unit {unit_str}")
+
+    return np.asarray(ids, dtype=np.int64)
+
+
+def split(
+    cfg: CoordEvaluationConfig,
+    split: str,
+    folds: int, # number of outer OR inner folds
+    bench: CoordBenchmark,
+    rows: np.ndarray,
+    seed: int,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """(train, test) pairs over ``rows`` for one splitter, as global row ids."""
+    if split == "random":
+        groups = None
+    elif split == "spatial":
+        groups = spatial_cell_ids(bench.lat[rows], bench.lon[rows], cfg.cell_deg)
+    elif split.startswith("temporal"):
+        groups = time_unit_ids(bench.posix_timestamp[rows], cfg.time_unit, cfg.time_unit_size, reset_year=cfg.reset_year)
+
+    match split:
+        case "random":
+            splitter = KFold(folds, shuffle=True, random_state=seed)
+            pairs = [(rows[tr], rows[te]) for tr, te in splitter.split(rows)]
+
+        case "spatial":
+            splitter = GroupKFold(folds, shuffle=True, random_state=seed)
+            pairs = [(rows[tr], rows[te]) for tr, te in splitter.split(rows, groups=groups)]
+
+        case "temporal_checkerboard":
+            _, inverse = np.unique(groups, return_inverse=True)
+            # Runs of `test_size` consecutive units take turns across folds.
+            splitter = PredefinedSplit((inverse // cfg.test_size) % folds)
+            pairs = [(rows[tr], rows[te]) for tr, te in splitter.split(rows)]
+
+        case "temporal_forecast" | "temporal_forecast_block":
+            # Expanding or sliding window, always forecasting forward.
+            units, inverse = np.unique(groups, return_inverse=True)
+
+            splitter = TimeSeriesSplit(
+                n_splits=folds,
+                max_train_size=cfg.max_train_size if split == "temporal_forecast_block" else None,
+                test_size=cfg.test_size,
+            )
+            pairs = [
+                (rows[np.isin(inverse, tr)], rows[np.isin(inverse, te)])
+                for tr, te in splitter.split(units)
+            ]
+
+        case "temporal_contiguous_block":
+            # Hold out `folds` evenly spaced blocks of `test_size` contiguous calendar units.
+            units, inverse = np.unique(groups, return_inverse=True)
+            size = cfg.test_size
+            if folds * size > len(units):
+                raise ValueError(f"{folds} blocks of {size} units need {folds * size} units, found {len(units)}")
+            starts = np.linspace(0, len(units) - size, folds).astype(int)
+            held_out = [(inverse >= s) & (inverse < s + size) for s in starts]
+            pairs = [(rows[~te], rows[te]) for te in held_out]
+
+        case _:
+            raise ValueError(f"Unknown split {split!r}; expected one of {SPLITS}")
+
+    if any(len(tr) == 0 or len(te) == 0 for tr, te in pairs):
+        raise ValueError(f"split={split!r} produced an empty train or test fold on {bench.name}")
+    return pairs
+
+
+def make_folds(
+    cfg: CoordEvaluationConfig, bench: CoordBenchmark, rows: np.ndarray, seed: int
+) -> list[OuterFold]:
+    """Outer folds with inner tuning pairs.
+
+    official: bench.test_mask defines the outer test set; inner CV tunes on the rest.
+    nested_cv: cfg.split defines outer CV; inner CV tunes within each outer train.
+    In both protocols, cfg.inner_split chooses the inner splitter independently of cfg.split.
     """
-    if method == "random":
-        return _random_temporal(posix_timestamp, folds=folds, **kwargs)
-    if method == "grid":
-        return _grid_temporal(posix_timestamp, folds=folds, **kwargs)
-    if method == "forecast":
-        return _forecast_temporal(posix_timestamp, folds=folds, **kwargs)
-    raise NotImplementedError(f"{method} not implemented yet.")
+    if cfg.split_test_type == "official":
+        if bench.test_mask is None:
+            raise ValueError(f"split_test_type='official' needs a test_mask; {bench.name} has none")
+        is_test = np.asarray(bench.test_mask, dtype=bool)[rows]
+        outer = [(rows[~is_test], rows[is_test])]
 
+    elif cfg.split_test_type == "nested_cv":
+        outer = split(cfg, cfg.split, cfg.folds, bench, rows, seed)
 
-def _random_temporal(posix_timestamp: np.ndarray, folds: int = 5, seed: int = 42) -> np.ndarray:
-    """Assign each point a fold by randomly permuting unique timestamps.
-    So, each point remains in a fold, and the timestamps for a given point are not split up across folds.
+    else:
+        raise ValueError(f"Unknown split_test_type: {cfg.split_test_type}")
 
-    Args:
-        posix_timestamp: POSIX timestamps, shape ``(N,)``.
-        folds: Number of folds.
-        seed: Random seed for shuffling timestamps.
-
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
-    """
-    print("Splitting into random temporal sets (locations of one timestamp stay together) for CV")
-    # unique timestamps
-    uniq, inverse = np.unique(posix_timestamp, return_inverse=True)
-    order = np.random.default_rng(seed).permutation(len(uniq))
-
-    # assign each unique timestamp to a fold (randomly wrt order)
-    fold_of_uniq = np.empty(len(uniq), dtype=np.int64)
-    fold_of_uniq[order] = np.arange(len(uniq)) % folds
-
-    # get fold of each lat lon
-    return fold_of_uniq[inverse]
-
-
-def _grid_temporal(
-    posix_timestamp: np.ndarray, temporal_grid_size: float, folds: int = 5, seed: int = 42
-) -> np.ndarray:
-    """Assign each point a fold by its cell in a fixed-size temporal grid (blockCV-style).
-
-    The grid starts at the earliest timestamp, and all points in a cell share a fold, so train
-    and test sets are temporally disjoint.
-
-    Args:
-        posix_timestamp: POSIX timestamps, shape ``(N,)``.
-        temporal_grid_size: Width of each temporal grid cell (currently in POSIX seconds).
-        folds: Number of folds.
-        seed: Random seed for the cell -> fold assignment.
-
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
-    """
-    print("Splitting into temporal grids for CV")
-    timestamps = np.asarray(posix_timestamp)
-    # partition timestamps into cells, which are blocks of contiguous time starting at the data
-    elapsed = (timestamps - timestamps.min()) / temporal_grid_size
-    num_cells = max(1, round(elapsed.max()))
-    if num_cells < folds:
-        raise ValueError(
-            f"temporal_grid_size spans only {num_cells} cells in the data, fewer than "
-            f"folds={folds}; use a smaller grid size"
+    return [
+        OuterFold(
+            train=tr,
+            test=te,
+            inner=split(cfg, cfg.inner_split, cfg.inner_folds, bench, tr, seed),
         )
-    cell = np.minimum(np.floor(elapsed), num_cells - 1).astype(np.int64)
-    uniq, inverse = np.unique(cell, return_inverse=True)
-
-    # deal the shuffled cells out to folds so fold sizes differ by at most one cell
-    order = np.random.default_rng(seed).permutation(len(uniq))
-    fold_of_uniq = np.empty(len(uniq), dtype=np.int64)
-    fold_of_uniq[order] = np.arange(len(uniq)) % folds
-    return fold_of_uniq[inverse]
-
-
-def _forecast_temporal(posix_timestamp: np.ndarray, folds: int = 5) -> np.ndarray:
-    """Assign each point a fold by how recent it is (forecast-style, walk-forward blocks).
-
-    Timestamps are split into ``folds`` contiguous blocks ordered by time, with
-    fold 0 the most recent block.
-
-    Args:
-        posix_timestamp: POSIX timestamps, shape ``(N,)``.
-        folds: Number of folds.
-
-    Returns:
-        Per-point fold id in ``[0, folds)``, shape ``(N,)``.
-    """
-    print("Splitting into temporal forecasts for CV")
-    uniq, inverse = np.unique(posix_timestamp, return_inverse=True)
-
-    # last one will be 0
-    rank_from_latest = (len(uniq) - 1) - np.arange(len(uniq))
-    fold_of_uniq = (rank_from_latest * folds) // len(uniq)
-
-    # the lowest fold is held out first
-    # but note that after the first fold, the collection of the remaining folds will not be contiguous...
-    return fold_of_uniq[inverse]
-
-
-if __name__ == "__main__":
-    # EXAMPLE USAGE: inspect the temporal grid folds on the daily and monthly datasets
-    from datetime import UTC, datetime
-
-    from torchgeo_bench.coordbench.datasets import (
-        load_chelsa_daily,
-        load_chelsa_monthly,
-        load_era5_ecmwf,
-    )
-    from torchgeo_bench.coordbench.temporal_aggregation import DISCRETIZATION_METHODS_TO_SECONDS
-
-    (era5,) = load_era5_ecmwf(subsample_locations=False)
-    (chelsa_daily,) = load_chelsa_daily(subsample_locations=False)
-    (chelsa_monthly,) = load_chelsa_monthly(subsample_locations=False)
-
-    for label, bench in (
-        ("era5_daily", era5),
-        ("chelsa_daily", chelsa_daily),
-        ("chelsa_monthly", chelsa_monthly),
-    ):
-        for grid_name in ("weekly", "days_30", "13_weeks"):
-            try:
-                folds = temporal_fold_ids(
-                    bench.posix_timestamp,
-                    method="grid",
-                    folds=5,
-                    temporal_grid_size=DISCRETIZATION_METHODS_TO_SECONDS[grid_name],
-                )
-            except ValueError as err:  # allow-except: report grid sizes too coarse for the data
-                print(f"{label} / {grid_name}: {err}")
-                continue
-            print(f"{label} / {grid_name}: points per fold = {np.bincount(folds).tolist()}")
-            for fold in range(5):
-                times = np.unique(bench.posix_timestamp[folds == fold])
-                dates = [datetime.fromtimestamp(t, tz=UTC).strftime("%Y-%m-%d") for t in times]
-                print(f"  fold {fold}: {len(times)} timestamps, {dates[0]} ... {dates[-1]}")
+        for tr, te in outer
+    ]

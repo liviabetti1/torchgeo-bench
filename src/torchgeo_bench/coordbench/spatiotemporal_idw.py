@@ -19,10 +19,15 @@ def lat_lon_to_xyz(lat, lon):
 
 # the following code is from VeeVee
 # at https://github.com/arizonat/satclip/blob/temporal/satclip/load_temporal_satclip_wrapper.py
+
+def _get_year_from_posix(posix_time):
+    return np.floor(np.asarray(posix_time) / SECONDS_IN_A_YEAR).astype(int) + 1970
+
 def time_to_normalized_year(posix_time, posix_min_time, posix_max_time):
-    # the 1970 epoch offset cancels in the normalization
-    y, y0, y1 = (np.floor(np.asarray(t) / SECONDS_IN_A_YEAR) for t in (posix_time, posix_min_time, posix_max_time))
-    return (y - y0) / (y1 - y0)  # Normalize to [0, 1]
+    year = _get_year_from_posix(posix_time)
+    min_year = _get_year_from_posix(posix_min_time)
+    max_year = _get_year_from_posix(posix_max_time)
+    return (year - min_year) / (max_year - min_year)  # Normalize to [0, 1]
 
 def time_to_normalized_day_of_year(posix_time, posix_min_time, posix_max_time):
     day_of_year = ((posix_time % SECONDS_IN_A_YEAR) / SECONDS_IN_A_DAY).astype(int) + 1
@@ -44,7 +49,7 @@ def time_of_year_and_year(posix_time, posix_min_time, posix_max_time):
 
 def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, device="cuda", time_fn=None):
     # time_fn: optional (posix_time, posix_min_time, posix_max_time) -> (n,) or (n, d) array
-    
+
     # not sure what/if to standardize...for now no standardization
     # maybe later: standardize time only
 

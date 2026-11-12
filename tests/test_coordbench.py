@@ -15,19 +15,39 @@ from torchgeo_bench.config.presets import ModelPreset
 from torchgeo_bench.coordbench import (
     CoordBenchmark,
     SinCosLocationEncoder,
-    knn_probe_score,
-    linear_probe_score,
     load_benchmarks,
     run_coordbench,
-    spatial_fold_ids,
-    temporal_fold_ids,
 )
 from torchgeo_bench.coordbench import datasets as cb_datasets
-from torchgeo_bench.coordbench.config import CoordConfig
+from torchgeo_bench.coordbench.config import CoordConfig, CoordEvaluationConfig
+from torchgeo_bench.coordbench.probe import (
+    ProbeData,
+    ProbeResult,
+    evaluate,
+    knn_predictor,
+    ridge_predictor,
+)
 from torchgeo_bench.coordbench.run import _instantiate_encoder
-from torchgeo_bench.coordbench.temporal_aggregation import DISCRETIZATION_METHODS_TO_SECONDS
+from torchgeo_bench.coordbench.splits import make_folds, spatial_cell_ids, time_unit_ids
 
 pytestmark = pytest.mark.usefixtures("isolated_torch_rng")
+
+
+def _probe_data(features: np.ndarray, labels: np.ndarray, task_type: str) -> ProbeData:
+    if task_type == "regression":
+        return ProbeData(features, labels.astype(np.float64), task_type, None)
+    return ProbeData(features, labels, task_type, labels)
+
+
+def _folds(lon: np.ndarray, lat: np.ndarray, **evaluation: Any) -> list:
+    bench = CoordBenchmark("synthetic", lat, lon)
+    return make_folds(CoordEvaluationConfig(**evaluation), bench, np.arange(len(lat)), seed=0)
+
+
+def _ridge_score(features: np.ndarray, labels: np.ndarray, *, device: str = "cpu") -> ProbeResult:
+    lon, lat = features[:, 0], features[:, 1]
+    data = _probe_data(features, labels, "regression")
+    return evaluate(ridge_predictor(data, device), [0.1], _folds(lon, lat), data)
 
 
 @pytest.fixture
@@ -92,7 +112,7 @@ def test_encoder_and_linear_probe_reject_invalid_devices(
         mock.patch.object(torch, "as_tensor") as allocate,
         pytest.raises(ValueError, match=message),
     ):
-        linear_probe_score(np.ones((10, 2)), np.arange(10), "regression", device=device)
+        ridge_predictor(_probe_data(np.ones((10, 2)), np.arange(10), "regression"), device)
     allocate.assert_not_called()
 
 
@@ -104,8 +124,7 @@ def test_coordinate_cpu_paths_do_not_query_cuda(
 
     monkeypatch.setattr(torch.cuda, "is_available", unexpected_query)
     features = SinCosLocationEncoder().encode(*points)
-    score, _ = linear_probe_score(features, features[:, 0], "regression", alphas=(0.1,))
-    assert score > 0.99
+    assert _ridge_score(features, features[:, 0]).test_score > 0.99
 
 
 @pytest.mark.parametrize(("available", "expected"), [(False, "cpu"), (True, "cuda:1")])
@@ -117,24 +136,19 @@ def test_coordinate_auto_probe_selects_device_and_preserves_solution(
     expected: str,
 ) -> None:
     features = SinCosLocationEncoder().encode(*points)
-    expected_score = linear_probe_score(features, features[:, 0], "regression", alphas=(0.1,))
+    expected_score = _ridge_score(features, features[:, 0]).test_score
     devices = []
-    as_tensor, arange = torch.as_tensor, torch.arange
+    as_tensor = torch.as_tensor
 
     def cpu_tensor(data: object, **kwargs: Any) -> torch.Tensor:
         devices.append(str(kwargs.pop("device")))
         return as_tensor(data, **kwargs)
 
-    def cpu_arange(*args: Any, **kwargs: Any) -> torch.Tensor:
-        devices.append(str(kwargs.pop("device")))
-        return arange(*args, **kwargs)
-
     monkeypatch.setattr(torch.cuda, "is_available", lambda: available)
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 1)
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
     monkeypatch.setattr(torch, "as_tensor", cpu_tensor)
-    monkeypatch.setattr(torch, "arange", cpu_arange)
-    score = linear_probe_score(features, features[:, 0], "regression", device="auto", alphas=(0.1,))
+    score = _ridge_score(features, features[:, 0], device="auto").test_score
     assert devices
     assert set(devices) == {expected}
     assert score == expected_score
@@ -157,60 +171,89 @@ def test_linear_probe_regression_recovers_smooth_target(
     lon, lat = points
     feats = SinCosLocationEncoder(device="cpu").encode(lon, lat)
     labels = 3.0 * feats[:, 0] - 2.0 * feats[:, 3] + 0.5  # 3*sin(lat) - 2*cos(lon) + b
-    score, fold_scores = linear_probe_score(feats, labels, "regression", device="cpu")
-    assert len(fold_scores) == 5
-    assert score > 0.98
+    data = _probe_data(feats, labels, "regression")
+    result = evaluate(ridge_predictor(data, "cpu"), [0.01, 1.0], _folds(lon, lat), data)
+    assert len(result.fold_scores) == 5
+    assert result.test_score > 0.98
 
 
 def test_linear_and_knn_classification(points: tuple[np.ndarray, np.ndarray]) -> None:
     lon, lat = points
     feats = SinCosLocationEncoder(device="cpu").encode(lon, lat)
     labels = (lat > 0).astype(np.int64)  # The sign of sin(latitude) separates the hemispheres.
-    lin, _ = linear_probe_score(feats, labels, "classification", device="cpu")
-    knn, folds = knn_probe_score(feats, labels, device="cpu", k=5)
-    assert lin > 0.9
-    assert knn > 0.9
-    assert len(folds) == 5
+    data = _probe_data(feats, labels, "classification")
+    folds = _folds(lon, lat)
+    lin = evaluate(ridge_predictor(data, "cpu"), [0.01, 1.0], folds, data)
+    knn = evaluate(knn_predictor(data, "cpu"), [5, 15], folds, data)
+    assert lin.test_score > 0.9
+    assert knn.test_score > 0.9
+    assert len(knn.fold_scores) == 5
 
 
-def test_spatial_fold_ids_group_by_cell(points: tuple[np.ndarray, np.ndarray]) -> None:
-    lon, lat = points
-    fa = spatial_fold_ids(lat, lon, folds=5, cell_deg=10.0, seed=0)
-    assert fa.shape == (len(lon),)
-    assert set(np.unique(fa)).issubset(set(range(5)))
-    cell = np.floor(lat / 10.0).astype(int) * 100003 + np.floor(lon / 10.0).astype(int)
-    for c in np.unique(cell):
-        assert len(np.unique(fa[cell == c])) == 1
-
-
-def test_temporal_fold_ids_grid_groups_by_cell() -> None:
+def _timestamped_bench(n: int = 400) -> CoordBenchmark:
     rng = np.random.default_rng(0)
-    timestamps = rng.uniform(0, 10 * 365 * 86400, size=400)
-    fa = temporal_fold_ids(timestamps, method="grid", folds=5, temporal_grid_size=86400.0)
-    assert fa.shape == timestamps.shape
-    assert set(np.unique(fa)).issubset(set(range(5)))
-    elapsed = (timestamps - timestamps.min()) / 86400.0
-    cell = np.minimum(np.floor(elapsed), round(elapsed.max()) - 1).astype(np.int64)
-    for c in np.unique(cell):
-        assert len(np.unique(fa[cell == c])) == 1
-    cells_per_fold = np.bincount(fa[np.unique(cell, return_index=True)[1]], minlength=5)
-    assert cells_per_fold.max() - cells_per_fold.min() <= 1
+    lat, lon = rng.uniform(-60, 60, n), rng.uniform(-180, 180, n)
+    t = rng.uniform(1.5e9, 1.5e9 + 6 * 365 * 86400, n)
+    return CoordBenchmark("synthetic", lat, lon, posix_timestamp=t)
 
 
-def test_temporal_fold_ids_grid_rejects_fewer_cells_than_folds() -> None:
-    timestamps = np.arange(365) * 86400.0
-    with pytest.raises(ValueError, match="fewer than folds=5"):
-        temporal_fold_ids(timestamps, method="grid", folds=5, temporal_grid_size=91 * 86400.0)
+@pytest.mark.parametrize(
+    "evaluation",
+    [
+        {"split": "random"},
+        {"split": "spatial", "cell_deg": 20.0},
+        {"split": "temporal_checkerboard", "time_unit": "month", "test_size": 2},
+        {"split": "temporal_contiguous_block", "time_unit": "month", "test_size": 6},
+        {"split": "temporal_forecast", "time_unit": "month", "test_size": 2},
+    ],
+)
+def test_nested_folds_are_disjoint_and_keep_groups_intact(evaluation: dict[str, Any]) -> None:
+    bench = _timestamped_bench()
+    cfg = CoordEvaluationConfig(folds=3, inner_folds=3, inner_split=evaluation["split"], **evaluation)
+    folds = make_folds(cfg, bench, np.arange(len(bench.lat)), seed=0)
+    if cfg.split == "spatial":
+        groups = spatial_cell_ids(bench.lat, bench.lon, cfg.cell_deg)
+    elif cfg.split != "random":
+        groups = time_unit_ids(bench.posix_timestamp, cfg.time_unit)
+    for fold in folds:
+        assert not np.intersect1d(fold.train, fold.test).size
+        if cfg.split != "random":
+            assert not np.intersect1d(groups[fold.train], groups[fold.test]).size
+        for train, val in fold.inner:
+            # Tuning must never see the outer test rows.
+            assert np.isin(train, fold.train).all()
+            assert np.isin(val, fold.train).all()
 
 
-def test_test_mask_split_single_fold(points: tuple[np.ndarray, np.ndarray]) -> None:
+@pytest.mark.parametrize(("max_train_size", "test_size"), [(None, 2), (6, 1)])
+def test_temporal_forecast_trains_on_the_past(
+    max_train_size: int | None, test_size: int | None
+) -> None:
+    bench = _timestamped_bench()
+    split = "temporal_forecast" if max_train_size is None else "temporal_forecast_block"
+    cfg = CoordEvaluationConfig(
+        split=split, inner_split=split, max_train_size=max_train_size, test_size=test_size,
+        folds=3, inner_folds=2,
+    )  # fmt: skip
+    months = time_unit_ids(bench.posix_timestamp, "month")
+    for fold in make_folds(cfg, bench, np.arange(len(bench.lat)), seed=0):
+        assert bench.posix_timestamp[fold.train].max() < bench.posix_timestamp[fold.test].min()
+        for train, val in fold.inner:
+            assert bench.posix_timestamp[train].max() < bench.posix_timestamp[val].min()
+        if max_train_size is not None:
+            n_train, n_test = (len(np.unique(months[i])) for i in (fold.train, fold.test))
+            assert n_test <= n_train <= max_train_size
+        if test_size is not None:
+            assert len(np.unique(months[fold.test])) == test_size
+
+
+def test_official_split_tests_exactly_the_mask(points: tuple[np.ndarray, np.ndarray]) -> None:
     lon, lat = points
-    feats = SinCosLocationEncoder(device="cpu").encode(lon, lat)
-    labels = 3.0 * feats[:, 0] + 0.5
-    mask = np.zeros(len(lon), dtype=bool)
-    mask[::4] = True  # 25% held out
-    _, fold_scores = linear_probe_score(feats, labels, "regression", device="cpu", test_mask=mask)
-    assert len(fold_scores) == 1  # An official split has one held-out score, not a CV average.
+    bench = CoordBenchmark("synthetic", lat, lon, test_mask=np.arange(len(lat)) % 4 == 0)
+    cfg = CoordEvaluationConfig(split_test_type="official")
+    (fold,) = make_folds(cfg, bench, np.arange(len(lat)), seed=0)
+    np.testing.assert_array_equal(fold.test, np.flatnonzero(bench.test_mask))
+    assert len(fold.inner) == cfg.inner_folds
 
 
 def _synthetic_benchmarks() -> list[CoordBenchmark]:
@@ -240,7 +283,7 @@ def _coord_cfg(tmp_path: Path, **coord_overrides: object) -> CoordConfig:
         "split": "random",
         "folds": 5,
         "cell_deg": 10.0,
-        "knn_k": 5,
+        "knn_ks": [5],
         "skip_no_timestamp": False,
     }
     coord.update(coord_overrides)
@@ -259,9 +302,9 @@ def test_run_coordbench_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, explicit_file: bool
 ) -> None:
     monkeypatch.setattr(
-        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: _synthetic_benchmarks()
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: _synthetic_benchmarks()
     )
-    cfg = _coord_cfg(tmp_path, split="all")
+    cfg = _coord_cfg(tmp_path, split="spatial")
     cfg.output.directory = str(tmp_path / "nested")
     output_path = tmp_path / "coord.csv"
     if not explicit_file:
@@ -276,10 +319,10 @@ def test_run_coordbench_end_to_end(
     clf = df[df.dataset == "synthetic-clf"]
     assert set(reg.method) == {"linear"}
     assert set(reg.metric_name) == {"r2"}
-    assert set(clf.method) == {"linear", "knn5"}
+    assert set(clf.method) == {"linear", "knn"}
     assert set(clf.metric_name) == {"accuracy"}
-    # Without an official split, both cross-validation schemes should run.
-    assert {"random", "spatial"} <= set(df.split)
+    assert set(df.split) == {"spatial"}
+    assert set(df.inner_split) == {"random"}
     assert (df.metric_value.abs() <= 1.5).all()
 
 
@@ -290,96 +333,52 @@ def test_run_coordbench_reports_official_test_count(
     test_mask = np.zeros(len(bench.lat), dtype=bool)
     test_mask[::3] = True
     bench.test_mask = test_mask
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: [bench])
 
-    cfg = _coord_cfg(tmp_path, split="all")
+    cfg = _coord_cfg(tmp_path, split_test_type="official")
     run_coordbench(cfg)
 
     df = pd.read_csv(cfg.output.file)
-    assert set(df.split) == {"official"}
+    assert set(df.split_test_type) == {"official"}
+    assert set(df.n_folds) == {1}
     assert set(df.n_test) == {int(test_mask.sum())}
 
 
-def test_run_coordbench_temporal_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    bench = _synthetic_benchmarks()[0]
-    rng = np.random.default_rng(2)
-    bench.posix_timestamp = rng.uniform(0, 10 * 365 * 86400, size=len(bench.lat))
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
-
-    cfg = _coord_cfg(tmp_path, split="temporal", temporal_grid_size="days_30")
-    run_coordbench(cfg)
-
-    df = pd.read_csv(cfg.output.file)
-    assert set(df.split) == {"temporal"}
-    assert set(df.temporal_grid_size) == {DISCRETIZATION_METHODS_TO_SECONDS["days_30"]}
-
-
-def test_run_coordbench_all_split_skips_temporal_without_grid_size(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bench = _synthetic_benchmarks()[0]
-    rng = np.random.default_rng(2)
-    bench.posix_timestamp = rng.uniform(0, 10 * 365 * 86400, size=len(bench.lat))
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
-
-    cfg = _coord_cfg(tmp_path, split="all")
-    run_coordbench(cfg)
-
-    df = pd.read_csv(cfg.output.file)
-    # "all" is best-effort: without a configured grid size, temporal is skipped rather
-    # than crashing the whole run, unlike an explicit `--split temporal` request.
-    assert "temporal" not in set(df.split)
-    assert {"random", "spatial"} <= set(df.split)
-
-
 @pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({}, "requires temporal_grid_size"),
-        ({"temporal_grid_sizes": ["weekly", "fortnightly"]}, "Unknown temporal grid sizes"),
-    ],
+    "evaluation",
+    [{"split_test_type": "official"}, {"split": "temporal_contiguous_block", "test_size": 1}],
 )
-def test_coord_config_rejects_invalid_temporal_grid(
-    tmp_path: Path, overrides: dict[str, Any], message: str
+def test_run_coordbench_skips_benchmarks_missing_split_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, evaluation: dict[str, Any]
 ) -> None:
-    with pytest.raises(ValidationError, match=message):
-        _coord_cfg(tmp_path, split="temporal", **overrides)
+    # The synthetic benchmarks have neither a test mask nor timestamps.
+    monkeypatch.setattr(
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: _synthetic_benchmarks()
+    )
+    cfg = _coord_cfg(tmp_path, **evaluation)
+    run_coordbench(cfg)
+    assert not Path(cfg.output.file).exists()
 
 
-def test_run_coordbench_cell_degs_sweep_produces_one_row_per_value(
+def test_coord_config_requires_window_for_forecast_block(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="requires max_train_size"):
+        _coord_cfg(tmp_path, split="temporal_forecast_block")
+
+
+def test_run_coordbench_resume_keeps_distinct_split_params(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [_synthetic_benchmarks()[0]]
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: [_synthetic_benchmarks()[0]]
     )
-    cfg = _coord_cfg(tmp_path, split="spatial", cell_degs=[5.0, 20.0])
-    run_coordbench(cfg)
+    for cell_deg in (5.0, 20.0):
+        cfg = _coord_cfg(tmp_path, split="spatial", cell_deg=cell_deg)
+        cfg.output.resume = True
+        run_coordbench(cfg)
 
+    # The cell_deg=20.0 run must not be skipped as already completed.
     df = pd.read_csv(cfg.output.file)
-    assert set(df.split) == {"spatial"}
-    assert set(df.cell_deg) == {5.0, 20.0}
-
-
-def test_run_coordbench_resume_keeps_distinct_sweep_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [_synthetic_benchmarks()[0]]
-    )
-    output_path = tmp_path / "coord.csv"
-    cfg = _coord_cfg(tmp_path, split="spatial", cell_degs=[5.0])
-    cfg.output.file = str(output_path)
-    cfg.output.resume = True
-    run_coordbench(cfg)
-
-    cfg_more = _coord_cfg(tmp_path, split="spatial", cell_degs=[5.0, 20.0])
-    cfg_more.output.file = str(output_path)
-    cfg_more.output.resume = True
-    run_coordbench(cfg_more)
-
-    df = pd.read_csv(output_path)
-    # The new cell_deg=20.0 value must not be skipped as already completed.
-    assert set(df.cell_deg) == {5.0, 20.0}
+    assert df.split_params.nunique() == 2
 
 
 def test_load_benchmarks_selection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -462,33 +461,27 @@ def test_runtime_method_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, methods: list[str]
 ) -> None:
     monkeypatch.setattr(
-        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: _synthetic_benchmarks()
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: _synthetic_benchmarks()
     )
-    calls = []
+    grids = []
 
-    def knn(*args: Any, **kwargs: Any) -> tuple[float, list[float]]:
-        calls.append(("knn", kwargs))
-        return 0.8, [0.7, 0.9]
+    def fake_evaluate(predict: Any, grid: list, folds: list, data: ProbeData) -> ProbeResult:
+        grids.append(list(grid))
+        return ProbeResult(0.8, [0.7, 0.9], [grid[0]] * 2, np.full(len(data.y), np.nan))
 
-    def linear(*args: Any, **kwargs: Any) -> tuple[float, list[float]]:
-        calls.append(("linear", kwargs))
-        return 0.6, [0.5, 0.7]
-
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.knn_probe_score", knn)
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.linear_probe_score", linear)
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.evaluate", fake_evaluate)
     config = _coord_cfg(
         tmp_path,
         methods=methods,
-        knn_k=7,
+        knn_ks=[7],
         knn_device="cpu",
         ridge_alphas=[0.1, 2.0],
     )
     run_coordbench(config)
     rows = pd.read_csv(config.output.file)
-    assert {kind for kind, _ in calls} == set(methods)
-    assert set(rows.method) == {"knn7" if method == "knn" else "linear" for method in methods}
-    assert all(options["device"] == "cpu" for _, options in calls)
-    assert all(options["alphas"] == (0.1, 2.0) for kind, options in calls if kind == "linear")
+    assert set(rows.method) == set(methods)
+    expected_grids = {"knn": [7], "linear": [0.1, 2.0]}
+    assert {tuple(grid) for grid in grids} == {tuple(expected_grids[m]) for m in methods}
     assert set(rows.model_target) == {"torchgeo_bench.coordbench.models.SinCosLocationEncoder"}
     assert set(rows.model_name) == {"sincos"}
     assert list(rows.columns) == [
@@ -496,14 +489,16 @@ def test_runtime_method_selection(
         "task",
         "task_type",
         "method",
+        "split_test_type",
         "split",
+        "inner_split",
+        "split_params",
         "metric_name",
         "metric_value",
         "ci_lower",
         "ci_upper",
         "n_folds",
-        "cell_deg",
-        "temporal_grid_size",
+        "best_params",
         "feature_dim",
         "n_samples",
         "n_test",
@@ -516,7 +511,7 @@ def test_runtime_method_selection(
 
 def test_resume_skips_encoding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "torchgeo_bench.coordbench.run.load_benchmarks", lambda names: _synthetic_benchmarks()
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: _synthetic_benchmarks()
     )
     config = _coord_cfg(tmp_path)
     run_coordbench(config)
@@ -536,16 +531,16 @@ def test_partial_results_survive_failure_and_resume(
 ) -> None:
     bench = _synthetic_benchmarks()[0]
     bench.tasks["second"] = bench.tasks["target"].copy()
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [bench])
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: [bench])
     calls = []
 
-    def failing_linear(*args: Any, **kwargs: Any) -> tuple[float, list[float]]:
+    def failing_evaluate(predict: Any, grid: list, folds: list, data: ProbeData) -> ProbeResult:
         calls.append("linear")
         if len(calls) == 2:
             raise RuntimeError("second task failed")
-        return 0.8, [0.8]
+        return ProbeResult(0.8, [0.8], [grid[0]], np.full(len(data.y), np.nan))
 
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.linear_probe_score", failing_linear)
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.evaluate", failing_evaluate)
     config = _coord_cfg(tmp_path, methods=["linear"])
     with pytest.raises(RuntimeError, match="second task failed"):
         run_coordbench(config)
@@ -559,7 +554,7 @@ def test_partial_results_survive_failure_and_resume(
 def test_knn_only_skips_regression(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "torchgeo_bench.coordbench.run.load_benchmarks",
-        lambda names: [_synthetic_benchmarks()[0]],
+        lambda *args: [_synthetic_benchmarks()[0]],
     )
 
     def unexpected_encode(*args: Any, **kwargs: Any) -> None:
@@ -605,15 +600,15 @@ def test_auto_device_resolves_for_encoder_and_probe(
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
     monkeypatch.setattr(
         "torchgeo_bench.coordbench.run.load_benchmarks",
-        lambda names: [_synthetic_benchmarks()[0]],
+        lambda *args: [_synthetic_benchmarks()[0]],
     )
     devices = []
 
-    def linear(*args: Any, **kwargs: Any) -> tuple[float, list[float]]:
-        devices.append(kwargs["device"])
-        return linear_probe_score(*args, **{**kwargs, "device": "cpu"})
+    def ridge(data: ProbeData, device: str) -> Any:
+        devices.append(device)
+        return ridge_predictor(data, "cpu")
 
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.linear_probe_score", linear)
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.ridge_predictor", ridge)
     config = _coord_cfg(tmp_path)
     config.runtime.device = "auto"
     with mock.patch(
@@ -674,7 +669,7 @@ def test_coordinate_run_rejects_invalid_cuda_before_loading(
 def test_runtime_seeds_encoder_construction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda names: [])
+    monkeypatch.setattr("torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: [])
     random_values = []
 
     def build(preset: ModelPreset, *, device: str) -> SinCosLocationEncoder:

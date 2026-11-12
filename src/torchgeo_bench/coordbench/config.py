@@ -17,18 +17,24 @@ from torchgeo_bench.config.presets import ModelPreset, load_model_preset
 from torchgeo_bench.config.schema import (
     Device,
     KnnDevice,
-    Methods,
     ModelConfig,
     OutputPaths,
     SchemaVersion,
     StrictModel,
-    default_methods,
     load_yaml,
 )
 from torchgeo_bench.coordbench.catalog import FAMILY_BENCHMARKS
-from torchgeo_bench.coordbench.config_enums import TemporalResolution
 
 RIDGE_ALPHAS = tuple(10.0 ** (step / 2) for step in range(-8, 13))
+
+Split = Literal[
+    "random",
+    "spatial",
+    "temporal_forecast",
+    "temporal_forecast_block",
+    "temporal_checkerboard",
+    "temporal_contiguous_block",
+]
 
 
 class CoordRuntimeConfig(StrictModel):
@@ -45,18 +51,24 @@ class CoordOutputConfig(OutputPaths):
 
 
 class CoordEvaluationConfig(StrictModel):
-    """Random/spatial cross-validation and coordinate probe settings."""
+    """Test-set protocol, splitter, and coordinate probe settings."""
 
-    methods: Methods = Field(default_factory=default_methods, min_length=1)
-    split: Literal["random", "spatial", "temporal", "all"] = "random"
+    methods: list[Literal["knn", "linear", "idw"]] = Field(default=["knn", "linear"], min_length=1)
+    split_test_type: Literal["official", "nested_cv"] = "nested_cv"
+    split: Split = "random"
+    inner_split: Split = "random"
     folds: StrictInt = Field(default=5, ge=2)
+    inner_folds: StrictInt = Field(default=5, ge=2)
     cell_deg: StrictFloat = Field(default=10.0, gt=0)
-    cell_degs: list[Annotated[StrictFloat, Field(gt=0)]] | None = None
-    # A DISCRETIZATION_METHODS_TO_SECONDS name, e.g. "weekly".
-    temporal_grid_size: StrictStr | None = None
-    temporal_grid_sizes: list[StrictStr] | None = None
-    knn_k: StrictInt = Field(default=5, gt=0)
+    time_unit: Literal["timestamp", "day", "week", "month", "season", "year"] = "month"
+    time_unit_size: StrictInt = Field(default=1, gt=0)
+    reset_year: StrictBool = True
+    max_train_size: StrictInt | None = None  # time units in the temporal_forecast_block window
+    test_size: StrictInt | None = Field(default=None, gt=0)  # time units per held-out block
+    knn_ks: list[StrictInt] = Field(default=[5])
     knn_device: KnnDevice = "cpu"
+    idw_ks: list[StrictInt] = Field(default=[5])
+    idw_cs: list[StrictFloat] = Field(default=[0.0])
     ridge_alphas: list[Annotated[StrictFloat, Field(gt=0)]] = Field(
         default_factory=lambda: list(RIDGE_ALPHAS), min_length=1
     )
@@ -73,20 +85,20 @@ class CoordEvaluationConfig(StrictModel):
     from_polygon: StrictBool = False
     spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
     subsample: StrictBool = False
-    temporal_checkerboard: StrictBool = False
     save_predictions: StrictBool = False
 
     @model_validator(mode="after")
-    def validate_temporal_grid(self) -> Self:
-        """Require a known temporal grid size whenever the temporal split is requested alone."""
-        sizes = self.temporal_grid_sizes or (
-            [self.temporal_grid_size] if self.temporal_grid_size else []
-        )
-        unknown = sorted(set(sizes) - {r.value for r in TemporalResolution})
-        if unknown:
-            raise ValueError(f"Unknown temporal grid sizes: {unknown}")
-        if self.split == "temporal" and not sizes:
-            raise ValueError("split='temporal' requires temporal_grid_size or temporal_grid_sizes")
+    def require_window_size(self) -> Self:
+        """Reject duplicate methods and windowed temporal splits without their window sizes."""
+        if len(set(self.methods)) != len(self.methods):
+            raise ValueError("methods must not contain duplicates")
+        splits = {self.split, self.inner_split}
+        if "temporal_forecast_block" in splits and self.max_train_size is None:
+            raise ValueError("temporal_forecast_block requires max_train_size")
+        if any(s.startswith("temporal") for s in splits) and self.test_size is None:
+            raise ValueError("temporal splits require test_size")
+        if "temporal_forecast_block" in splits and self.test_size > self.max_train_size:
+            raise ValueError("test_size must not exceed max_train_size")
         return self
 
 
