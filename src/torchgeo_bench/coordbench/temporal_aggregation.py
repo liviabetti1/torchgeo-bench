@@ -152,6 +152,33 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str, se
     )
 
 
+def no_timestamp_temporal_sampling(
+    dataset: CoordBenchmark, season: str, discretization: str
+) -> CoordBenchmark:
+    """Give every location the same grid of timestamps over `season` months of `dataset.year`."""
+    if dataset.year is None:
+        raise ValueError("Dataset must have a year to be temporally sampled.")
+    if season not in SEASONAL_PERIODS:
+        raise ValueError(f"Unknown temporal sampling method: {season}")
+
+    start = int(pd.Timestamp(year=dataset.year, month=1, day=1, tz="UTC").timestamp())
+    end = int(pd.Timestamp(year=dataset.year + 1, month=1, day=1, tz="UTC").timestamp())
+    times = _sample_times(start, end, discretization, season)
+
+    return CoordBenchmark(
+        name=f"{dataset.name}_{season}_{discretization}",
+        lat=dataset.lat,
+        lon=dataset.lon,
+        tasks=dataset.tasks,
+        task_type=dataset.task_type,
+        temporal_resolution=dataset.temporal_resolution,
+        year=dataset.year,
+        posix_timestamp=np.tile(times, (len(dataset.lat), 1)),
+        spatial_aggregation_key=dataset.spatial_aggregation_key,
+        test_mask=dataset.test_mask,
+    )
+
+
 def dataset_discretization(
     dataset: CoordBenchmark,
     method: str,
@@ -380,7 +407,10 @@ def temporal_sample_and_aggregate_embeddings(
     if embedding_aggregation_method not in EMBEDDING_AGGREGATION_METHODS:
         raise ValueError(f"Unknown aggregation method: {embedding_aggregation_method}")
 
-    temporally_sampled_dataset = non_daily_temporal_sampling(dataset, discretization_method, season)
+    if dataset.posix_timestamp is None:
+        temporally_sampled_dataset = no_timestamp_temporal_sampling(dataset, season, discretization_method)
+    else:
+        temporally_sampled_dataset = non_daily_temporal_sampling(dataset, discretization_method, season)
 
     aggregated_embeddings = _aggregate_embeddings(
         lats=temporally_sampled_dataset.lat,

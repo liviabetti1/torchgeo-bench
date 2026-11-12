@@ -33,9 +33,10 @@ out="$RESULTS/global_population.csv"
 for model in "${MODELS[@]}"; do
   torchgeo-bench coord --model "$model" \
   --dataset global_population \
-  --split all \
-  --exclude-antarctica \
+  --nested-splits temporal_checkerboard,random \
+  --folds 2 \
+  --test-size 1 \
+  --time-units year,1 year,2 year,4 \
   --temporal-discretization-methods monthly \
-  --temporal-checkerboard \
   --output "$out" "$@"
 done

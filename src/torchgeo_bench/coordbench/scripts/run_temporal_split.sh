@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Temporal-block cross-validation: every benchmark that carries real per-point
-# timestamps, evaluated under --split temporal with a sweep of grid-cell widths.
+# timestamps, evaluated under temporal block CV with a sweep of block widths.
 # Pass --device cuda:0 (or cpu) as an extra arg when calling directly.
 set -euo pipefail
 
@@ -17,8 +17,6 @@ MODELS=(
     gtloc
     "t_satclip/t_satclip_doy_1M"
 )
-
-GRID_SIZES=(weekly monthly seasonally yearly)
 
 # Timestamped benchmarks; the electric-load ones are sampled per county polygon
 # and need spatial aggregation before evaluation, like run_electrical_load.sh.
@@ -45,8 +43,10 @@ for model in "${MODELS[@]}"; do
         torchgeo-bench coord \
             --model "$model" \
             --dataset "$dataset" \
-            --split temporal \
-            --temporal-grid-sizes "${GRID_SIZES[@]}" \
+            --nested-splits temporal_checkerboard,random \
+            --folds 5 \
+            --test-size 1 \
+            --time-units week,1 month,1 quarter,1 year,1 \
             "${extra_args[@]}" \
             --resume \
             --output "$out" \

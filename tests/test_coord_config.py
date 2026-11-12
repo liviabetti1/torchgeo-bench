@@ -11,6 +11,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from torchgeo_bench.cli import main as cli_main
 from torchgeo_bench.commands._coord import load_config, run
 from torchgeo_bench.commands.coord_arguments import add_coord_arguments
 from torchgeo_bench.coordbench.config import CoordConfig, load_coord_config, resolve_coord_preset
@@ -54,7 +55,13 @@ def test_coord_defaults() -> None:
         {"evaluation": {"methods": []}},
         {"evaluation": {"methods": ["linear", "linear"]}},
         {"evaluation": {"methods": ["ridge"]}},
-        {"evaluation": {"split": "official"}},
+        {"evaluation": {"nested_splits": [["official", "random"]]}},
+        {"evaluation": {"nested_splits": []}},
+        {"evaluation": {"nested_splits": [["random"]]}},
+        {"evaluation": {"nested_splits": [["random", "random"], ["random", "random"]]}},
+        {"evaluation": {"split_test_type": "official", "nested_splits": [["random", "random"], ["spatial", "random"]]}},
+        {"evaluation": {"time_units": [["month", 0]]}},
+        {"evaluation": {"time_units": [["month", 1], ["month", 1]]}},
         {"evaluation": {"folds": 1}},
         {"evaluation": {"folds": "5"}},
         {"evaluation": {"folds": True}},
@@ -69,9 +76,10 @@ def test_coord_defaults() -> None:
         {"evaluation": {"ridge_alphas": [float("nan")]}},
         {"evaluation": {"ridge_alphas": [float("inf")]}},
         {"evaluation": {"split_test_type": "holdout"}},
-        {"evaluation": {"split": "temporal_forecast_block"}},
-        {"evaluation": {"inner_split": "temporal_forecast_block"}},
-        {"evaluation": {"inner_split": "official"}},
+        {"evaluation": {"nested_splits": [["temporal_forecast_block", "random"]]}},
+        {"evaluation": {"nested_splits": [["random", "temporal_forecast_block"]]}},
+        {"evaluation": {"nested_splits": [["random", "official"]]}},
+        {"evaluation": {"nested_splits": [["temporal_checkerboard", "random"]], "test_size": 2}},
         {"evaluation": {"knn_device": "auto"}},
         {"evaluation": {"knn_device": None}},
         {"evaluation": {"knn_device": "cuda:bad"}},
@@ -115,21 +123,19 @@ def test_all_typed_flags() -> None:
             "knn",
             "--split-test-type",
             "official",
-            "--split",
-            "temporal_forecast_block",
-            "--inner-split",
-            "spatial",
+            "--nested-splits",
+            "temporal_forecast_block,spatial",
             "--folds",
             "3",
             "--inner-folds",
             "4",
             "--cell-deg",
             "2.5",
-            "--time-unit",
-            "week",
-            "--time-unit-size",
-            "2",
-            "--no-reset-year",
+            "--time-units",
+            "week,2",
+            "month,1",
+            "--reset-year",
+            "--no-exclude-antarctica",
             "--max-train-size",
             "6",
             "--test-size",
@@ -161,14 +167,12 @@ def test_all_typed_flags() -> None:
     assert config.evaluation.model_dump() == {
         "methods": ["linear", "knn"],
         "split_test_type": "official",
-        "split": "temporal_forecast_block",
-        "inner_split": "spatial",
+        "nested_splits": [("temporal_forecast_block", "spatial")],
         "folds": 3,
         "inner_folds": 4,
         "cell_deg": 2.5,
-        "time_unit": "week",
-        "time_unit_size": 2,
-        "reset_year": False,
+        "time_units": [("week", 2), ("month", 1)],
+        "reset_year": True,
         "max_train_size": 6,
         "test_size": 2,
         "knn_ks": [7, 9],
@@ -253,6 +257,13 @@ def test_run_reports_config_errors_with_argparse_status(
         run(_parse("--model", "timm/resnet50", "--dry-run"))
     assert error.value.code == 2
     assert "image model" in capsys.readouterr().err
+
+
+def test_coord_rejects_abbreviated_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli_main(["coord", "--model", "sincos", "--knn-k", "5", "--dry-run"])
+    assert error.value.code == 2
+    assert "--knn-k" in capsys.readouterr().err
 
 
 def test_dry_run_roundtrip(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

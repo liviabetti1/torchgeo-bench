@@ -33,10 +33,11 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset chelsa_monthly \
-        --split all \
-        --exclude-antarctica \
+        --nested-splits temporal_checkerboard,random \
+        --folds 2 \
+        --test-size 1 \
+        --time-units month,1 quarter,1 year,1 year,2 year,4 \
         --output "$out" \
-        --temporal-checkerboard \
         "$@"
 
     rm -f "${out}.lock"

@@ -41,7 +41,9 @@ def _probe_data(features: np.ndarray, labels: np.ndarray, task_type: str) -> Pro
 
 def _folds(lon: np.ndarray, lat: np.ndarray, **evaluation: Any) -> list:
     bench = CoordBenchmark("synthetic", lat, lon)
-    return make_folds(CoordEvaluationConfig(**evaluation), bench, np.arange(len(lat)), seed=0)
+    cfg = CoordEvaluationConfig(**evaluation)
+    (folds,) = make_folds(cfg, bench, np.arange(len(lat)), seed=0).values()
+    return folds
 
 
 def _ridge_score(features: np.ndarray, labels: np.ndarray, *, device: str = "cpu") -> ProbeResult:
@@ -200,29 +202,48 @@ def _timestamped_bench(n: int = 400) -> CoordBenchmark:
 @pytest.mark.parametrize(
     "evaluation",
     [
-        {"split": "random"},
-        {"split": "spatial", "cell_deg": 20.0},
-        {"split": "temporal_checkerboard", "time_unit": "month", "test_size": 2},
-        {"split": "temporal_contiguous_block", "time_unit": "month", "test_size": 6},
-        {"split": "temporal_forecast", "time_unit": "month", "test_size": 2},
+        {"nested_splits": [("random", "random")]},
+        {"nested_splits": [("spatial", "spatial")], "cell_deg": 20.0},
+        {"nested_splits": [("temporal_checkerboard",) * 2], "time_units": [("month", 2)]},
+        {"nested_splits": [("temporal_contiguous_block",) * 2], "time_units": [("month", 6)]},
+        {"nested_splits": [("temporal_forecast",) * 2], "test_size": 2},
     ],
 )
 def test_nested_folds_are_disjoint_and_keep_groups_intact(evaluation: dict[str, Any]) -> None:
     bench = _timestamped_bench()
-    cfg = CoordEvaluationConfig(folds=3, inner_folds=3, inner_split=evaluation["split"], **evaluation)
-    folds = make_folds(cfg, bench, np.arange(len(bench.lat)), seed=0)
-    if cfg.split == "spatial":
+    ((name, _),) = evaluation["nested_splits"]
+    cfg = CoordEvaluationConfig(folds=3, inner_folds=3, **evaluation)
+    (folds,) = make_folds(cfg, bench, np.arange(len(bench.lat)), seed=0).values()
+    if name == "spatial":
         groups = spatial_cell_ids(bench.lat, bench.lon, cfg.cell_deg)
-    elif cfg.split != "random":
-        groups = time_unit_ids(bench.posix_timestamp, cfg.time_unit)
+    elif name != "random":
+        groups = time_unit_ids(bench.posix_timestamp, "month")
     for fold in folds:
         assert not np.intersect1d(fold.train, fold.test).size
-        if cfg.split != "random":
+        if name != "random":
             assert not np.intersect1d(groups[fold.train], groups[fold.test]).size
         for train, val in fold.inner:
             # Tuning must never see the outer test rows.
             assert np.isin(train, fold.train).all()
             assert np.isin(val, fold.train).all()
+
+
+@pytest.mark.parametrize(
+    ("unit", "start", "end", "expected"),
+    [
+        # 2017-01-01 is a Sunday: weeks counted from it keep Jan 1-7 together.
+        (("week", 1), "2017-01-01", "2017-01-08", [0] * 7 + [1]),
+        # Odd-sized blocks start at the first month, not at a fixed calendar offset.
+        (("month", 3), "2017-02-01", "2017-05-01", [0, 0, 0, 1]),
+    ],
+)
+def test_time_units_start_at_the_first_timestamp(
+    unit: tuple[str, int], start: str, end: str, expected: list[int]
+) -> None:
+    freq = "D" if unit[0] == "week" else "MS"
+    times = pd.date_range(start, end, freq=freq, tz="UTC")
+    seconds = (times - pd.Timestamp(0, tz="UTC")).total_seconds().to_numpy()
+    np.testing.assert_array_equal(time_unit_ids(seconds, *unit), expected)
 
 
 @pytest.mark.parametrize(("max_train_size", "test_size"), [(None, 2), (6, 1)])
@@ -232,11 +253,12 @@ def test_temporal_forecast_trains_on_the_past(
     bench = _timestamped_bench()
     split = "temporal_forecast" if max_train_size is None else "temporal_forecast_block"
     cfg = CoordEvaluationConfig(
-        split=split, inner_split=split, max_train_size=max_train_size, test_size=test_size,
-        folds=3, inner_folds=2,
+        nested_splits=[(split, split)], max_train_size=max_train_size,
+        test_size=test_size, folds=3, inner_folds=2,
     )  # fmt: skip
     months = time_unit_ids(bench.posix_timestamp, "month")
-    for fold in make_folds(cfg, bench, np.arange(len(bench.lat)), seed=0):
+    (folds,) = make_folds(cfg, bench, np.arange(len(bench.lat)), seed=0).values()
+    for fold in folds:
         assert bench.posix_timestamp[fold.train].max() < bench.posix_timestamp[fold.test].min()
         for train, val in fold.inner:
             assert bench.posix_timestamp[train].max() < bench.posix_timestamp[val].min()
@@ -247,11 +269,24 @@ def test_temporal_forecast_trains_on_the_past(
             assert len(np.unique(months[fold.test])) == test_size
 
 
+def test_split_variants_repeat_only_temporal_pairs_per_time_unit() -> None:
+    cfg = CoordEvaluationConfig(
+        nested_splits=[("random", "random"), ("temporal_checkerboard", "random")],
+        time_units=[("month", 1), ("year", 1)], test_size=1, folds=2, inner_folds=2,
+    )  # fmt: skip
+    folds = make_folds(cfg, _timestamped_bench(), np.arange(400), seed=0)
+    assert set(folds) == {
+        ("random", "random", ("month", 1)),
+        ("temporal_checkerboard", "random", ("month", 1)),
+        ("temporal_checkerboard", "random", ("year", 1)),
+    }
+
+
 def test_official_split_tests_exactly_the_mask(points: tuple[np.ndarray, np.ndarray]) -> None:
     lon, lat = points
     bench = CoordBenchmark("synthetic", lat, lon, test_mask=np.arange(len(lat)) % 4 == 0)
     cfg = CoordEvaluationConfig(split_test_type="official")
-    (fold,) = make_folds(cfg, bench, np.arange(len(lat)), seed=0)
+    ((fold,),) = make_folds(cfg, bench, np.arange(len(lat)), seed=0).values()
     np.testing.assert_array_equal(fold.test, np.flatnonzero(bench.test_mask))
     assert len(fold.inner) == cfg.inner_folds
 
@@ -280,11 +315,11 @@ def _synthetic_benchmarks() -> list[CoordBenchmark]:
 def _coord_cfg(tmp_path: Path, **coord_overrides: object) -> CoordConfig:
     coord = {
         "methods": ["knn", "linear"],
-        "split": "random",
         "folds": 5,
         "cell_deg": 10.0,
         "knn_ks": [5],
         "skip_no_timestamp": False,
+        "exclude_antarctica": False,
     }
     coord.update(coord_overrides)
     return CoordConfig.model_validate(
@@ -304,7 +339,7 @@ def test_run_coordbench_end_to_end(
     monkeypatch.setattr(
         "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: _synthetic_benchmarks()
     )
-    cfg = _coord_cfg(tmp_path, split="spatial")
+    cfg = _coord_cfg(tmp_path, nested_splits=[("spatial", "random")])
     cfg.output.directory = str(tmp_path / "nested")
     output_path = tmp_path / "coord.csv"
     if not explicit_file:
@@ -346,7 +381,10 @@ def test_run_coordbench_reports_official_test_count(
 
 @pytest.mark.parametrize(
     "evaluation",
-    [{"split_test_type": "official"}, {"split": "temporal_contiguous_block", "test_size": 1}],
+    [
+        {"split_test_type": "official"},
+        {"nested_splits": [("temporal_contiguous_block", "random")]},
+    ],
 )
 def test_run_coordbench_skips_benchmarks_missing_split_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, evaluation: dict[str, Any]
@@ -362,7 +400,7 @@ def test_run_coordbench_skips_benchmarks_missing_split_inputs(
 
 def test_coord_config_requires_window_for_forecast_block(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="requires max_train_size"):
-        _coord_cfg(tmp_path, split="temporal_forecast_block")
+        _coord_cfg(tmp_path, nested_splits=[("temporal_forecast_block", "random")])
 
 
 def test_run_coordbench_resume_keeps_distinct_split_params(
@@ -372,13 +410,50 @@ def test_run_coordbench_resume_keeps_distinct_split_params(
         "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: [_synthetic_benchmarks()[0]]
     )
     for cell_deg in (5.0, 20.0):
-        cfg = _coord_cfg(tmp_path, split="spatial", cell_deg=cell_deg)
+        cfg = _coord_cfg(tmp_path, nested_splits=[("spatial", "random")], cell_deg=cell_deg)
         cfg.output.resume = True
         run_coordbench(cfg)
 
     # The cell_deg=20.0 run must not be skipped as already completed.
     df = pd.read_csv(cfg.output.file)
     assert df.split_params.nunique() == 2
+    # test_size only shapes temporal folds, so spatial rows keep the key they had before it existed.
+    assert not df.split_params.str.contains("test_size").any()
+
+
+def test_run_coordbench_encodes_once_for_all_nested_splits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "torchgeo_bench.coordbench.run.load_benchmarks", lambda *args: [_synthetic_benchmarks()[0]]
+    )
+    encodes = []
+
+    def counting_encoder(preset: ModelPreset, device: str) -> SinCosLocationEncoder:
+        encoder = _instantiate_encoder(preset, device)
+        encode = encoder.encode
+
+        def counted(*args: Any) -> torch.Tensor:
+            encodes.append(args)
+            return encode(*args)
+
+        encoder.encode = counted
+        return encoder
+
+    monkeypatch.setattr("torchgeo_bench.coordbench.run._instantiate_encoder", counting_encoder)
+    pairs = [("random", "random"), ("spatial", "random"), ("spatial", "spatial")]
+    cfg = _coord_cfg(tmp_path, nested_splits=pairs)
+    cfg.output.resume = True
+    run_coordbench(cfg)
+
+    assert len(encodes) == 1
+    df = pd.read_csv(cfg.output.file)
+    assert set(zip(df.split, df.inner_split, strict=True)) == set(pairs)
+
+    # A rerun finds every (split, method) row already written and does not encode again.
+    run_coordbench(cfg)
+    assert len(encodes) == 1
+    assert len(pd.read_csv(cfg.output.file)) == len(df)
 
 
 def test_load_benchmarks_selection(monkeypatch: pytest.MonkeyPatch) -> None:

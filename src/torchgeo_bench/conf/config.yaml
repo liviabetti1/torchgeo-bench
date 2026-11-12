@@ -23,12 +23,19 @@ mode: image    # image (default GeoBench pipeline) | coord (CoordBench location-
 coord:
   output: results/coordbench_results.csv
   names: all               # all | comma-separated families (pdfm,satclip,...) or benchmark names
-  methods: [knn, linear]   # subset of {knn, linear}; knn is classification-only
-  split: random            # random | spatial | temporal | all (block-CV holdout)
-  folds: 5
-  cell_deg: 10.0           # spatial-block grid-cell size in degrees; cell_degs sweeps several
-  temporal_grid_size: null # temporal-block grid-cell width: daily|weekly|biweekly|4_weeks|13_weeks|days_30|days_365; temporal_grid_sizes sweeps several
-  knn_k: 5
+  methods: [knn, linear]   # subset of {knn, linear, idw}; knn is classification-only
+  split_test_type: nested_cv  # nested_cv | official (dataset test_mask is the outer test set)
+  nested_splits: [[random, random]]  # (outer, inner) pairs: random | spatial | temporal_forecast | temporal_forecast_block | temporal_checkerboard | temporal_contiguous_block
+  folds: 5                 # outer folds
+  inner_folds: 5           # inner (tuning) folds
+  cell_deg: 10.0           # spatial-block grid-cell size in degrees
+  time_units: [[month, 1]] # (unit, size) pairs for temporal splits: timestamp|day|week|month|quarter|season|year
+  reset_year: false        # if true, time units do not cross a year boundary
+  test_size: 1             # time units forecast per fold (temporal_forecast splits only)
+  max_train_size: null     # time units in the training window; required for temporal_forecast_block
+  knn_ks: [5]
+  idw_ks: [5]
+  idw_cs: [0.0]            # weight of squared time distance vs squared space distance (km)
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
   skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)
   temporal_aggregation_methods: []  # replace each benchmark with one variant per applicable method (see
@@ -42,7 +49,6 @@ coord:
   from_polygon: false
   spatial_aggregation_methods: []
   subsample: false
-  temporal_checkerboard: false
 
 # Dataset settings
 # Set names: all  OR a list of dataset identifiers

@@ -33,7 +33,7 @@ echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
 torchgeo-bench coord \
     --model "$MODEL" \
     --dataset chelsa_monthly \
-    --split both \
+    --nested-splits random,random spatial,random \
     --temporal-discretization-methods days_30 days_365 \
     --resume \
     --output "$RESULTS/coordbench_chelsa_monthly_temporal.csv" \

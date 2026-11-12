@@ -117,7 +117,7 @@ Note that for this, you have to specify `--temporal-sampling-year` (since some m
 We now have two steps to this process:
 
 1. **Discretization / temporal sampling** — produces a dataset where each row is a `(lat, lon, time_window)` tuple.
-2. **Embedding generation and aggregation** — generates an embedding per timestamp and aggregates across the window. The default aggregation is *statistical*, which returns channelwise mean, max, and min; `run.py` currently uses only the mean.
+2. **Embedding generation and aggregation** — generates an embedding per timestamp and aggregates across the window. `--temporal-embedding-aggregation-methods` picks the probe features: `mean` (default) or `mean_std_slope_tv`, which concatenates the channelwise mean, std, slope, and total variation.
 
 # Spatial Aggregation (for Polygon, Admin-Level Datasets)
 
@@ -132,42 +132,76 @@ It requires two flags:
 
 # Temporal Splits Experiments
 
-## Five-fold Cross Validation
-`--split temporal` cross-validates over time blocks, so each fold holds out whole stretches of time. It is skipped for benchmarks without timestamps. `--temporal-grid-size` (or `--temporal-grid-sizes` for a sweep) sets the block width and is required.
+## Nested Cross Validation
+Every run is now nested cross-validation, so we do not choose hyperparameters based on test folds. An outer split makes `--folds` train/test folds; an inner (nested) split makes `--inner-folds` tuning folds (train/val) inside each outer train fold, which select the probe's hyperparameters (ridge alpha, `--knn-ks`, `--idw-ks` x `--idw-cs`). The selected setting is refit on the outer train fold and scored on its test fold, and the reported metric is the mean over outer folds.
 
-**Grid sizes:** `daily`, `weekly`, `biweekly`, `4_weeks`, `13_weeks`, `days_30`, `days_365`, `monthly`, `yearly`
+`--nested-splits` takes `outer,inner` pairs (note, first is outer), e.g. `--nested-splits random,random spatial,random temporal_checkerboard,random`. `--split-test-type official` instead uses the dataset's own `test_mask` as the single outer test set (datasets without one are skipped). Note: I'm not 100% sure, but I think we might want to just use random inner splits for now, but there's an option to try other inner splits
+
+**Split Methods:**
+
+| Splitter | Held out |
+|----------|----------|
+| `random` | Random rows (KFold) |
+| `spatial` | Whole `--cell-deg` grid cells (GroupKFold) |
+| `temporal_checkerboard` | Every `folds`-th time unit, rotating across folds |
+| `temporal_forecast` | The next `--test-size` units after an expanding training window |
+| `temporal_forecast_block` | The next `--test-size` units after a sliding window of `--max-train-size` units |
+| `temporal_contiguous_block` | `folds` evenly spaced time units |
+
+Temporal splits skip benchmarks without timestamps.
+
+### `--time-units unit,size`
+
+Defines how timestamps are grouped into **calendar-aligned blocks**. Supported units are `timestamp`, `day`, `week`, `month`, `quarter`, `season`, and `year`. The `size` specifies how many units each block spans.
+
+Examples:
+- `week,1`: 1-week blocks
+- `week,2`: 2-week blocks
+- `day,30`: 30-day blocks
+- `year,2`: 2-year blocks
+
+You can specify multiple pairs, and each temporal split runs separately for each:
+
+`--time-units week,1 month,1 day,30`
+
+For `temporal_checkerboard` and `temporal_contiguous_block`, one block is one held-out unit, so `--time-units` alone sets how much time each held-out block covers. For example, `week,2` holds out 2-week windows. For `timestamp`, `size` is ignored and each distinct timestamp is its own block.
+
+Only units that contain data count. If some weeks are missing, `temporal_checkerboard` rotates over the weeks that are present.
+
+### Forecasting: `--test-size` and `--max-train-size`
+
+`--test-size` (default `1`) only applies to `temporal_forecast` and `temporal_forecast_block` (with any other split it will be 1). This sets how many time units each fold forecasts. `--max-train-size` sets how many units the sliding training window of `temporal_forecast_block` holds. Both count `--time-units` blocks. For example, to train on 5 weeks and forecast the next 2, use `--time-units week,1 --max-train-size 5 --test-size 2`.
 
 ```bash
 bash src/torchgeo_bench/coordbench/scripts/run_era5_temporal_split.sh --device cuda:0
 ```
 
-## Temporal Checkerboarding
-`--temporal-checkerboard` will dynamically generate a number of train/test masks, corresponding with `weekly`, `monthly`, `seasonal`, 
-`yearly`, `2_year`, or `4_year` blocks, depending on the temporal extent and resolution of the dataset.  This DOES NOT do
-5-fold CV and ensures that a given week/month/season/year is held out across all samples of the given training dataset.
-
-Since this generates an official train/test mask, this can also be used in conjunction with the `--save-predictions` flag,
-which will output `,parquet` files of the resulting train/test labels along with the predictions.
+`--save-predictions` writes the out-of-fold predictions of every split to `.parquet` files alongside the labels.
 
 # Avoiding Antarctica
 CLIMPLICIT doesn't have pre-training data in Antarctica and does incredibly poorly there as a result.  To facilitate
-'fair' comparisons, we have added the option to filter points in Antactica out of our benchmark tasks.  This is only
-applicable to global tasks, such as VIIRS night lights, CHELSA, ERA5, etc.  The flag is `--exclude-antarctica`.
+'fair' comparisons, points in Antarctica are filtered out of our benchmark tasks by default.  This only affects global
+tasks, such as VIIRS night lights, CHELSA, ERA5, etc.  Pass `--no-exclude-antarctica` to keep them.
 
 # Summary of flags now
 
 | Flag                                       | Description                                                                                                                                                                                                 |
 |--------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--split temporal`                         | Cross-validate over time blocks (needs a grid size)                                                                                                                                                         |
-| `--temporal-grid-size(s)`                  | Width of the held-out time blocks; `--temporal-grid-sizes` sweeps several                                                                                                                                   |
+| `--split-test-type`                        | `nested_cv` (default) or `official` (use the dataset's test mask as the outer test set)                                                                                                                     |
+| `--nested-splits`                          | `outer,inner` splitter pairs, e.g. `random,random spatial,random temporal_checkerboard,random`                                                                                                              |
+| `--folds` / `--inner-folds`                | Number of outer / inner (tuning) folds                                                                                                                                                                      |
+| `--time-units`                             | `unit,size` pairs for temporal splits, e.g. `week,1 month,1`; each temporal split runs once per pair                                                                                                        |
+| `--test-size` / `--max-train-size`         | Time units forecast per fold (`temporal_forecast` splits only, default 1) / in the sliding training window (`temporal_forecast_block`)                                                                       |
+| `--reset-year`                             | Time units do not cross a year boundary                                                                                                                                                                     |
+| `--methods`                                | Any of `linear`, `knn` (classification only), `idw` (spatiotemporal inverse-distance weighting on coordinates)                                                                                             |
+| `--knn-ks` / `--idw-ks` / `--idw-cs`       | Hyperparameter grids tuned in the inner CV; `--idw-cs` weights time distance against space distance                                                                                                        |
 | `--temporal-discretization-methods`        | Window sizes for datasets that already have timestamps (e.g. `weekly`, `biweekly`, `4_weeks`, `13_weeks`)                                                                                                   |
 | `--temporal-sampling-methods`              | Time frame to sample for static datasets (`year`, `spring`, `summer`, `fall`, `winter`)                                                                                                                     |
 | `--temporal-sampling-year`                 | Calendar year to sample timestamps from (required for static datasets)                                                                                                                                      |
-| `--temporal-embedding-aggregation-methods` | How to pool per-timestamp embeddings into one vector (default: `statistics`, which computes channelwise mean, min, and max; only the mean is used downstream)                                               |
+| `--temporal-embedding-aggregation-methods` | How to pool per-timestamp embeddings into one vector: `mean` (default) or `mean_std_slope_tv`                                                                                                               |
 | `--skip-no-timestamps`                     | Skip benchmarks that have no native timestamps (useful when only temporal models are being evaluated)                                                                                                       |
 | `--from-polygon`                           | Designates that the dataset(s) are being generated from a polygon, and therefore need some form of spatial aggregation (which happens after temporal aggregation, if both are present)                      |
 | `--spatial-aggregation-methods`            | Sets the spatial aggregation method used.  Options are `mean`, `statistical`, and `median_and_iqr`                                                                                                          |
 | `--subsample`                              | If applicable, will run on a 'toy' subsampled version of the dataset; useful for iterating quickly.                                                                                                         |
-| `--temporal-checkerboard`                  | Will skip 5-fold CV (used in temporal gridding) to create one temporally checkerboarded train/test split, ranging from weekly holdout to multi-year holdout, depending on the dataset's temporal resolution |
-| `--save-predictions`                       | If using a non 5-fold CV setup, will save .parquet files of your train/test labels and predictions in your results.  Useful for visualizing data in the plot_fine_grained_model_predictions.ipynb notebook  |
-| `--exclude-antarctica`                     | Will filter all rows that refer to Antactica out of your benchmark dataset(s).                                                                                                                              |
+| `--save-predictions`                       | Saves .parquet files of your labels and out-of-fold predictions in your results.  Useful for visualizing data in the plot_fine_grained_model_predictions.ipynb notebook                                     |
+| `--no-exclude-antarctica`                  | Keeps rows in Antarctica, which are filtered out of your benchmark dataset(s) by default.                                                                                                                   |

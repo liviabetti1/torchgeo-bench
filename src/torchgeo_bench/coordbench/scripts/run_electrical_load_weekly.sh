@@ -30,13 +30,15 @@ MODELS=(
   "t_satclip/t_satclip_y_300k"
 )
 
-out="$RESULTS/usa_electrical_load_weekly.csv"
 for model in "${MODELS[@]}"; do
   torchgeo-bench coord --model "$model" \
   --dataset usa_electric_load_weekly \
+  --nested-splits temporal_checkerboard,random \
+  --folds 2 \
+  --test-size 1 \
+  --time-units week,1 month,1 quarter,1 year,1 year,2 year,4 \
   --temporal-discretization-methods two_days \
-  --temporal-checkerboard \
   --save-predictions \
   --subsample \
-  --output "$out" "$@"
+  --output "$RESULTS/usa_electrical_load_weekly.csv" "$@"
 done

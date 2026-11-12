@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     Field,
+    Strict,
     StrictBool,
     StrictFloat,
     StrictInt,
@@ -55,16 +56,26 @@ class CoordEvaluationConfig(StrictModel):
 
     methods: list[Literal["knn", "linear", "idw"]] = Field(default=["knn", "linear"], min_length=1)
     split_test_type: Literal["official", "nested_cv"] = "nested_cv"
-    split: Split = "random"
-    inner_split: Split = "random"
+    # (outer, inner) splitter pairs; Strict(False) lets YAML lists validate as tuples.
+    nested_splits: list[Annotated[tuple[Split, Split], Strict(False)]] = Field(
+        default=[("random", "random")], min_length=1
+    )
     folds: StrictInt = Field(default=5, ge=2)
     inner_folds: StrictInt = Field(default=5, ge=2)
     cell_deg: StrictFloat = Field(default=10.0, gt=0)
-    time_unit: Literal["timestamp", "day", "week", "month", "season", "year"] = "month"
-    time_unit_size: StrictInt = Field(default=1, gt=0)
-    reset_year: StrictBool = True
+    # (time_unit, time_unit_size) pairs; each temporal nested split runs once per pair.
+    time_units: list[
+        Annotated[
+            tuple[
+                Literal["timestamp", "day", "week", "month", "quarter", "season", "year"],
+                Annotated[StrictInt, Field(gt=0)],
+            ],
+            Strict(False),
+        ]
+    ] = Field(default=[("month", 1)], min_length=1)
+    reset_year: StrictBool = False
     max_train_size: StrictInt | None = None  # time units in the temporal_forecast_block window
-    test_size: StrictInt | None = Field(default=None, gt=0)  # time units per held-out block
+    test_size: StrictInt = Field(default=1, gt=0)  # time units forecast per temporal_forecast fold
     knn_ks: list[StrictInt] = Field(default=[5])
     knn_device: KnnDevice = "cpu"
     idw_ks: list[StrictInt] = Field(default=[5])
@@ -80,7 +91,7 @@ class CoordEvaluationConfig(StrictModel):
         default_factory=lambda: ["mean"], min_length=1
     )
 
-    exclude_antarctica: StrictBool = False
+    exclude_antarctica: StrictBool = True
 
     from_polygon: StrictBool = False
     spatial_aggregation_methods: list[StrictStr] = Field(default_factory=list)
@@ -89,16 +100,22 @@ class CoordEvaluationConfig(StrictModel):
 
     @model_validator(mode="after")
     def require_window_size(self) -> Self:
-        """Reject duplicate methods and windowed temporal splits without their window sizes."""
+        """Reject duplicate methods or splits and windowed temporal splits without window sizes."""
         if len(set(self.methods)) != len(self.methods):
             raise ValueError("methods must not contain duplicates")
-        splits = {self.split, self.inner_split}
+        if len(set(self.nested_splits)) != len(self.nested_splits):
+            raise ValueError("nested_splits must not contain duplicates")
+        if len(set(self.time_units)) != len(self.time_units):
+            raise ValueError("time_units must not contain duplicates")
+        if self.split_test_type == "official" and len({o for o, _ in self.nested_splits}) > 1:
+            raise ValueError("split_test_type='official' ignores the outer split; give it one")
+        splits = {s for pair in self.nested_splits for s in pair}
         if "temporal_forecast_block" in splits and self.max_train_size is None:
             raise ValueError("temporal_forecast_block requires max_train_size")
-        if any(s.startswith("temporal") for s in splits) and self.test_size is None:
-            raise ValueError("temporal splits require test_size")
         if "temporal_forecast_block" in splits and self.test_size > self.max_train_size:
             raise ValueError("test_size must not exceed max_train_size")
+        if self.test_size != 1 and not any(s.startswith("temporal_forecast") for s in splits):
+            raise ValueError("test_size only applies to the temporal_forecast splits")
         return self
 
 

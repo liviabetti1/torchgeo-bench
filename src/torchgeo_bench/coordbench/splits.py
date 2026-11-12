@@ -22,7 +22,7 @@ SPLITS = (
     "temporal_forecast_block",
     "temporal_contiguous_block",
 )
-TIME_UNITS = ("timestamp", "day", "week", "month", "season", "year")
+TIME_UNITS = ("timestamp", "day", "week", "month", "quarter", "season", "year")
 
 
 @dataclass(frozen=True)
@@ -50,46 +50,76 @@ def time_unit_ids(
     unit_str: str,
     size: int = 1,
     *,
-    reset_year: bool = True,
+    reset_year: bool = False,
 ) -> np.ndarray:
-    """Calendar-unit IDs; optionally reset windows at each year boundary."""
+    """Assign timestamps to non-overlapping time buckets.
+
+    Args:
+        timestamp: Unix timestamps in seconds (UTC).
+        unit_str: One of timestamp, day, week, month, quarter,
+            season, or year.
+        size: Number of units per bucket.
+        reset_year: If True, restart buckets at each calendar year
+            (except for year units). If False, anchor buckets to
+            the unit containing the earliest timestamp.
+
+    Returns:
+        Integer bucket ID for each timestamp.
+    """
     if size < 1:
         raise ValueError("size must be >= 1")
     if unit_str == "timestamp":
         return np.asarray(timestamp)
 
+    # convert timestamps into dates
     dt = [datetime.fromtimestamp(t, UTC) for t in timestamp]
+    d0 = min(dt)
 
+    # tm_yday returns the day of the year
+    # toordinal returns integer as position in Gregorian calendar
     if unit_str == "day":
         ids = [
             d.year * 400 + (d.timetuple().tm_yday - 1) // size
             if reset_year
-            else (d.toordinal() - 1) // size
+            else (d.toordinal() - d0.toordinal()) // size
             for d in dt
         ]
     elif unit_str == "week":
+        # NOT CALENDER ALIGNED, so not Monday - Sunday
         ids = [
             d.year * 54 + (d.timetuple().tm_yday - 1) // (7 * size)
             if reset_year
-            else (d.toordinal() - 1) // (7 * size)
+            else (d.toordinal() - d0.toordinal()) // (7 * size)
             for d in dt
         ]
     elif unit_str == "month":
         ids = [
             d.year * 12 + (d.month - 1) // size
             if reset_year
-            else (d.year * 12 + d.month - 1) // size
+            else (d.year * 12 + d.month - (d0.year * 12 + d0.month)) // size
             for d in dt
         ]
+    elif unit_str == "quarter":
+            ids = [
+                d.year * 4 + ((d.month - 1) // 3) // size
+                if reset_year
+                else (
+                    d.year * 4 + (d.month - 1) // 3 - (d0.year * 4 + (d0.month - 1) // 3)
+                ) // size
+                for d in dt
+            ]
     elif unit_str == "season":
+        # use meteorological seasons:, DJF, MAM, JJA, SON
+        # if used within a single year, this will be a bit weird
+        if reset_year:
+            raise ValueError("Meteorological seasons can cross year boundaries.")
+        
         ids = [
-            d.year * 4 + ((d.month - 1) // 3) // size
-            if reset_year
-            else (d.year * 4 + (d.month - 1) // 3) // size
+            (d.year * 4 + d.month // 3 - (d0.year * 4 + d0.month // 3)) // size
             for d in dt
         ]
     elif unit_str == "year":
-        ids = [d.year // size for d in dt]
+        ids = [(d.year - d0.year) // size for d in dt]
     else:
         raise ValueError(f"Unknown time unit {unit_str}")
 
@@ -103,6 +133,7 @@ def split(
     bench: CoordBenchmark,
     rows: np.ndarray,
     seed: int,
+    time_unit: tuple[str, int],
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """(train, test) pairs over ``rows`` for one splitter, as global row ids."""
     if split == "random":
@@ -110,7 +141,7 @@ def split(
     elif split == "spatial":
         groups = spatial_cell_ids(bench.lat[rows], bench.lon[rows], cfg.cell_deg)
     elif split.startswith("temporal"):
-        groups = time_unit_ids(bench.posix_timestamp[rows], cfg.time_unit, cfg.time_unit_size, reset_year=cfg.reset_year)
+        groups = time_unit_ids(bench.posix_timestamp[rows], *time_unit, reset_year=cfg.reset_year)
 
     match split:
         case "random":
@@ -123,8 +154,8 @@ def split(
 
         case "temporal_checkerboard":
             _, inverse = np.unique(groups, return_inverse=True)
-            # Runs of `test_size` consecutive units take turns across folds.
-            splitter = PredefinedSplit((inverse // cfg.test_size) % folds)
+            # Consecutive units take turns across folds.
+            splitter = PredefinedSplit(inverse % folds)
             pairs = [(rows[tr], rows[te]) for tr, te in splitter.split(rows)]
 
         case "temporal_forecast" | "temporal_forecast_block":
@@ -142,13 +173,12 @@ def split(
             ]
 
         case "temporal_contiguous_block":
-            # Hold out `folds` evenly spaced blocks of `test_size` contiguous calendar units.
+            # Hold out `folds` evenly spaced time units.
             units, inverse = np.unique(groups, return_inverse=True)
-            size = cfg.test_size
-            if folds * size > len(units):
-                raise ValueError(f"{folds} blocks of {size} units need {folds * size} units, found {len(units)}")
-            starts = np.linspace(0, len(units) - size, folds).astype(int)
-            held_out = [(inverse >= s) & (inverse < s + size) for s in starts]
+            if folds > len(units):
+                raise ValueError(f"{folds} blocks need {folds} time units, found {len(units)}")
+            starts = np.linspace(0, len(units) - 1, folds).astype(int)
+            held_out = [inverse == s for s in starts]
             pairs = [(rows[~te], rows[te]) for te in held_out]
 
         case _:
@@ -159,32 +189,43 @@ def split(
     return pairs
 
 
+def split_variants(cfg: CoordEvaluationConfig) -> list[tuple[str, str, tuple[str, int]]]:
+    """(outer, inner, time_unit) combinations; pairs without a temporal split use only the first time unit."""
+    return [
+        (outer, inner, unit)
+        for outer, inner in cfg.nested_splits
+        for unit in (
+            cfg.time_units
+            if outer.startswith("temporal") or inner.startswith("temporal")
+            else cfg.time_units[:1]
+        )
+    ]
+
+
 def make_folds(
     cfg: CoordEvaluationConfig, bench: CoordBenchmark, rows: np.ndarray, seed: int
-) -> list[OuterFold]:
-    """Outer folds with inner tuning pairs.
+) -> dict[tuple[str, str, tuple[str, int]], list[OuterFold]]:
+    """Outer folds with inner tuning pairs, keyed by ``split_variants`` entry.
 
     official: bench.test_mask defines the outer test set; inner CV tunes on the rest.
-    nested_cv: cfg.split defines outer CV; inner CV tunes within each outer train.
-    In both protocols, cfg.inner_split chooses the inner splitter independently of cfg.split.
+    nested_cv: each outer split defines an outer CV; inner CV tunes within each outer train.
     """
     if cfg.split_test_type == "official":
         if bench.test_mask is None:
             raise ValueError(f"split_test_type='official' needs a test_mask; {bench.name} has none")
         is_test = np.asarray(bench.test_mask, dtype=bool)[rows]
-        outer = [(rows[~is_test], rows[is_test])]
-
-    elif cfg.split_test_type == "nested_cv":
-        outer = split(cfg, cfg.split, cfg.folds, bench, rows, seed)
-
-    else:
+    elif cfg.split_test_type != "nested_cv":
         raise ValueError(f"Unknown split_test_type: {cfg.split_test_type}")
 
-    return [
-        OuterFold(
-            train=tr,
-            test=te,
-            inner=split(cfg, cfg.inner_split, cfg.inner_folds, bench, tr, seed),
+    folds = {}
+    for outer, inner, unit in split_variants(cfg):
+        pairs = (
+            [(rows[~is_test], rows[is_test])]
+            if cfg.split_test_type == "official"
+            else split(cfg, outer, cfg.folds, bench, rows, seed, unit)
         )
-        for tr, te in outer
-    ]
+        folds[outer, inner, unit] = [
+            OuterFold(train=tr, test=te, inner=split(cfg, inner, cfg.inner_folds, bench, tr, seed, unit))
+            for tr, te in pairs
+        ]
+    return folds

@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
 import faiss
+
+logger = logging.getLogger(__name__)
 
 KS = (1, 5, 20)
 EARTH_R_KM = 6371.0
@@ -57,7 +61,7 @@ def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, de
     cartesian_te = lat_lon_to_xyz(lat_te, lon_te)
 
     if time_tr is None or time_te is None:
-        print("No time provided, using spatial only")
+        logger.info("No time provided, using spatial only")
         t_tr = np.zeros_like(lat_tr)
         t_te = np.zeros_like(lat_te)
     else:
@@ -81,7 +85,8 @@ def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, de
     # k is the same as n_neigh in idwST
     # restrict to kmax
     # mind implementation does kmax = min(max(ks), len(lat_tr))
-    assert kmax <= len(lat_tr), "Invalid choice of k (number of neighbors)"
+    if kmax > len(lat_tr):
+        raise ValueError(f"Invalid choice of k (number of neighbors): {kmax} > {len(lat_tr)} training points")
 
     # mind implementation parallelizes jobs
     # see https://github.com/taylor-geospatial/mind/blob/main/scripts/paper/coord_interp_baseline.py
@@ -90,10 +95,10 @@ def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, de
     # Exact nearest neighbors on GPU
     index = faiss.IndexFlatL2(S.shape[1])
 
-    if device == "cuda":
+    if device.startswith("cuda"):
         res = faiss.StandardGpuResources()
-        # assumes gpu id is 0
-        index = faiss.index_cpu_to_gpu(res, 0, index)
+        gpu_id = int(device.partition(":")[2] or 0)
+        index = faiss.index_cpu_to_gpu(res, gpu_id, index)
 
     index.add(S)
     distances_sq, indices = index.search(S0, kmax)

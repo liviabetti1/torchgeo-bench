@@ -25,15 +25,23 @@ def add_coord_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--split-test-type", choices=("official", "nested_cv"), default=argparse.SUPPRESS
     )
-    parser.add_argument("--split", default=argparse.SUPPRESS)
     parser.add_argument(
-        "--inner-split", default=argparse.SUPPRESS, help="Splitter for inner tuning folds"
+        "--nested-splits",
+        type=lambda s: tuple(s.split(",")),
+        nargs="+",
+        default=argparse.SUPPRESS,
+        help="outer,inner splitter pairs, e.g. temporal_checkerboard,random spatial,random",
     )
     parser.add_argument("--folds", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--inner-folds", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--cell-deg", type=float, default=argparse.SUPPRESS)
-    parser.add_argument("--time-unit", default=argparse.SUPPRESS)
-    parser.add_argument("--time-unit-size", type=int, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--time-units",
+        type=lambda s: (s.split(",")[0], int(s.split(",")[1])),
+        nargs="+",
+        default=argparse.SUPPRESS,
+        help="unit,size pairs for temporal splits, e.g. week,1 month,1 year,2",
+    )
     parser.add_argument(
         "--reset-year", action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS
     )

@@ -31,7 +31,7 @@ echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
 torchgeo-bench coord \
     --model "$MODEL" \
     --dataset usa_electric_load_daily \
-    --split both \
+    --nested-splits random,random spatial,random \
     --from-polygon \
     --spatial-aggregation-methods statistical median_and_iqr \
     --resume \

@@ -11,7 +11,16 @@ out="$RESULTS/usa_electrical_load_daily.csv"
 for model in climplicit gtloc t_satclip/t_satclip_doy_1M; do
   torchgeo-bench coord --model "$model" \
   --dataset usa_electric_load_daily \
-  --split all \
-  --temporal-grid-sizes weekly monthly seasonally \
+  --nested-splits random,random spatial,random \
+  --output "$out" "$@"
+done
+# Temporal block CV: every 5th block is held out, for each block width.
+for model in climplicit gtloc t_satclip/t_satclip_doy_1M; do
+  torchgeo-bench coord --model "$model" \
+  --dataset usa_electric_load_daily \
+  --nested-splits temporal_checkerboard,random \
+  --folds 5 \
+  --test-size 1 \
+  --time-units week,1 month,1 quarter,1 \
   --output "$out" "$@"
 done

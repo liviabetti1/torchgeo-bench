@@ -95,6 +95,24 @@ def test_expand_temporal_concatenates_statistics_under_a_distinct_name():
 
 
 
+def test_expand_temporal_samples_a_static_benchmark_within_its_season():
+    bench = CoordBenchmark(
+        name="static",
+        lat=np.array([10.0, 20.0]),
+        lon=np.array([30.0, 40.0]),
+        tasks={"y": np.arange(2.0)},
+        year=2017,
+    )
+
+    ((sampled, features),) = _expand_temporal(
+        [bench], ["monthly"], ["summer"], ["mean"], encoder=DayEncoder()
+    )
+
+    june_1, aug_1 = (pd.Timestamp(f"2017-{m}-01").timestamp() / DAY_SECONDS for m in (6, 8))
+    np.testing.assert_allclose(features[:, 0], [(june_1 + june_1 + 30 + aug_1) / 3] * 2)
+    np.testing.assert_array_equal(sampled.tasks["y"], [0.0, 1.0])
+
+
 def test_non_daily_sampling_without_a_spatial_key():
     """Most coarse benchmarks (CHELSA monthly, global population, nightlights) carry no key."""
     starts = np.array([pd.Timestamp("2017-01-01").timestamp()] * 2)

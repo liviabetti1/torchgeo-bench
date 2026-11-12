@@ -61,6 +61,7 @@ MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 
 echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
 
-torchgeo-bench coord --model "$MODEL" --dataset viirs_night_lights --split both --device cuda:0 \
---temporal-discretization-methods 1_week 2_weeks 4_weeks 13_weeks yearly seasonally  \
+torchgeo-bench coord --model "$MODEL" --dataset viirs_night_lights \
+--nested-splits random,random spatial,random --device cuda:0 \
+--temporal-discretization-methods weekly biweekly 4_weeks 13_weeks yearly \
 --output /projects/bgtj/t_satclip/results/coordbench_chelsa_daily_agg_embeddings_${OUTPUT_EXPERIMENT_NAME}.taskid_${SLURM_ARRAY_TASK_ID}.csv "$@"

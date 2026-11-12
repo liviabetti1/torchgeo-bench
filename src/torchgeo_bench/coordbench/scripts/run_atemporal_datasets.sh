@@ -45,7 +45,7 @@ for model in "${SPATIAL_MODELS[@]}"; do
         torchgeo-bench coord \
             --model "$model" \
             --dataset "$dataset" \
-            --split all \
+            --nested-splits random,random spatial,random \
             --resume \
             --output "$out" \
             "$@"
@@ -59,7 +59,7 @@ for model in "${SPATIOTEMPORAL_MODELS[@]}"; do
         torchgeo-bench coord \
             --model "$model" \
             --dataset "$dataset" \
-            --split all \
+            --nested-splits random,random spatial,random \
             --temporal-sampling-methods year \
             --temporal-sampling-year 2017 \
             --temporal-discretization-methods daily weekly monthly \

@@ -35,8 +35,10 @@ out="$RESULTS/usa_census.csv"
 for model in "${MODELS[@]}"; do
   torchgeo-bench coord --model "$model" \
   --dataset usa_census \
-  --split all \
+  --nested-splits temporal_checkerboard,random \
+  --folds 2 \
+  --test-size 1 \
+  --time-units year,1 year,2 year,4 \
   --temporal-discretization-methods monthly \
-  --temporal-checkerboard \
   --output "$out" "$@"
 done
