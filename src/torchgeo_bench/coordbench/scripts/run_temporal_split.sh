@@ -45,7 +45,6 @@ for model in "${MODELS[@]}"; do
             --dataset "$dataset" \
             --nested-splits temporal_checkerboard,random \
             --folds 5 \
-            --test-size 1 \
             --time-units week,1 month,1 quarter,1 year,1 \
             "${extra_args[@]}" \
             --resume \

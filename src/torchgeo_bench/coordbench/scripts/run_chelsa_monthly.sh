@@ -35,7 +35,6 @@ for model in "${MODELS[@]}"; do
         --dataset chelsa_monthly \
         --nested-splits temporal_checkerboard,random \
         --folds 2 \
-        --test-size 1 \
         --time-units month,1 quarter,1 year,1 year,2 year,4 \
         --output "$out" \
         "$@"

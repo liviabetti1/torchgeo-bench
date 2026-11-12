@@ -35,7 +35,6 @@ for model in "${MODELS[@]}"; do
   --dataset usa_electric_load_weekly \
   --nested-splits temporal_checkerboard,random \
   --folds 2 \
-  --test-size 1 \
   --time-units week,1 month,1 quarter,1 year,1 year,2 year,4 \
   --temporal-discretization-methods two_days \
   --save-predictions \

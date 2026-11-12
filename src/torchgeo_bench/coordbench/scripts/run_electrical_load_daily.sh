@@ -20,7 +20,6 @@ for model in climplicit gtloc t_satclip/t_satclip_doy_1M; do
   --dataset usa_electric_load_daily \
   --nested-splits temporal_checkerboard,random \
   --folds 5 \
-  --test-size 1 \
   --time-units week,1 month,1 quarter,1 \
   --output "$out" "$@"
 done

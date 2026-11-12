@@ -37,7 +37,6 @@ for model in "${MODELS[@]}"; do
   --dataset usa_census \
   --nested-splits temporal_checkerboard,random \
   --folds 2 \
-  --test-size 1 \
   --time-units year,1 year,2 year,4 \
   --temporal-discretization-methods monthly \
   --output "$out" "$@"
