@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from pydantic import ValidationError
 
 from tests.support.numerical import isolated_torch_rng as isolated_torch_rng
 from torchgeo_bench.config.presets import ModelPreset
@@ -39,11 +40,13 @@ pytestmark = pytest.mark.usefixtures("isolated_torch_rng")
 RUN = "torchgeo_bench.coordbench.run"
 
 
-def _probe_data(features: np.ndarray, labels: np.ndarray, task_type: str) -> ProbeData:
+def _probe_data(
+    features: np.ndarray, labels: np.ndarray, task_type: str, **coords: np.ndarray
+) -> ProbeData:
     labels = labels.reshape(len(labels), -1)
     if task_type == "regression":
-        return ProbeData(features, labels.astype(np.float64), task_type, None)
-    return ProbeData(features, labels, task_type, labels)
+        return ProbeData(features, labels.astype(np.float64), task_type, None, **coords)
+    return ProbeData(features, labels, task_type, labels, **coords)
 
 
 def _folds(bench: CoordBenchmark, **evaluation: Any) -> list:
@@ -154,15 +157,15 @@ def test_tasks_probed_together_match_each_task_alone(
         labels = (labels > np.median(labels, axis=0)).astype(np.int64)
     probes = [
         (lambda d: ridge_predictor(d, "cpu"), [0.01, 1.0, 100.0]),
-        (lambda d: idw_predictor(d, lat, lon, None, "cpu"), [(1, 0.0), (5, 0.0), (20, 0.0)]),
+        (lambda d: idw_predictor(d, "cpu"), [(1, 0.0), (5, 0.0), (20, 0.0)]),
     ]
     if task_type == "classification":
         probes.append((lambda d: knn_predictor(d, "cpu"), [1, 5, 15]))
     folds = _folds(CoordBenchmark("synthetic", lat, lon))
-    data = _probe_data(feats, labels, task_type)
+    data = _probe_data(feats, labels, task_type, lat=lat, lon=lon)
     for predictor, grid in probes:
         for i, result in enumerate(evaluate(predictor(data), grid, folds, data)):
-            alone = _probe_data(feats, labels[:, i], task_type)
+            alone = _probe_data(feats, labels[:, i], task_type, lat=lat, lon=lon)
             (expected,) = evaluate(predictor(alone), grid, folds, alone)
             assert result.best_params == expected.best_params
             np.testing.assert_allclose(result.fold_scores, expected.fold_scores, rtol=1e-6)
@@ -368,6 +371,26 @@ def test_run_coordbench_encodes_once_and_resume_skips_encoding(
     run_coordbench(cfg)
     assert len(encodes) == 1
     assert Path(cfg.output.file).read_bytes() == before
+
+
+def test_idw_runs_without_a_model(tmp_path: Path, benches: list) -> None:
+    cfg = CoordConfig.model_validate({**_coord_cfg(tmp_path).model_dump(), "model": None,
+                                      "evaluation": {"methods": ["idw"], "knn_device": "cpu"}})  # fmt: skip
+    with mock.patch(f"{RUN}.build_model") as build:
+        run_coordbench(cfg)
+    build.assert_not_called()
+    df = pd.read_csv(cfg.output.file)
+    assert (set(df.method), set(df.model_name), set(df.feature_dim)) == ({"idw"}, {"idw"}, {0})
+    assert (df.metric_value > 0.5).all()
+
+
+@pytest.mark.parametrize(
+    "evaluation",
+    [{"methods": ["linear", "idw"]}, {"methods": ["idw"], "temporal_sampling_methods": ["year"]}],
+)
+def test_coord_config_requires_model_for_embeddings(evaluation: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="model is required"):
+        CoordConfig.model_validate({"evaluation": evaluation})
 
 
 def test_load_benchmarks_selection(monkeypatch: pytest.MonkeyPatch) -> None:

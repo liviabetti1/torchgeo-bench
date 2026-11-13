@@ -20,17 +20,13 @@ MODELS=(
 )
 
 out="$RESULTS/chelsa_monthly.csv"
-# Linear for every model first, then IDW.
-for method in linear idw; do
-  for model in "${MODELS[@]}"; do
-    torchgeo-bench coord --model "$model" \
-      --dataset chelsa_monthly \
-      --methods "$method" \
-      --nested-splits random,random temporal_checkerboard,random \
-      --time-units year,1 season,1 \
-      --resume \
-      --output "$out" "$@"
+SPLITS=(--nested-splits random,random temporal_checkerboard,random --time-units year,1 season,1)
 
-    rm -f "${out}.lock"
-  done
+for model in "${MODELS[@]}"; do
+  torchgeo-bench coord --model "$model" --dataset chelsa_monthly --methods linear "${SPLITS[@]}" --resume --output "$out" "$@"
+  rm -f "${out}.lock"
 done
+
+# IDW reads only coordinates, so it runs once without a model.
+torchgeo-bench coord --dataset chelsa_monthly --methods idw "${SPLITS[@]}" --resume --output "$out" "$@"
+rm -f "${out}.lock"

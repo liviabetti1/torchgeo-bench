@@ -125,7 +125,7 @@ class CoordConfig(StrictModel):
     """Complete coordinate benchmark configuration, independent of image settings."""
 
     schema_version: SchemaVersion = 1
-    model: ModelConfig
+    model: ModelConfig | None = None  # None runs IDW on coordinates alone
     datasets: list[StrictStr] = Field(default_factory=lambda: ["all"], min_length=1)
     evaluation: CoordEvaluationConfig = Field(default_factory=CoordEvaluationConfig)
     runtime: CoordRuntimeConfig = Field(default_factory=CoordRuntimeConfig)
@@ -146,6 +146,23 @@ class CoordConfig(StrictModel):
             raise ValueError(f"Unknown coordinate datasets: {unknown}")
         return value
 
+    @model_validator(mode="after")
+    def require_model_for_embeddings(self) -> Self:
+        """Allow omitting the model only for IDW, which never reads embeddings."""
+        ev = self.evaluation
+        needs_embeddings = (
+            set(ev.methods) != {"idw"}
+            or ev.temporal_discretization_methods
+            or ev.temporal_sampling_methods
+            or ev.from_polygon
+        )
+        if self.model is None and needs_embeddings:
+            raise ValueError(
+                "model is required unless methods is only idw, without temporal or polygon "
+                "embedding aggregation"
+            )
+        return self
+
     def model_dump_yaml(self) -> dict[str, Any]:
         """Return a reusable YAML mapping with explicit effective defaults."""
         return self.model_dump(mode="json")
@@ -156,8 +173,10 @@ def load_coord_config(path: str | Path) -> CoordConfig:
     return CoordConfig.model_validate(load_yaml(path))
 
 
-def resolve_coord_preset(config: CoordConfig) -> ModelPreset:
+def resolve_coord_preset(config: CoordConfig) -> ModelPreset | None:
     """Resolve a coordinate preset without importing encoder implementations."""
+    if config.model is None:
+        return None
     preset = load_model_preset(config.model, seed=config.runtime.seed)
     if config.model.target is None and preset.track != "coord":
         raise ValueError(f"{config.model.name!r} is an image model; use 'run'")

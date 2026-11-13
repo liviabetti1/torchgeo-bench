@@ -27,12 +27,18 @@ from torchgeo_bench.knn import KNNClassifier
 
 @dataclass(frozen=True)
 class ProbeData:
-    """Features and labels for one probe, aligned on the benchmark's row axis."""
+    """Features, coordinates, and labels for one probe, aligned on the benchmark's row axis."""
 
-    features: np.ndarray
+    features: np.ndarray | None  # None for IDW, which reads only coordinates
+    
     labels: np.ndarray  # (N, tasks), one column per task sharing these features
     task_type: str  # "regression" or "classification"
     class_indices: np.ndarray | None  # (N, tasks) class ids for classification
+
+    # Required by IDW, but embedding probes don't need them
+    lat: np.ndarray | None = None
+    lon: np.ndarray | None = None
+    timestamp: np.ndarray | None = None
 
     @property
     def y(self) -> np.ndarray:
@@ -50,13 +56,13 @@ class ProbeResult:
     predictions: np.ndarray  # out-of-fold, NaN for rows never tested
 
 
-def _valid_mask(features: np.ndarray, labels: np.ndarray, task_type: str) -> np.ndarray:
+def _valid_mask(features: np.ndarray | None, labels: np.ndarray, task_type: str) -> np.ndarray:
     """Rows with a finite label and no non-finite feature (drops nodata/NaN)."""
     if task_type == "regression":
         valid = np.isfinite(labels.astype(np.float64))
     else:
         valid = np.array([v is not None and (isinstance(v, str) or np.isfinite(v)) for v in labels])
-    return valid & np.isfinite(features).all(axis=1)
+    return valid if features is None else valid & np.isfinite(features).all(axis=1)
 
 
 def _score(y_true: np.ndarray, pred: np.ndarray, task_type: str) -> np.ndarray:
@@ -190,14 +196,12 @@ def knn_predictor(
 
 
 def idw_predictor(
-    data: ProbeData,
-    lat: np.ndarray,
-    lon: np.ndarray,
-    timestamp: np.ndarray | None,
-    device: str,
+    data: ProbeData, device: str
 ) -> Callable[[np.ndarray, np.ndarray, list[tuple[int, float]]], list[np.ndarray]]:
     """Spatiotemporal IDW on coordinates; grid = ``(k, c)`` pairs, one neighbor search per c."""
-    y = data.y
+    if data.lat is None or data.lon is None:
+        raise ValueError("idw probe needs lat and lon in its ProbeData")
+    lat, lon, timestamp, y = data.lat, data.lon, data.timestamp, data.y
     n_classes = np.zeros(y.shape[1], int) if data.class_indices is None else y.max(0) + 1
 
     def predict(

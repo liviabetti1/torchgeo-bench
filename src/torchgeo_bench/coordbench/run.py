@@ -136,16 +136,14 @@ def _completed_keys(output_path: str) -> set[tuple[str, ...]]:
     return {tuple(r) for r in rows}
 
 
-def _predictor(method: str, data: ProbeData, bench: CoordBenchmark, cfg: CoordConfig) -> tuple:
+def _predictor(method: str, data: ProbeData, cfg: CoordConfig) -> tuple:
     """Build one probe's ``predict`` function and its hyperparameter grid."""
     coord = cfg.evaluation
     if method == "linear":
         return ridge_predictor(data, cfg.runtime.device), coord.ridge_alphas
     if method == "knn":
         return knn_predictor(data, coord.knn_device), coord.knn_ks
-    timestamp = bench.posix_timestamp
-    predict = idw_predictor(data, bench.lat, bench.lon, timestamp, coord.knn_device)
-    return predict, list(itertools.product(coord.idw_ks, coord.idw_cs))
+    return idw_predictor(data, coord.knn_device), list(itertools.product(coord.idw_ks, coord.idw_cs))
 
 
 def _pooled(
@@ -274,10 +272,11 @@ def run_coordbench(cfg: CoordConfig) -> None:
     )
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    encoder = _instantiate_encoder(preset, device)
+    encoder = None if preset is None else _instantiate_encoder(preset, device)
     logger.info(
-        "CoordBench: model=%s device=%s nested_splits=%s", preset.name, device, coord.nested_splits
-    )
+        "CoordBench: model=%s device=%s nested_splits=%s",
+        "idw" if preset is None else preset.name, device, coord.nested_splits,
+    )  # fmt: skip
 
     completed = _completed_keys(output_path) if cfg.output.resume else set()
     if completed:
@@ -354,9 +353,9 @@ def run_coordbench(cfg: CoordConfig) -> None:
 
 def _evaluate_benchmark(
     bench: CoordBenchmark,
-    encoder: LocationEncoder,
+    encoder: LocationEncoder | None,
     cfg: CoordConfig,
-    preset: ModelPreset,
+    preset: ModelPreset | None,
     completed: set[tuple[str, ...]],
     save_predictions: bool,
     output_path: str,
@@ -371,6 +370,7 @@ def _evaluate_benchmark(
         logger.info("%s: skipping, no test_mask or timestamps for this split", bench.name)
         return
     methods = [m for m in coord.methods if m != "knn" or bench.task_type == "classification"]
+    model_name, model_target = ("idw", "") if preset is None else (preset.name, preset.target)
     features = precomputed_features
     temporal_embedding_aggregation = (
         f"{bench.temporal_resolution}/mean" if precomputed_features is not None else ""
@@ -382,7 +382,7 @@ def _evaluate_benchmark(
             (outer, inner, unit): [
                 m
                 for m in methods
-                if (bench.name, task, m, preset.name, coord.split_test_type, outer, inner,
+                if (bench.name, task, m, model_name, coord.split_test_type, outer, inner,
                     _split_params(coord, (outer, inner), unit), temporal_embedding_aggregation)
                 not in completed
             ]
@@ -392,7 +392,7 @@ def _evaluate_benchmark(
             todo[task] = variants
     if not todo:
         return
-    if features is None:
+    if features is None and encoder is not None:
         features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
 
     # Tasks with the same valid rows share folds, so they are probed together.
@@ -404,12 +404,14 @@ def _evaluate_benchmark(
     for valid_rows, tasks in groups.values():
         labels = np.column_stack([np.asarray(bench.tasks[task]) for task in tasks])
         if bench.task_type == "regression":
-            data = ProbeData(features, labels.astype(np.float64), bench.task_type, None)
+            labels, class_indices = labels.astype(np.float64), None
         else:
             class_indices = np.full(labels.shape, -1)
             for i in range(len(tasks)):
                 class_indices[valid_rows, i] = np.unique(labels[valid_rows, i], return_inverse=True)[1]
-            data = ProbeData(features, labels, bench.task_type, class_indices)
+        data = ProbeData(
+            features, labels, bench.task_type, class_indices, bench.lat, bench.lon, bench.posix_timestamp
+        )
 
         for variant in split_variants(coord):
             outer_split, inner_split, unit = variant
@@ -425,11 +427,11 @@ def _evaluate_benchmark(
                     labels=data.labels[:, cols],
                     class_indices=None if data.class_indices is None else data.class_indices[:, cols],
                 )
-                results = evaluate(*_predictor(method, subset, bench, cfg), folds, subset)
+                results = evaluate(*_predictor(method, subset, cfg), folds, subset)
                 for i, result in zip(cols, results, strict=True):
                     task = tasks[i]
                     if save_predictions:
-                        pred_dir = Path(output_path).parent / "predictions" / preset.name
+                        pred_dir = Path(output_path).parent / "predictions" / model_name
                         pred_dir.mkdir(parents=True, exist_ok=True)
                         unit_tag = "".join(map(str, unit or ()))
                         pd.DataFrame(
@@ -454,11 +456,11 @@ def _evaluate_benchmark(
                         ci_upper=result.test_score + std,
                         n_folds=len(folds),
                         best_params=str(result.best_params),
-                        feature_dim=int(features.shape[1]),
+                        feature_dim=0 if features is None else int(features.shape[1]),
                         n_samples=len(labels),
                         n_test=sum(len(fold.test) for fold in folds),
                         seed=seed,
-                        model_name=preset.name,
-                        model_target=preset.target,
+                        model_name=model_name,
+                        model_target=model_target,
                         temporal_embedding_aggregation=temporal_embedding_aggregation,
                     ).to_row()

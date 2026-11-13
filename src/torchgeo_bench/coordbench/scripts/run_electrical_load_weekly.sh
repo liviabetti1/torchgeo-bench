@@ -20,15 +20,12 @@ MODELS=(
   gtloc
 )
 
-# Linear for every model first, then IDW.
-for method in linear idw; do
-  for model in "${MODELS[@]}"; do
-    torchgeo-bench coord --model "$model" \
-      --dataset usa_electric_load_weekly \
-      --methods "$method" \
-      --nested-splits random,random temporal_checkerboard,random \
-      --time-units year,1 season,1 \
-      --resume \
-      --output "$RESULTS/usa_electrical_load_weekly.csv" "$@"
-  done
+SPLITS=(--nested-splits random,random temporal_checkerboard,random --time-units year,1 season,1)
+out="$RESULTS/usa_electrical_load_weekly.csv"
+
+for model in "${MODELS[@]}"; do
+  torchgeo-bench coord --model "$model" --dataset usa_electric_load_weekly --methods linear "${SPLITS[@]}" --resume --output "$out" "$@"
 done
+
+# IDW reads only coordinates, so it runs once without a model.
+torchgeo-bench coord --dataset usa_electric_load_weekly --methods idw "${SPLITS[@]}" --resume --output "$out" "$@"
