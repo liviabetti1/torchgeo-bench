@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 KS = (1, 5, 20)
 EARTH_R_KM = 6371.0
+_GPU_RESOURCES: dict[int, "faiss.StandardGpuResources"] = {}
 
 SECONDS_IN_A_HOUR = 3600
 SECONDS_IN_A_DAY = 86400
@@ -96,9 +97,10 @@ def find_knn(lat_tr, lon_tr, time_tr, lat_te, lon_te, time_te, kmax, c_param, de
     index = faiss.IndexFlatL2(S.shape[1])
 
     if device.startswith("cuda"):
-        res = faiss.StandardGpuResources()
         gpu_id = int(device.partition(":")[2] or 0)
-        index = faiss.index_cpu_to_gpu(res, gpu_id, index)
+        if gpu_id not in _GPU_RESOURCES:  # allocating these is slow; reuse across calls
+            _GPU_RESOURCES[gpu_id] = faiss.StandardGpuResources()
+        index = faiss.index_cpu_to_gpu(_GPU_RESOURCES[gpu_id], gpu_id, index)
 
     index.add(S)
     distances_sq, indices = index.search(S0, kmax)

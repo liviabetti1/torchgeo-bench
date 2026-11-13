@@ -1,0 +1,8 @@
+Task 0: model=climplicit
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/datasets.py:394: RuntimeWarning: divide by zero encountered in log
+  tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/datasets.py:394: RuntimeWarning: divide by zero encountered in log
+  tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/datasets.py:394: RuntimeWarning: invalid value encountered in log
+  tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
+[2026-11-13T03:15:09.003] error: *** JOB 569768 ON rails09 CANCELLED AT 2026-11-13T03:15:09 DUE TO TIME LIMIT ***

@@ -1,0 +1,5 @@
+Task 2: model=t_satclip/t_satclip_doy_1M
+/u/lbetti/projects/torchgeo-bench/.venv/lib/python3.13/site-packages/torch/jit/_script.py:1491: FutureWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+/var/spool/slurmd/job567484/slurm_script: line 55: 2475647 Killed                  torchgeo-bench coord --model "$MODEL" --dataset era5_ecmwf --nested-splits random,random spatial,random temporal_checkerboard,random --time-units week,1 week,2 month,1 quarter,1 --methods linear idw --resume --output "$RESULTS/coordbench_era5_temporal.csv" --device cuda:0 "$@"
+[2026-11-13T04:19:15.950] error: Detected 1 oom_kill event in StepId=567484.batch. Some of the step tasks have been OOM Killed.

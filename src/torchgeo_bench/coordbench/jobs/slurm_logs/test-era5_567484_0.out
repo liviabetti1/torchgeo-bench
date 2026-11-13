@@ -1,0 +1,3 @@
+Task 0: model=climplicit
+/var/spool/slurmd/job570939/slurm_script: line 55: 2475580 Killed                  torchgeo-bench coord --model "$MODEL" --dataset era5_ecmwf --nested-splits random,random spatial,random temporal_checkerboard,random --time-units week,1 week,2 month,1 quarter,1 --methods linear idw --resume --output "$RESULTS/coordbench_era5_temporal.csv" --device cuda:0 "$@"
+[2026-11-13T04:13:06.725] error: Detected 1 oom_kill event in StepId=570939.batch. Some of the step tasks have been OOM Killed.

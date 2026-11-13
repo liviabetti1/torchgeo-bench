@@ -1,0 +1,30 @@
+Task 2: model=t_satclip/t_satclip_doy_1M
+/u/lbetti/projects/torchgeo-bench/.venv/lib/python3.13/site-packages/torch/jit/_script.py:1491: FutureWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/datasets.py:394: RuntimeWarning: divide by zero encountered in log
+  tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/datasets.py:394: RuntimeWarning: divide by zero encountered in log
+  tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/datasets.py:394: RuntimeWarning: invalid value encountered in log
+  tasks[f"{task_name}_log"] = np.log(df[task_name].to_numpy(np.float64))
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+/u/lbetti/projects/torchgeo-bench/src/torchgeo_bench/coordbench/run.py:407: UserWarning: 0.0001 selected at grid edge; widen the grid
+  result = evaluate(*_predictor(method, data, bench, cfg), folds, data)
+[2026-11-13T06:06:11.013] error: *** JOB 567483 ON rails11 CANCELLED AT 2026-11-13T06:06:11 DUE TO TIME LIMIT ***
