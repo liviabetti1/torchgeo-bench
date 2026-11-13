@@ -135,7 +135,7 @@ It requires two flags:
 ## Nested Cross Validation
 Every run is now nested cross-validation, so we do not choose hyperparameters based on test folds. An outer split makes `--folds` train/test folds; an inner (nested) split makes `--inner-folds` tuning folds (train/val) inside each outer train fold, which select the probe's hyperparameters (ridge alpha, `--knn-ks`, `--idw-ks` x `--idw-cs`). The selected setting is refit on the outer train fold and scored on its test fold, and the reported metric is the mean over outer folds.
 
-`--nested-splits` takes `outer,inner` pairs (note, first is outer), e.g. `--nested-splits random,random spatial,random temporal_checkerboard,random`. `--split-test-type official` instead uses the dataset's own `test_mask` as the single outer test set (datasets without one are skipped). Note: I'm not 100% sure, but I think we might want to just use random inner splits for now, but there's an option to try other inner splits
+To run: `--nested-splits` takes `outer,inner` pairs (note, first is outer), e.g. `--nested-splits random,random spatial,random temporal_checkerboard,random`. `--split-test-type official` instead uses the dataset's own `test_mask` as the single outer test set (datasets without one are skipped). Note: I'm not 100% sure, but I think we might want to just use random inner splits for now, but there's an option to try other inner splits
 
 **Split Methods:**
 

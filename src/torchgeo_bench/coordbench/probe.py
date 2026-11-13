@@ -30,9 +30,9 @@ class ProbeData:
     """Features and labels for one probe, aligned on the benchmark's row axis."""
 
     features: np.ndarray
-    labels: np.ndarray
+    labels: np.ndarray  # (N, tasks), one column per task sharing these features
     task_type: str  # "regression" or "classification"
-    class_indices: np.ndarray | None  # (N,) class ids for classification
+    class_indices: np.ndarray | None  # (N, tasks) class ids for classification
 
     @property
     def y(self) -> np.ndarray:
@@ -59,12 +59,12 @@ def _valid_mask(features: np.ndarray, labels: np.ndarray, task_type: str) -> np.
     return valid & np.isfinite(features).all(axis=1)
 
 
-def _score(y_true: np.ndarray, pred: np.ndarray, task_type: str) -> float:
-    """R^2 for regression, accuracy for classification."""
+def _score(y_true: np.ndarray, pred: np.ndarray, task_type: str) -> np.ndarray:
+    """R^2 for regression, accuracy for classification, per task column."""
     if task_type == "regression":
-        ss_tot = max(float(((y_true - y_true.mean()) ** 2).sum()), 1e-12)
-        return 1.0 - float(((y_true - pred) ** 2).sum()) / ss_tot
-    return float((pred == y_true).mean())
+        ss_tot = np.maximum(((y_true - y_true.mean(0)) ** 2).sum(0), 1e-12)
+        return 1.0 - ((y_true - pred) ** 2).sum(0) / ss_tot
+    return (pred == y_true).mean(0)
 
 
 def evaluate(
@@ -72,26 +72,34 @@ def evaluate(
     grid: list,
     folds: list[OuterFold],
     data: ProbeData,
-) -> ProbeResult:
-    """Tune on each outer fold's inner pairs, refit the best point on its train, score its test."""
+) -> list[ProbeResult]:
+    """Per task, tune on each outer fold's inner pairs, refit the best point, score its test."""
     y, task_type = data.y, data.task_type
-    fold_scores, best_params = [], []
-    predictions = np.full(len(y), np.nan)
+    fold_scores, best_params = [[] for _ in range(y.shape[1])], [[] for _ in range(y.shape[1])]
+    predictions = np.full(y.shape, np.nan)
     for fold in folds:
-        best = grid[0]
+        best = [grid[0]] * y.shape[1]
         if len(grid) > 1:
             inner = [
                 [_score(y[val], pred, task_type) for pred in predict(train, val, grid)]
                 for train, val in fold.inner
             ]
-            best = grid[int(np.argmax(np.mean(inner, axis=0)))]  # ties keep the first grid point
-            if not isinstance(best, tuple) and best in (grid[0], grid[-1]):
-                warnings.warn(f"{best} selected at grid edge; widen the grid", stacklevel=2)
-        (pred,) = predict(fold.train, fold.test, [best])
-        fold_scores.append(_score(y[fold.test], pred, task_type))
-        best_params.append(best)
+            # Ties keep the first grid point.
+            best = [grid[i] for i in np.argmax(np.mean(inner, axis=0), axis=0)]
+            for point in best:
+                if not isinstance(point, tuple) and point in (grid[0], grid[-1]):
+                    warnings.warn(f"{point} selected at grid edge; widen the grid", stacklevel=2)
+        points = list(dict.fromkeys(best))
+        refit = predict(fold.train, fold.test, points)
+        pred = np.column_stack([refit[points.index(b)][:, i] for i, b in enumerate(best)])
+        for i, score in enumerate(_score(y[fold.test], pred, task_type)):
+            fold_scores[i].append(float(score))
+            best_params[i].append(best[i])
         predictions[fold.test] = pred
-    return ProbeResult(float(np.mean(fold_scores)), fold_scores, best_params, predictions)
+    return [
+        ProbeResult(float(np.mean(scores)), scores, params, predictions[:, i])
+        for i, (scores, params) in enumerate(zip(fold_scores, best_params, strict=True))
+    ]
 
 
 def ridge_predictions(  # noqa: PLR0913 - data, fold indices, grid, and standardization.
@@ -130,21 +138,29 @@ def ridge_predictions(  # noqa: PLR0913 - data, fold indices, grid, and standard
 def ridge_predictor(
     data: ProbeData, device: str, *, standardize: bool = True
 ) -> Callable[[np.ndarray, np.ndarray, list[float]], list[np.ndarray]]:
-    """Ridge on the target (regression) or one-hot class ids (classification); grid = alphas."""
+    """Ridge on each task's target (regression) or one-hot class ids (classification); grid=alphas.
+
+    Every task is an output column of one ridge, so each fold's normal equations are built once.
+    """
     dev = resolve_device(device)
     x = torch.as_tensor(data.features, dtype=torch.float32, device=dev)
     if data.class_indices is None:
-        targets = torch.as_tensor(data.labels, dtype=torch.float32, device=dev)[:, None]
+        targets = torch.as_tensor(data.labels, dtype=torch.float32, device=dev)
     else:
+        widths = [int(w) for w in data.class_indices.max(0) + 1]
         classes = torch.as_tensor(data.class_indices.clip(min=0), device=dev)
-        targets = torch.nn.functional.one_hot(classes, int(data.class_indices.max()) + 1).float()
+        targets = torch.cat(
+            [torch.nn.functional.one_hot(c, w) for c, w in zip(classes.T, widths, strict=True)], 1
+        ).float()
 
     def predict(train: np.ndarray, test: np.ndarray, alphas: list[float]) -> list[np.ndarray]:
         tr, te = torch.as_tensor(train, device=dev), torch.as_tensor(test, device=dev)
         preds = ridge_predictions(x, targets, tr, te, alphas, standardize=standardize)
         if data.class_indices is None:
-            return [p[:, 0].cpu().numpy() for p in preds]
-        return [p.argmax(1).cpu().numpy() for p in preds]
+            return [p.cpu().numpy() for p in preds]
+        return [
+            torch.stack([q.argmax(1) for q in p.split(widths, 1)], 1).cpu().numpy() for p in preds
+        ]
 
     return predict
 
@@ -162,9 +178,12 @@ def knn_predictor(
         x_te = scaler.transform(data.features[test]).astype(np.float32)
         preds = []
         for k in ks:
-            clf = KNNClassifier(n_neighbors=k, device=device, metric="l2")
-            clf.fit(x_tr, data.class_indices[train])
-            preds.append(np.asarray(clf.predict(x_te)).ravel())
+            per_task = []
+            for classes in data.class_indices[train].T:
+                clf = KNNClassifier(n_neighbors=k, device=device, metric="l2")
+                clf.fit(x_tr, classes)
+                per_task.append(np.asarray(clf.predict(x_te)).ravel())
+            preds.append(np.column_stack(per_task))
         return preds
 
     return predict
@@ -179,7 +198,7 @@ def idw_predictor(
 ) -> Callable[[np.ndarray, np.ndarray, list[tuple[int, float]]], list[np.ndarray]]:
     """Spatiotemporal IDW on coordinates; grid = ``(k, c)`` pairs, one neighbor search per c."""
     y = data.y
-    n_classes = 0 if data.class_indices is None else int(y.max()) + 1
+    n_classes = np.zeros(y.shape[1], int) if data.class_indices is None else y.max(0) + 1
 
     def predict(
         train: np.ndarray, test: np.ndarray, grid: list[tuple[int, float]]
@@ -193,10 +212,13 @@ def idw_predictor(
                 lat[train], lon[train], t_tr, lat[test], lon[test], t_te,
                 kmax=max(ks), c_param=c, device=device,
             )  # fmt: skip
-            per_k = knn_predict(
-                distances, indices, ks, y[train], lat[test], lon[test], data.task_type, n_classes
-            )
-            preds.update({(k, c): pred for k, pred in per_k.items()})
+            per_task = [
+                knn_predict(
+                    distances, indices, ks, y_tr, lat[test], lon[test], data.task_type, int(n)
+                )
+                for y_tr, n in zip(y[train].T, n_classes, strict=True)
+            ]
+            preds.update({(k, c): np.column_stack([p[k] for p in per_task]) for k in ks})
         return [preds[point] for point in grid]
 
     return predict

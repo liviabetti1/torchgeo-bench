@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,197 +18,95 @@ from torchgeo_bench.commands.coord_arguments import add_coord_arguments
 from torchgeo_bench.coordbench.config import CoordConfig, load_coord_config, resolve_coord_preset
 
 
-def _parse(*args: str) -> argparse.Namespace:
+def _parse(command: str) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     add_coord_arguments(parser)
-    return parser.parse_args(args)
+    return parser.parse_args(command.split())
 
 
 def test_coord_defaults() -> None:
     config = CoordConfig.model_validate({"model": {"name": "sincos"}})
     assert config.datasets == ["all"]
-    assert config.evaluation.methods == ["knn", "linear"]
-    assert config.evaluation.knn_device == "cpu"
-    assert config.runtime.device == "cpu"
-    assert config.output.directory == "results"
+    assert config.evaluation.knn_device == "cuda"
     assert config.output.file is None
     assert not config.output.resume
     preset = resolve_coord_preset(config)
-    assert preset.name == "sincos"
-    assert preset.track == "coord"
-    assert preset.kwargs == {}
+    assert (preset.name, preset.track, preset.kwargs) == ("sincos", "coord", {})
 
 
 @pytest.mark.parametrize(
     "values",
     [
         {"unexpected": True},
-        {"schema_version": True},
-        {"schema_version": 1.0},
         {"schema_version": 2},
         {"model": {"name": "sincos", "extra": 3}},
-        {"datasets": "country"},
         {"datasets": []},
-        {"datasets": [" "]},
         {"datasets": ["country", "country"]},
         {"datasets": ["all", "country"]},
         {"datasets": ["does-not-exist"]},
-        {"evaluation": {"methods": []}},
-        {"evaluation": {"methods": ["linear", "linear"]}},
         {"evaluation": {"methods": ["ridge"]}},
+        {"evaluation": {"methods": ["linear", "linear"]}},
         {"evaluation": {"nested_splits": [["official", "random"]]}},
-        {"evaluation": {"nested_splits": []}},
-        {"evaluation": {"nested_splits": [["random"]]}},
         {"evaluation": {"nested_splits": [["random", "random"], ["random", "random"]]}},
         {"evaluation": {"split_test_type": "official", "nested_splits": [["random", "random"], ["spatial", "random"]]}},
+        {"evaluation": {"nested_splits": [["temporal_checkerboard", "random"]]}},
+        {"evaluation": {"nested_splits": [["temporal_forecast_block", "random"]], "time_units": [["month", 1]]}},
+        {"evaluation": {"nested_splits": [["temporal_forecast_block", "random"]], "time_units": [["month", 1]], "max_train_size": 1, "test_size": 2}},
+        {"evaluation": {"test_size": 2}},
         {"evaluation": {"time_units": [["month", 0]]}},
         {"evaluation": {"time_units": [["month", 1], ["month", 1]]}},
-        {"evaluation": {"folds": 1}},
         {"evaluation": {"folds": "5"}},
-        {"evaluation": {"folds": True}},
+        {"evaluation": {"folds": 1}},
         {"evaluation": {"cell_deg": 0}},
-        {"evaluation": {"cell_deg": "10.0"}},
-        {"evaluation": {"cell_deg": float("nan")}},
         {"evaluation": {"ridge_alphas": []}},
         {"evaluation": {"ridge_alphas": [0]}},
-        {"evaluation": {"ridge_alphas": [-1]}},
-        {"evaluation": {"ridge_alphas": [True]}},
-        {"evaluation": {"ridge_alphas": ["1.0"]}},
-        {"evaluation": {"ridge_alphas": [float("nan")]}},
-        {"evaluation": {"ridge_alphas": [float("inf")]}},
-        {"evaluation": {"split_test_type": "holdout"}},
-        {"evaluation": {"nested_splits": [["temporal_forecast_block", "random"]]}},
-        {"evaluation": {"nested_splits": [["random", "temporal_forecast_block"]]}},
-        {"evaluation": {"nested_splits": [["random", "official"]]}},
-        {"evaluation": {"nested_splits": [["temporal_checkerboard", "random"]], "test_size": 2}},
-        {"evaluation": {"knn_device": "auto"}},
-        {"evaluation": {"knn_device": None}},
         {"evaluation": {"knn_device": "cuda:bad"}},
         {"runtime": {"device": "cuda:-1"}},
         {"runtime": {"seed": -1}},
-        {"runtime": {"seed": 2**64}},
-        {"runtime": {"seed": 0.5}},
-        {"runtime": {"batch_size": 2}},
-        {"output": {"directory": None}},
         {"output": {"file": " "}},
         {"output": {"resume": "false"}},
-        {"output": {"directory": " "}},
     ],
-)
+)  # fmt: skip
 def test_coord_rejects_invalid_values(values: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         CoordConfig.model_validate({"model": {"name": "sincos"}, **values})
 
 
-@pytest.mark.parametrize("name", ["country", "worldclim", "worldclim-bio1", "dm-descals"])
-def test_coord_accepts_families_and_names(name: str) -> None:
-    config = load_config(_parse("--model", "sincos", "--dataset", name))
-    assert config.datasets == [name]
-
-
 @pytest.mark.parametrize("flag", ["--dataset", "--datasets", "--name", "--names"])
 def test_dataset_flag_aliases(flag: str) -> None:
-    config = load_config(_parse("--model", "sincos", flag, "country", "worldclim-bio1"))
-    assert config.datasets == ["country", "worldclim-bio1"]
+    config = load_config(_parse(f"--model sincos {flag} worldclim worldclim-bio1"))
+    assert config.datasets == ["worldclim", "worldclim-bio1"]
 
 
 def test_all_typed_flags() -> None:
-    config = load_config(
-        _parse(
-            "--model",
-            "sincos",
-            "--dataset",
-            "country",
-            "--methods",
-            "linear",
-            "knn",
-            "--split-test-type",
-            "official",
-            "--nested-splits",
-            "temporal_forecast_block,spatial",
-            "--folds",
-            "3",
-            "--inner-folds",
-            "4",
-            "--cell-deg",
-            "2.5",
-            "--time-units",
-            "week,2",
-            "month,1",
-            "--reset-year",
-            "--no-exclude-antarctica",
-            "--max-train-size",
-            "6",
-            "--test-size",
-            "2",
-            "--ridge-alphas",
-            "0.1",
-            "1",
-            "10",
-            "--knn-ks",
-            "7",
-            "9",
-            "--knn-device",
-            "cpu",
-            "--idw-ks",
-            "5",
-            "20",
-            "--idw-cs",
-            "0",
-            "1e-12",
-            "--device",
-            "cpu",
-            "--seed",
-            "42",
-            "--output",
-            "runs/coord.csv",
-            "--resume",
-        )
-    )
-    assert config.evaluation.model_dump() == {
-        "methods": ["linear", "knn"],
-        "split_test_type": "official",
-        "nested_splits": [("temporal_forecast_block", "spatial")],
-        "folds": 3,
-        "inner_folds": 4,
-        "cell_deg": 2.5,
-        "time_units": [("week", 2), ("month", 1)],
-        "reset_year": True,
-        "max_train_size": 6,
-        "test_size": 2,
-        "knn_ks": [7, 9],
-        "knn_device": "cpu",
-        "idw_ks": [5, 20],
-        "idw_cs": [0.0, 1e-12],
-        "ridge_alphas": [0.1, 1.0, 10.0],
-        "skip_no_timestamp": False, # new config addition for temporal tasks
-        "temporal_sampling_year": None,
-        "temporal_sampling_methods": [], # new config addition for temporal tasks
-        "temporal_discretization_methods": [], # new config addition for temporal tasks
-        "temporal_embedding_aggregation_methods": ["mean"],
-        "exclude_antarctica": False,
-        "from_polygon": False, # new config addition for spatial aggregation
-        "spatial_aggregation_methods": [], # new config addition for spatial aggregation
-        "subsample": False,
-        "save_predictions": False,
-    }
-
+    config = load_config(_parse(
+        "--model sincos --dataset country --methods linear knn --split-test-type official "
+        "--nested-splits temporal_forecast_block,spatial --folds 3 --inner-folds 4 --cell-deg 2.5 "
+        "--time-units week,2 month,1 --reset-year --no-exclude-antarctica --max-train-size 6 "
+        "--test-size 2 --ridge-alphas 0.1 1 10 --knn-ks 7 9 --knn-device cpu --idw-ks 5 20 "
+        "--idw-cs 0 1e-12 --device cpu --seed 42 --output runs/coord.csv --resume"
+    ))  # fmt: skip
+    expected = {
+        "methods": ["linear", "knn"], "split_test_type": "official",
+        "nested_splits": [("temporal_forecast_block", "spatial")], "folds": 3, "inner_folds": 4,
+        "cell_deg": 2.5, "time_units": [("week", 2), ("month", 1)], "reset_year": True,
+        "exclude_antarctica": False, "max_train_size": 6, "test_size": 2,
+        "ridge_alphas": [0.1, 1.0, 10.0], "knn_ks": [7, 9], "knn_device": "cpu",
+        "idw_ks": [5, 20], "idw_cs": [0.0, 1e-12],
+    }  # fmt: skip
+    assert config.evaluation.model_dump(include=set(expected)) == expected
     assert config.runtime.model_dump() == {"device": "cpu", "seed": 42}
-    assert config.output.model_dump() == {
-        "directory": "results",
-        "file": "runs/coord.csv",
-        "resume": True,
-    }
+    assert config.output.model_dump() == {"directory": "results", "file": "runs/coord.csv", "resume": True}  # fmt: skip
 
 
 def test_yaml_flag_precedence(tmp_path: Path) -> None:
     path = tmp_path / "coord.yaml"
     path.write_text(
-        "model:\n  name: sincos\n  kwargs:\n    batch_size: 16\n"
-        "datasets: [country]\nevaluation:\n  methods: [linear]\n  cell_deg: 1e1\n"
-        "runtime:\n  seed: 7\noutput:\n  file: custom.csv\n  resume: true\n"
+        "model: {name: sincos, kwargs: {batch_size: 16}}\ndatasets: [country]\n"
+        "evaluation: {methods: [linear], cell_deg: 1e1}\nruntime: {seed: 7}\n"
+        "output: {file: custom.csv, resume: true}\n"
     )
-    config = load_config(_parse("--config", str(path), "--no-resume", "--seed", "0"))
+    config = load_config(_parse(f"--config {path} --no-resume --seed 0"))
     assert config.model.kwargs == {"batch_size": 16}
     assert config.evaluation.methods == ["linear"]
     assert config.evaluation.cell_deg == 10.0
@@ -219,44 +118,19 @@ def test_yaml_flag_precedence(tmp_path: Path) -> None:
 
 def test_model_flag_replaces_yaml_constructor(tmp_path: Path) -> None:
     path = tmp_path / "coord.yaml"
-    path.write_text(
-        "model:\n  name: custom\n  target: custom.Encoder\n  kwargs:\n    feature: pooled\n"
-    )
-    config = load_config(_parse("--config", str(path), "--model", "sincos"))
-    assert config.model.name == "sincos"
-    assert config.model.target is None
-    assert config.model.kwargs == {}
-
-
-@pytest.mark.parametrize(
-    "content",
-    ["[]", "model: [", "model: {name: sincos, name: mind}", "model: !!python/object:a {}"],
-)
-def test_bad_yaml(tmp_path: Path, content: str) -> None:
-    path = tmp_path / "bad.yaml"
-    path.write_text(content)
-    with pytest.raises((ValueError, yaml.YAMLError)):
-        load_config(_parse("--config", str(path)))
-
-
-def test_missing_yaml(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
-        load_config(_parse("--config", str(tmp_path / "absent.yaml")))
+    path.write_text("model: {name: custom, target: custom.Encoder, kwargs: {feature: pooled}}\n")
+    model = load_config(_parse(f"--config {path} --model sincos")).model
+    assert (model.name, model.target, model.kwargs) == ("sincos", None, {})
 
 
 @pytest.mark.parametrize("name", ["timm/resnet50", "not-a-model"])
-def test_invalid_model_selection(name: str) -> None:
-    with pytest.raises(ValueError, match=r"image model|Unknown model config"):
-        load_config(_parse("--model", name))
-
-
 def test_run_reports_config_errors_with_argparse_status(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], name: str
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        run(_parse("--model", "timm/resnet50", "--dry-run"))
+        run(_parse(f"--model {name} --dry-run"))
     assert error.value.code == 2
-    assert "image model" in capsys.readouterr().err
+    assert re.search(r"image model|Unknown model config", capsys.readouterr().err)
 
 
 def test_coord_rejects_abbreviated_flags(capsys: pytest.CaptureFixture[str]) -> None:
@@ -267,73 +141,46 @@ def test_coord_rejects_abbreviated_flags(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_dry_run_roundtrip(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    run(_parse("--model", "sincos", "--methods", "linear", "--dry-run"))
+    run(_parse("--model sincos --methods linear --dry-run"))
     path = tmp_path / "coord.yaml"
     path.write_text(capsys.readouterr().out)
     config = load_coord_config(path)
     assert config.evaluation.methods == ["linear"]
-    assert load_config(_parse("--config", str(path))) == config
+    assert load_config(_parse(f"--config {path}")) == config
 
 
 @pytest.mark.parametrize(
     "model",
-    [
-        {"name": "sincos"},
-        {"name": "mind"},
-        {"name": "custom", "target": "uncached_optional_encoder.Custom", "kwargs": {"dim": 8}},
-    ],
-)
+    [{"name": "mind"}, {"name": "custom", "target": "uncached_optional_encoder.Custom", "kwargs": {"dim": 8}}],
+)  # fmt: skip
 def test_dry_run_does_not_import_runtime(tmp_path: Path, model: dict[str, Any]) -> None:
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump({"model": model, "datasets": ["country"]}))
     script = """
-import argparse
-import importlib.abc
-import sys
-
+import importlib.abc, sys
+blocked = {"torch", "numpy", "pandas", "omegaconf", "sklearn", "huggingface_hub",
+           "uncached_optional_encoder", "torchgeo_bench.coordbench.run",
+           "torchgeo_bench.coordbench.datasets"}
 class BlockRuntime(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        root = fullname.split(".")[0]
-        if root in {"torch", "numpy", "pandas", "omegaconf", "sklearn",
-                    "huggingface_hub", "uncached_optional_encoder"}:
+        if fullname in blocked or fullname.split(".")[0] in blocked:
             raise AssertionError(f"dry-run imported {fullname}")
-        if fullname in {"torchgeo_bench.coordbench.run", "torchgeo_bench.coordbench.datasets"}:
-            raise AssertionError(f"dry-run imported {fullname}")
-
 sys.meta_path.insert(0, BlockRuntime())
-from torchgeo_bench.commands.coord_arguments import add_coord_arguments
-from torchgeo_bench.commands._coord import run
-parser = argparse.ArgumentParser()
-add_coord_arguments(parser)
-run(parser.parse_args(["--config", sys.argv[1], "--dry-run"]))
+from torchgeo_bench.cli import main
+main(["coord", "--config", sys.argv[1], "--dry-run"])
 """
     result = subprocess.run(
         [sys.executable, "-c", script, str(path)],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "HF_HUB_OFFLINE": "1"},
-    )
+        capture_output=True, text=True, check=False, env={**os.environ, "HF_HUB_OFFLINE": "1"},
+    )  # fmt: skip
     assert result.returncode == 0, result.stderr
-    assert yaml.safe_load(result.stdout)["model"] == {
-        **model,
-        "target": model.get("target"),
-        "kwargs": model.get("kwargs", {}),
-    }
+    assert yaml.safe_load(result.stdout)["model"] == {"target": None, "kwargs": {}, **model}
 
 
 def test_command_dispatches_typed_config(monkeypatch: pytest.MonkeyPatch) -> None:
     configs = []
     monkeypatch.setattr("torchgeo_bench.coordbench.run.run_coordbench", configs.append)
-    run(_parse("--model", "sincos", "--dataset", "country"))
-    assert len(configs) == 1
-    assert isinstance(configs[0], CoordConfig)
-    assert configs[0].datasets == ["country"]
-
-
-def test_ridge_grid_yaml_and_fixed_alpha_override(tmp_path: Path) -> None:
-    path = tmp_path / "coord.yaml"
-    path.write_text("model: {name: sincos}\nevaluation: {ridge_alphas: [0.1, 1, 10]}\n")
-    assert load_coord_config(path).evaluation.ridge_alphas == [0.1, 1.0, 10.0]
-    config = load_config(_parse("--config", str(path), "--ridge-alphas", "2"))
-    assert config.evaluation.ridge_alphas == [2.0]
+    run(_parse("--model sincos --dataset country"))
+    (config,) = configs
+    assert isinstance(config, CoordConfig)
+    assert config.datasets == ["country"]

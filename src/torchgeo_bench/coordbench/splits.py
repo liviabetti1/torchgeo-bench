@@ -1,7 +1,6 @@
 """Row partitioning for CoordBench: splitters and the official / nested-CV evaluation protocols."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 import numpy as np
 from sklearn.model_selection import (
@@ -71,59 +70,36 @@ def time_unit_ids(
     if unit_str == "timestamp":
         return np.asarray(timestamp)
 
-    # convert timestamps into dates
-    dt = [datetime.fromtimestamp(t, UTC) for t in timestamp]
-    d0 = min(dt)
+    seconds = np.floor(np.asarray(timestamp, dtype=np.float64)).astype(np.int64).astype("datetime64[s]")
+    days = seconds.astype("datetime64[D]").astype(np.int64)  # days since 1970-01-01
+    months = seconds.astype("datetime64[M]").astype(np.int64)  # months since 1970-01
+    year = months // 12 + 1970
+    day_of_year = days - seconds.astype("datetime64[Y]").astype("datetime64[D]").astype(np.int64)
 
-    # tm_yday returns the day of the year
-    # toordinal returns integer as position in Gregorian calendar
     if unit_str == "day":
-        ids = [
-            d.year * 400 + (d.timetuple().tm_yday - 1) // size
-            if reset_year
-            else (d.toordinal() - d0.toordinal()) // size
-            for d in dt
-        ]
+        ids = year * 400 + day_of_year // size if reset_year else (days - days.min()) // size
     elif unit_str == "week":
         # NOT CALENDER ALIGNED, so not Monday - Sunday
-        ids = [
-            d.year * 54 + (d.timetuple().tm_yday - 1) // (7 * size)
-            if reset_year
-            else (d.toordinal() - d0.toordinal()) // (7 * size)
-            for d in dt
-        ]
+        weeks = 7 * size
+        ids = year * 54 + day_of_year // weeks if reset_year else (days - days.min()) // weeks
     elif unit_str == "month":
-        ids = [
-            d.year * 12 + (d.month - 1) // size
-            if reset_year
-            else (d.year * 12 + d.month - (d0.year * 12 + d0.month)) // size
-            for d in dt
-        ]
+        ids = year * 12 + (months % 12) // size if reset_year else (months - months.min()) // size
     elif unit_str == "quarter":
-            ids = [
-                d.year * 4 + ((d.month - 1) // 3) // size
-                if reset_year
-                else (
-                    d.year * 4 + (d.month - 1) // 3 - (d0.year * 4 + (d0.month - 1) // 3)
-                ) // size
-                for d in dt
-            ]
+        quarters = months // 3
+        ids = year * 4 + (quarters % 4) // size if reset_year else (quarters - quarters.min()) // size
     elif unit_str == "season":
         # use meteorological seasons:, DJF, MAM, JJA, SON
         # if used within a single year, this will be a bit weird
         if reset_year:
             raise ValueError("Meteorological seasons can cross year boundaries.")
-        
-        ids = [
-            (d.year * 4 + d.month // 3 - (d0.year * 4 + d0.month // 3)) // size
-            for d in dt
-        ]
+        seasons = (months + 1) // 3  # December starts the next year's winter
+        ids = (seasons - seasons.min()) // size
     elif unit_str == "year":
-        ids = [(d.year - d0.year) // size for d in dt]
+        ids = (year - year.min()) // size
     else:
         raise ValueError(f"Unknown time unit {unit_str}")
 
-    return np.asarray(ids, dtype=np.int64)
+    return ids.astype(np.int64)
 
 
 def split(
@@ -189,43 +165,43 @@ def split(
     return pairs
 
 
-def split_variants(cfg: CoordEvaluationConfig) -> list[tuple[str, str, tuple[str, int]]]:
+def split_variants(cfg: CoordEvaluationConfig) -> list[tuple[str, str, tuple[str, int] | None]]:
     """(outer, inner, time_unit) combinations; pairs without a temporal split use only the first time unit."""
+    time_units = cfg.time_units or [None]
     return [
         (outer, inner, unit)
         for outer, inner in cfg.nested_splits
         for unit in (
-            cfg.time_units
+            time_units
             if outer.startswith("temporal") or inner.startswith("temporal")
-            else cfg.time_units[:1]
+            else time_units[:1]
         )
     ]
 
 
 def make_folds(
-    cfg: CoordEvaluationConfig, bench: CoordBenchmark, rows: np.ndarray, seed: int
-) -> dict[tuple[str, str, tuple[str, int]], list[OuterFold]]:
-    """Outer folds with inner tuning pairs, keyed by ``split_variants`` entry.
+    cfg: CoordEvaluationConfig,
+    bench: CoordBenchmark,
+    rows: np.ndarray,
+    seed: int,
+    variant: tuple[str, str, tuple[str, int] | None],
+) -> list[OuterFold]:
+    """Outer folds with inner tuning pairs for one ``split_variants`` entry.
 
     official: bench.test_mask defines the outer test set; inner CV tunes on the rest.
     nested_cv: each outer split defines an outer CV; inner CV tunes within each outer train.
     """
+    outer, inner, unit = variant
     if cfg.split_test_type == "official":
         if bench.test_mask is None:
             raise ValueError(f"split_test_type='official' needs a test_mask; {bench.name} has none")
         is_test = np.asarray(bench.test_mask, dtype=bool)[rows]
-    elif cfg.split_test_type != "nested_cv":
+        pairs = [(rows[~is_test], rows[is_test])]
+    elif cfg.split_test_type == "nested_cv":
+        pairs = split(cfg, outer, cfg.folds, bench, rows, seed, unit)
+    else:
         raise ValueError(f"Unknown split_test_type: {cfg.split_test_type}")
-
-    folds = {}
-    for outer, inner, unit in split_variants(cfg):
-        pairs = (
-            [(rows[~is_test], rows[is_test])]
-            if cfg.split_test_type == "official"
-            else split(cfg, outer, cfg.folds, bench, rows, seed, unit)
-        )
-        folds[outer, inner, unit] = [
-            OuterFold(train=tr, test=te, inner=split(cfg, inner, cfg.inner_folds, bench, tr, seed, unit))
-            for tr, te in pairs
-        ]
-    return folds
+    return [
+        OuterFold(train=tr, test=te, inner=split(cfg, inner, cfg.inner_folds, bench, tr, seed, unit))
+        for tr, te in pairs
+    ]

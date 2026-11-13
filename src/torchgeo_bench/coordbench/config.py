@@ -72,12 +72,12 @@ class CoordEvaluationConfig(StrictModel):
             ],
             Strict(False),
         ]
-    ] = Field(default=[("month", 1)], min_length=1)
+    ] | None = Field(default=None, min_length=1)
     reset_year: StrictBool = False
     max_train_size: StrictInt | None = None  # time units in the temporal_forecast_block window
     test_size: StrictInt = Field(default=1, gt=0)  # time units forecast per temporal_forecast fold
     knn_ks: list[StrictInt] = Field(default=[5])
-    knn_device: KnnDevice = "cpu"
+    knn_device: KnnDevice = "cuda"
     idw_ks: list[StrictInt] = Field(default=[5])
     idw_cs: list[StrictFloat] = Field(default=[0.0])
     ridge_alphas: list[Annotated[StrictFloat, Field(gt=0)]] = Field(
@@ -105,11 +105,13 @@ class CoordEvaluationConfig(StrictModel):
             raise ValueError("methods must not contain duplicates")
         if len(set(self.nested_splits)) != len(self.nested_splits):
             raise ValueError("nested_splits must not contain duplicates")
-        if len(set(self.time_units)) != len(self.time_units):
+        if self.time_units is not None and len(set(self.time_units)) != len(self.time_units):
             raise ValueError("time_units must not contain duplicates")
         if self.split_test_type == "official" and len({o for o, _ in self.nested_splits}) > 1:
             raise ValueError("split_test_type='official' ignores the outer split; give it one")
         splits = {s for pair in self.nested_splits for s in pair}
+        if self.time_units is None and any(s.startswith("temporal") for s in splits):
+            raise ValueError("temporal splits require time_units")
         if "temporal_forecast_block" in splits and self.max_train_size is None:
             raise ValueError("temporal_forecast_block requires max_train_size")
         if "temporal_forecast_block" in splits and self.test_size > self.max_train_size:
