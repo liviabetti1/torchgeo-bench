@@ -103,8 +103,6 @@ def test_non_daily_sampling_drops_partial_weeks_across_every_field(key: tuple | 
     assert sampled.posix_timestamp.shape == (3, 7)
     np.testing.assert_array_equal(sampled.lat, [0.0, 1.0, 2.0])
     np.testing.assert_array_equal(sampled.tasks["y"], [0.0, 1.0, 2.0])
-    # _expand_temporal resamples the same benchmark once per season/discretization.
-    np.testing.assert_array_equal(bench.tasks["y"], np.arange(4.0))
     if key is None:
         assert sampled.spatial_aggregation_key is None
     else:

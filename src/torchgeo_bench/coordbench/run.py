@@ -33,7 +33,6 @@ from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import (
     discretize_dataset_and_aggregate_embeddings,
-    pool_embeddings,
     temporal_sample_and_aggregate_embeddings,
 )
 from torchgeo_bench.coordbench.models import LocationEncoder
@@ -146,6 +145,20 @@ def _predictor(method: str, data: ProbeData, cfg: CoordConfig) -> tuple:
     return idw_predictor(data, coord.knn_device), list(itertools.product(coord.idw_ks, coord.idw_cs))
 
 
+# Statistics each aggregation method concatenates, channel-wise, into the probe features.
+POOLED_STATS = {
+    "mean": ["mean"],
+    "mean_std_slope_tv": ["mean", "std", "slope", "total_variation"],
+}
+
+
+def pool_embeddings(embeddings: dict[str, torch.Tensor], method: str) -> np.ndarray:
+    """Concatenate the statistics `method` pools into probe features of shape (N, len(stats) * D)."""
+    if method not in POOLED_STATS:
+        raise NotImplementedError(f"Embedding aggregation method not implemented: {method}")
+    return torch.cat([embeddings[stat] for stat in POOLED_STATS[method]], dim=1).numpy()
+
+
 def _pooled(
     bench: CoordBenchmark, embeddings: dict[str, torch.Tensor], aggregation: str
 ) -> tuple[CoordBenchmark, np.ndarray]:
@@ -170,7 +183,7 @@ def _expand_temporal(
                     temporal_sampling_methods, discretization_methods, embedding_aggregation_methods
                 ):
                     sampled, embeddings = temporal_sample_and_aggregate_embeddings(
-                        bench, encoder, sampling, discretization, aggregation
+                        bench, encoder, sampling, discretization
                     )
                     yield _pooled(sampled, embeddings, aggregation)
             else:
@@ -182,7 +195,7 @@ def _expand_temporal(
                 temporal_sampling_methods or ["year"], discretization_methods, embedding_aggregation_methods
             ):
                 sampled, embeddings = temporal_sample_and_aggregate_embeddings(
-                    bench, encoder, season, discretization, aggregation
+                    bench, encoder, season, discretization
                 )
                 yield _pooled(sampled, embeddings, aggregation)
             continue
@@ -192,7 +205,7 @@ def _expand_temporal(
         for discretization in discretization_methods:
             for aggregation in embedding_aggregation_methods:
                 discretized, embeddings = discretize_dataset_and_aggregate_embeddings(
-                    bench, encoder, discretization, aggregation
+                    bench, encoder, discretization
                 )
                 discretized.tasks = {
                     name: values
