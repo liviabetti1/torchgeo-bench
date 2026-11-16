@@ -55,65 +55,14 @@ EMBEDDING_AGGREGATION_METHODS = [
 EMBEDDING_STATS = ["mean", "min", "max", "std", "slope", "total_variation"]
 LABEL_STATS = ["mean", "min", "max"]
 
-def temporal_checkerboard(datasets: Sequence[tuple[CoordBenchmark, np.ndarray]]) -> Iterator[tuple[CoordBenchmark, np.ndarray]]:
-    for benchmark, embeddings in datasets:
-        num_years = (np.max(benchmark.posix_timestamp) - np.min(benchmark.posix_timestamp)) // DAY_SECONDS * 365
-        masks = spin_up_checkerboard(benchmark, num_years)
-        for mask_name, test_mask in masks.items():
-            checkerboarded_benchmark = copy.copy(benchmark)
-            checkerboarded_benchmark.test_mask = test_mask
-            checkerboarded_benchmark.name = f"{benchmark.name}_{mask_name}"
-            yield checkerboarded_benchmark, embeddings
-
-
-
-def spin_up_checkerboard(benchmark: CoordBenchmark, num_years: int):
-    dates = pd.to_datetime(benchmark.posix_timestamp, unit="s", utc=True)
-
-    day_index = np.asarray(dates.floor("D").astype("int64") // 86400)
-    day_mask = (day_index % 2 == 0)
-
-    week_index = (
-            dates.floor("D") - pd.Timedelta(days=0)
-    ).to_period("W-SUN").astype("int64")
-    week_mask = (week_index % 2 == 0)
-    month_mask = (dates.year * 12 + dates.month) % 2 == 0
-    season_mask = (week_index // 13) % 2 == 0
-    year_mask = (dates.year % 2 == 0)
-    two_year_mask = (dates.year // 2 % 2 == 0)
-    four_year_mask = (dates.year // 4 % 2 == 0)
-
-    masks = {}
-    res_in_seconds = DISCRETIZATION_METHODS_TO_SECONDS[benchmark.temporal_resolution.value]
-    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.DAILY.value]:
-        masks["daily_blocks"] = day_mask
-    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.WEEKLY.value]:
-        masks["weekly_blocks"] = week_mask
-    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.MONTHLY.value]:
-        masks["monthly_blocks"] = month_mask
-    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.SEASONALLY.value]:
-        masks["seasonal_blocks"] = season_mask
-    if res_in_seconds <= DISCRETIZATION_METHODS_TO_SECONDS[TemporalResolution.YEARLY.value]:
-        if num_years > 2:
-            masks["yearly_blocks"] = year_mask
-        if num_years > 4:
-            masks["2_year_blocks"] = two_year_mask
-        if num_years > 6:
-            masks["4_year_blocks"] = four_year_mask
-
-    return masks
 
 
 
 
-def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
-    if dataset.temporal_resolution == TemporalResolution.WEEKLY:
-        step = DISCRETIZATION_METHODS_TO_SECONDS[discretization] # take aggregate daily details
-    elif dataset.temporal_resolution == TemporalResolution.MONTHLY:
-        step = DISCRETIZATION_METHODS_TO_SECONDS[discretization] # aggregate weekly
-    elif dataset.temporal_resolution == TemporalResolution.YEARLY:
-        step = DISCRETIZATION_METHODS_TO_SECONDS[discretization] # aggregate by month . . . might make higher?
-    else:
+def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str, season: str = "year"):
+    step = DISCRETIZATION_METHODS_TO_SECONDS[discretization]
+
+    if dataset.temporal_resolution not in (TemporalResolution.WEEKLY, TemporalResolution.MONTHLY, TemporalResolution.YEARLY):
         raise NotImplementedError("Only do temporal sampling on datasets that are more coarse than daily")
 
     timestamps_with_leapdays = []
@@ -124,6 +73,8 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
         end = dataset.end_timestamp[i]
 
         new_timestamps = np.arange(start, end, step)
+        new_timestamps = new_timestamps[pd.to_datetime(new_timestamps, unit="s").month.isin(TEMPORAL_SAMPLING_MONTHS[season])]
+
         timestamps_with_leapdays.append(new_timestamps)
         if max_size < new_timestamps.shape[0]:
             max_size = new_timestamps.shape[0]
@@ -150,7 +101,8 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
 
     if len(samples_to_ignore) != 0:
         for task_name, task_values in dataset.tasks.items():
-            dataset.tasks[task_name] = np.delete(task_values, samples_to_ignore)
+            dataset.tasks = {**dataset.tasks, task_name: np.delete(task_values, samples_to_ignore)}
+
 
     if dataset.spatial_aggregation_key is None:
         new_spatial_agg_key = None
@@ -164,7 +116,7 @@ def non_daily_temporal_sampling(dataset: CoordBenchmark, discretization: str):
         new_test_mask = np.delete(dataset.test_mask, samples_to_ignore)
 
     return CoordBenchmark(
-        name=f"{dataset.name}_{discretization}_discretization",
+        name=f"{dataset.name}_{season}_{discretization}",
         lat=np.delete(dataset.lat, samples_to_ignore),
         lon=np.delete(dataset.lon, samples_to_ignore),
         tasks=dataset.tasks,
@@ -439,9 +391,8 @@ def temporal_sample_and_aggregate_embeddings(
 
 
     if dataset.temporal_resolution is None:
-        temporally_sampled_dataset = no_timestamp_temporal_sampling(
-            dataset, temporal_sampling_method, discretization_method
-        )
+        temporally_sampled_dataset = non_daily_temporal_sampling(dataset, discretization_method, temporal_sampling_method)
+
     else:
         temporally_sampled_dataset = non_daily_temporal_sampling(dataset, discretization_method)
 

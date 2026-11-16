@@ -38,7 +38,7 @@ torchgeo-bench coord \
     --model "$MODEL" \
     --dataset pdfm air_temp california_housing satclip sustainbench better_together \
               cdc_places usavars country ecoregions worldclim soilgrids deepmind \
-    --split both \
+    --nested-splits random,random spatial,random \
     --resume \
     --output "$RESULTS/coordbench_atemporal.csv" \
     --device cuda:0 \

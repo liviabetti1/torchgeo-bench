@@ -1,7 +1,6 @@
-# Running two tasks:
-# - 8 daily electrical load datasets, one per year from 2016-2023.
-# - 1 weekly electrical load dataset that spans all of 2016-2023
-#set -euo pipefail
+#!/usr/bin/env bash
+# Weekly USA electrical load, 2016-2023. Pass --device cuda:N --knn-device cuda:N as extra args.
+set -euo pipefail
 source $TORCHGEO_ENV/bin/activate torchgeo-bench
 
 RESULTS=$RESULTS_HOME/year_patch # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
@@ -30,13 +29,12 @@ MODELS=(
   "t_satclip/t_satclip_y_300k"
 )
 
+SPLITS=(--nested-splits random,random temporal_checkerboard,random --time-units year,1 season,1)
 out="$RESULTS/usa_electrical_load_weekly.csv"
+
 for model in "${MODELS[@]}"; do
-  torchgeo-bench coord --model "$model" \
-  --dataset usa_electric_load_weekly \
-  --temporal-discretization-methods two_days \
-  --temporal-checkerboard \
-  --save-predictions \
-  --subsample \
-  --output "$out" "$@"
+  torchgeo-bench coord --model "$model" --dataset usa_electric_load_weekly --methods linear "${SPLITS[@]}" --resume --output "$out" "$@"
 done
+
+# IDW reads only coordinates, so it runs once without a model.
+torchgeo-bench coord --dataset usa_electric_load_weekly --methods idw "${SPLITS[@]}" --resume --output "$out" "$@"

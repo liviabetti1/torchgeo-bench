@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # https://huggingface.co/datasets/taylor-geospatial/coordbench
 COORDBENCH_REPO = os.environ.get("COORDBENCH_REPO", "taylor-geospatial/coordbench")
 # Integrate with coordbench (right now, this is my personal repo)
-COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "Temporal-Coordbench") # REMOVE 
+COORDBENCH_EXTENSION_REPO = os.environ.get("COORDBENCH_EXTENSION_REPO", "Temporal-Coordbench") 
 
 # canonical (non-task) schema columns, excluded when scanning for task columns
 _CANONICAL_EXTRA = frozenset({"timestamp", "timestamp_end", "split", "id"})
@@ -204,11 +204,11 @@ def load_satclip() -> list[CoordBenchmark]:
 def load_sustainbench() -> list[CoordBenchmark]:
     """SustainBench DHS SDG indices — 6 socioeconomic regressions at cluster centroids.
 
-    Uses the dataset's official trainval/test split (``test_mask``), matching the
-    SustainBench protocol rather than k-fold CV.
+    Evaluated with the random and spatial CV splits over trainval and test clusters together.
     """
-    df = load_config("sustainbench")  # merged table; split == "trainval" | "test"
-    is_test = (df["split"] == "test").to_numpy()
+    # changed this so we're not using the official test mask
+    # and instead, using out own
+    df = load_config("sustainbench")
     out: list[CoordBenchmark] = []
     for key, col in SUSTAINBENCH_TASKS.items():
         m = df[col].notna() & df["lat"].notna() & df["lon"].notna()
@@ -219,7 +219,6 @@ def load_sustainbench() -> list[CoordBenchmark]:
                 lat=sub["lat"].to_numpy(np.float64),
                 lon=sub["lon"].to_numpy(np.float64),
                 tasks={col: sub[col].to_numpy(np.float64)},
-                test_mask=is_test[m.to_numpy()],
             )
         )
     return out
@@ -779,39 +778,6 @@ CAN_SUBSAMPLE = [
     "global_population",
     "viirs_night_lights"
 ]
-# Benchmark names each family emits; lets a selection load only the needed family,
-# and lets callers enumerate the suite without a download.
-FAMILY_BENCHMARKS: dict[str, tuple[str, ...]] = {
-    "pdfm": ("pdfm-conus27",),
-    "air_temp": ("satclip-air-temp",),
-    "california_housing": ("california-housing",),
-    "satclip": (
-        "satclip-country",
-        "satclip-ecoregion",
-        "satclip-biome",
-        "satclip-population",
-        "satclip-elevation",
-    ),
-    "sustainbench": tuple(f"sustainbench-{k}" for k in SUSTAINBENCH_TASKS),
-    "better_together": (
-        "bt-cropharvest",
-        "bt-biomass",
-        "bt-landcover",
-        "bt-bioclim",
-        "bt-population",
-        "bt-distroad",
-    ),
-    "cdc_places": tuple(f"places-{k}" for k in CDC_PLACES_MEASURES),
-    "usavars": tuple(f"mosaiks-{label}" for label in USAVARS_LABELS),
-    "country": ("country",),
-    "ecoregions": ("ecoregions",),
-    "worldclim": ("worldclim-bio1", "worldclim-bio12"),
-    "soilgrids": ("soilgrids-soc", "soilgrids-phh2o"),
-    "deepmind": tuple(f"dm-{stem}" for stem in DEEPMIND_EVAL_CONFIGS),
-    "era5_ecmwf": ("era5_ecmwf",),
-    "chelsa": ("chelsa",),
-    "ghcn_daily": ("ghcn_daily",),
-}
 
 _BENCHMARK_TO_FAMILY: dict[str, str] = {
     name: family for family, names in FAMILY_BENCHMARKS.items() for name in names

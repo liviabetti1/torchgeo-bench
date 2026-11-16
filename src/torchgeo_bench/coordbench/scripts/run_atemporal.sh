@@ -39,7 +39,7 @@ for model in "${MODELS[@]}"; do
         torchgeo-bench coord \
             --model "$model" \
             --dataset "$dataset" \
-            --split all \
+            --nested-splits random,random spatial,random \
             --resume \
             --output "$out" \
             "$@"

@@ -2,8 +2,8 @@
 
 Driven by a :class:`CoordConfig`: instantiate a coordinate encoder from its
 model preset, embed each benchmark's points once, then probe
-with KNN and/or a ridge linear head under random and/or spatial-block
-cross-validation. One CSV row per (benchmark, task, method, split) is appended
+with linear, KNN, and/or IDW heads under an official test mask or nested CV
+(see splits.py). One CSV row per (benchmark, task, method) is appended
 to ``output.file`` via the shared atomic writer, with resume support.
 """
 
@@ -12,9 +12,9 @@ import logging
 import os
 import time
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -32,16 +32,20 @@ from torchgeo_bench.coordbench.config_enums import TemporalResolution
 from torchgeo_bench.coordbench.datasets import CoordBenchmark, load_benchmarks
 from torchgeo_bench.coordbench.spatial_aggregation import SPATIAL_AGGREGATION_METHODS, spatial_aggregation
 from torchgeo_bench.coordbench.temporal_aggregation import (
-    DISCRETIZATION_METHODS_TO_SECONDS,
     discretize_dataset_and_aggregate_embeddings,
-    temporal_sample_and_aggregate_embeddings, temporal_checkerboard,
+    pool_embeddings,
+    temporal_sample_and_aggregate_embeddings,
 )
 from torchgeo_bench.coordbench.models import LocationEncoder
 from torchgeo_bench.coordbench.probe import (
-    knn_probe_score,
-    linear_probe_score
+    ProbeData,
+    _valid_mask,
+    evaluate,
+    idw_predictor,
+    knn_predictor,
+    ridge_predictor,
 )
-from torchgeo_bench.coordbench.splits import spatial_fold_ids, temporal_fold_ids
+from torchgeo_bench.coordbench.splits import make_folds, split_variants
 from torchgeo_bench.devices import resolve_device
 from torchgeo_bench.results import append_rows_atomic
 
@@ -52,11 +56,29 @@ RESUME_KEY_COLS = (
     "task",
     "method",
     "model_name",
+    "split_test_type",
     "split",
+    "inner_split",
+    "split_params",
     "temporal_embedding_aggregation",
-    "cell_deg",
-    "temporal_grid_size",
 )
+
+
+def _split_params(
+    coord: CoordEvaluationConfig, splits: tuple[str, str], time_unit: tuple[str, int] | None
+) -> str:
+    """Split settings that identify a result row, in the key order stored by earlier runs."""
+    # test_size joins the key only for temporal splits, so random/spatial results stored before
+    # it existed still resume.
+    temporal = any(s.startswith("temporal") for s in splits)
+    tail = {"reset_year", "max_train_size"} | ({"test_size"} if temporal else set())
+    unit, unit_size = time_unit or (None, None)
+    return str({
+        **coord.model_dump(include={"folds", "inner_folds", "cell_deg"}),
+        "time_unit": unit,
+        "time_unit_size": unit_size,
+        **coord.model_dump(include=tail),
+    })
 
 
 @dataclass
@@ -66,15 +88,17 @@ class CoordResult:
     dataset: str  # benchmark name (e.g. "sustainbench-asset")
     task: str  # label/column name within the benchmark
     task_type: str  # "regression" | "classification"
-    method: str  # "linear" | "knn{k}"
-    split: str  # "random" | "spatial" | "official"
+    method: str  # "linear" | "knn" | "idw"
+    split_test_type: str  # "official" | "nested_cv"
+    split: str
+    inner_split: str
+    split_params: str
     metric_name: str  # "r2" | "accuracy"
-    metric_value: float  # mean over folds (or the held-out score)
+    metric_value: float  # mean over outer folds
     ci_lower: float  # metric_value - std over folds
     ci_upper: float  # metric_value + std over folds
     n_folds: int
-    cell_deg: float
-    temporal_grid_size: float | None
+    best_params: str  # tuned grid point per outer fold
     feature_dim: int
     n_samples: int
     n_test: int
@@ -100,15 +124,6 @@ def _instantiate_encoder(preset: ModelPreset, device: str) -> LocationEncoder:
     return encoder
 
 
-def _resolve_splits(split: str) -> list[str]:
-    """Expand the selected CV modes to run."""
-    if split == "all":
-        return ["random", "spatial", "temporal"]
-    if split not in ("random", "spatial", "temporal"):
-        raise ValueError(f"evaluation.split must be random|spatial|temporal|all; got {split!r}")
-    return [split]
-
-
 def _completed_keys(output_path: str) -> set[tuple[str, ...]]:
     """Existing (dataset, task, method, model_name, split) keys for resume."""
     if not os.path.exists(output_path):
@@ -121,110 +136,29 @@ def _completed_keys(output_path: str) -> set[tuple[str, ...]]:
     return {tuple(r) for r in rows}
 
 
-def _methods_for(task_type: str, requested: Sequence[str], knn_k: int) -> list[tuple[str, str]]:
-    """Resolve (method-label, kind) pairs applicable to a task type.
-
-    KNN is classification-only (there is no KNN-regression head here); the ridge
-    linear probe handles both regression (R^2) and classification (accuracy).
-    """
-    methods: list[tuple[str, str]] = []
-    if "knn" in requested and task_type == "classification":
-        methods.append((f"knn{knn_k}", "knn"))
-    if "linear" in requested:
-        methods.append(("linear", "linear"))
-    return methods
+def _predictor(method: str, data: ProbeData, cfg: CoordConfig) -> tuple:
+    """Build one probe's ``predict`` function and its hyperparameter grid."""
+    coord = cfg.evaluation
+    if method == "linear":
+        return ridge_predictor(data, cfg.runtime.device), coord.ridge_alphas
+    if method == "knn":
+        return knn_predictor(data, coord.knn_device), coord.knn_ks
+    return idw_predictor(data, coord.knn_device), list(itertools.product(coord.idw_ks, coord.idw_cs))
 
 
-def _score_one(
-    kind: str,
-    features: np.ndarray,
-    labels: np.ndarray,
-    task_type: str,
-    *,
-    folds: int,
-    seed: int,
-    device: str,
-    knn_device: str,
-    knn_k: int,
-    alphas: tuple[float, ...],
-    test_mask: np.ndarray | None,
-    fold_assign: np.ndarray | None,
-) -> tuple[float, list[float]]:
-    """KNN or linear probe for one (dataset, task, method) combination."""
-    if kind == "knn":
-        return knn_probe_score(
-            features,
-            labels,
-            folds=folds,
-            seed=seed,
-            k=knn_k,
-            device=knn_device,
-            test_mask=test_mask,
-            fold_assign=fold_assign,
-        )
-    return linear_probe_score(
-        features,
-        labels,
-        task_type,
-        folds=folds,
-        seed=seed,
-        device=device,
-        alphas=alphas,
-        test_mask=test_mask,
-        fold_assign=fold_assign,
-    )
-
-
-_SweepValue = TypeVar("_SweepValue", bound="float | str | None")
-
-
-def _sweep_values(scalar: _SweepValue, overrides: Sequence[_SweepValue] | None) -> list[_SweepValue]:
-    """Return explicit sweep overrides if given, else the single scalar value."""
-    return list(overrides) if overrides else [scalar]
-
-
-def _evaluation_splits(
-    bench: CoordBenchmark, coord: CoordEvaluationConfig, seed: int
-) -> list[tuple[str, np.ndarray | None, np.ndarray | None, float, float | None]]:
-    """Build one (split_label, test_mask, fold_assign, cell_deg, temporal_grid_size) run per split.
-
-    An official holdout mask takes precedence over every requested CV split and sweep,
-    and is evaluated exactly once.
-    """
-    if bench.test_mask is not None:
-        return [("official", bench.test_mask, None, 0.0, 0.0)]
-
-    runs: list[tuple[str, np.ndarray | None, np.ndarray | None, float, float | None]] = []
-    for split in _resolve_splits(coord.split):
-        if split == "random":
-            runs.append(("random", None, None, 0.0, 0.0))
-        elif split == "spatial":
-            for cell_deg in _sweep_values(coord.cell_deg, coord.cell_degs):
-                assignment = spatial_fold_ids(bench.lat, bench.lon, coord.folds, cell_deg, seed)
-                runs.append(("spatial", None, assignment, cell_deg, 0.0))
-        elif split == "temporal":
-            if bench.posix_timestamp is None:
-                continue
-            if coord.split == "all" and coord.temporal_grid_size is None and not coord.temporal_grid_sizes:
-                logger.info(
-                    "%s: skipping temporal split under split=all (no temporal_grid_size set)",
-                    bench.name,
-                )
-                continue
-            for grid_size_name in _sweep_values(coord.temporal_grid_size, coord.temporal_grid_sizes):
-                grid_size = DISCRETIZATION_METHODS_TO_SECONDS[str(grid_size_name)]
-                assignment = temporal_fold_ids(
-                    bench.posix_timestamp, method="grid", folds=coord.folds, temporal_grid_size=grid_size
-                )
-                runs.append(("temporal", None, assignment, 0.0, grid_size))
-    return runs
+def _pooled(
+    bench: CoordBenchmark, embeddings: dict[str, torch.Tensor], aggregation: str
+) -> tuple[CoordBenchmark, np.ndarray]:
+    """Pool the embeddings and name the benchmark so each aggregation keeps its own result rows."""
+    bench.name = f"{bench.name}_{aggregation}"
+    return bench, pool_embeddings(embeddings, aggregation)
 
 
 def _expand_temporal(
     benchmarks: Sequence[CoordBenchmark],
     discretization_methods: Sequence[str],
     temporal_sampling_methods: Sequence[str],
-    embedding_aggregation_methods: Sequence[str] = ("statistics",),
+    embedding_aggregation_methods: Sequence[str],
     *,
     encoder: LocationEncoder,
 ) -> Iterator[tuple[CoordBenchmark, np.ndarray | None]]:
@@ -238,19 +172,19 @@ def _expand_temporal(
                     sampled, embeddings = temporal_sample_and_aggregate_embeddings(
                         bench, encoder, sampling, discretization, aggregation
                     )
-                    print("For now, only returning the mean embeddings")
-                    yield sampled, embeddings["mean"].numpy()
+                    yield _pooled(sampled, embeddings, aggregation)
             else:
                 yield bench, None
             continue
 
         elif bench.temporal_resolution != TemporalResolution.DAILY:
-            for discretization, aggregation in itertools.product(discretization_methods, embedding_aggregation_methods):
-                # sampling and discretization are hard-coded for the time being
+            for season, discretization, aggregation in itertools.product(
+                temporal_sampling_methods or ["year"], discretization_methods, embedding_aggregation_methods
+            ):
                 sampled, embeddings = temporal_sample_and_aggregate_embeddings(
-                    bench, encoder, "", discretization, aggregation
+                    bench, encoder, season, discretization, aggregation
                 )
-                yield sampled, embeddings["mean"].numpy()
+                yield _pooled(sampled, embeddings, aggregation)
             continue
 
 
@@ -265,11 +199,7 @@ def _expand_temporal(
                     for name, values in discretized.tasks.items()
                     if name.endswith(f"_{label_stat}")
                 }
-                # For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.
-                # Or another method...
-                print(f"Expanded {bench.name} with {discretization} discretization and {aggregation} aggregation: {discretized.name}, {embeddings['mean'].shape}")
-                print(f"For now, we only return the mean embeddings for each temporal window, but we could also return min/max if desired.")
-                yield discretized, embeddings["mean"].numpy()
+                yield _pooled(discretized, embeddings, aggregation)
                 del discretized, embeddings
 
 
@@ -290,7 +220,17 @@ def _expected_benchmark_count(
         * len(coord.temporal_discretization_methods)
         * len(coord.temporal_embedding_aggregation_methods)
     )
-    count = with_timestamp * methods_per_timestamp + without_timestamp + sampled
+    coarse = sum(
+        b.posix_timestamp is not None and b.temporal_resolution != TemporalResolution.DAILY
+        for b in benchmarks
+    )
+    seasons_per_coarse = max(1, len(coord.temporal_sampling_methods))
+    count = (
+        with_timestamp * methods_per_timestamp
+        + coarse * methods_per_timestamp * (seasons_per_coarse - 1)
+        + without_timestamp
+        + sampled
+    )
     if coord.from_polygon:
         count *= sum(m in SPATIAL_AGGREGATION_METHODS for m in coord.spatial_aggregation_methods)
     return count
@@ -317,24 +257,14 @@ def run_coordbench(cfg: CoordConfig) -> None:
     torch.manual_seed(cfg.runtime.seed)
     if cfg.runtime.device != device:
         cfg = cfg.model_copy(update={"runtime": cfg.runtime.model_copy(update={"device": device})})
-    splits = _resolve_splits(cfg.evaluation.split)
 
     coord = cfg.evaluation
-    seed = cfg.runtime.seed
-    folds = coord.folds
-    cell_deg = coord.cell_deg
-    knn_k = coord.knn_k
-    knn_device = coord.knn_device
-    methods = coord.methods
     temporal_discretization_methods = list(coord.temporal_discretization_methods)
     temporal_sampling_methods = list(coord.temporal_sampling_methods)
     temporal_embedding_aggregation_methods = list(coord.temporal_embedding_aggregation_methods)
     from_polygon = coord.from_polygon
     should_subsample = coord.subsample
     spatial_aggregation_methods = list(coord.spatial_aggregation_methods)
-    model_name = preset.name
-    model_target = preset.target
-    use_temporal_checkerboarding = coord.temporal_checkerboard
     save_predictions = coord.save_predictions
 
     output_path = resolve_output_path(
@@ -342,8 +272,11 @@ def run_coordbench(cfg: CoordConfig) -> None:
     )
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    encoder = _instantiate_encoder(preset, device)
-    logger.info("CoordBench: model=%s device=%s splits=%s", preset.name, device, splits)
+    encoder = None if preset is None else _instantiate_encoder(preset, device)
+    logger.info(
+        "CoordBench: model=%s device=%s nested_splits=%s",
+        "idw" if preset is None else preset.name, device, coord.nested_splits,
+    )  # fmt: skip
 
     completed = _completed_keys(output_path) if cfg.output.resume else set()
     if completed:
@@ -394,9 +327,6 @@ def run_coordbench(cfg: CoordConfig) -> None:
             if b.posix_timestamp is not None or emb is not None
         )
 
-    if use_temporal_checkerboarding:
-        all_benchmarks = temporal_checkerboard(all_benchmarks)
-
     with Progress() as progress:
         task_id = progress.add_task(
             "CoordBench", total=_expected_benchmark_count(benchmarks, coord)
@@ -421,123 +351,116 @@ def run_coordbench(cfg: CoordConfig) -> None:
     logger.info("CoordBench complete. Results appended to %s", output_path)
 
 
-def test_sample_count(labels: np.ndarray, task_type: str, test_mask: np.ndarray | None) -> int:
-    """Count held-out samples, or finite regression labels for cross-validation."""
-    if test_mask is not None:
-        return int(np.asarray(test_mask, dtype=bool).sum())
-    if task_type == "regression":
-        return int(np.isfinite(np.asarray(labels, dtype=np.float64)).sum())
-    return len(labels)
-
-
 def _evaluate_benchmark(
     bench: CoordBenchmark,
-    encoder: LocationEncoder,
+    encoder: LocationEncoder | None,
     cfg: CoordConfig,
-    preset: ModelPreset,
+    preset: ModelPreset | None,
     completed: set[tuple[str, ...]],
     save_predictions: bool,
     output_path: str,
     precomputed_features: np.ndarray | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Embed one benchmark once and probe every (task, method, split) combination."""
-    coord = cfg.evaluation
-    seed = cfg.runtime.seed
-    folds = coord.folds
-    knn_k = coord.knn_k
-    metric_name = "r2" if bench.task_type == "regression" else "accuracy"
-    method_kinds = _methods_for(bench.task_type, coord.methods, knn_k)
-    if not method_kinds:
+    """Embed one benchmark once and probe every (outer split, method, task) combination."""
+    coord, seed = cfg.evaluation, cfg.runtime.seed
+    needs_timestamps = any(s.startswith("temporal") for pair in coord.nested_splits for s in pair)
+    if (coord.split_test_type == "official" and bench.test_mask is None) or (
+        needs_timestamps and bench.posix_timestamp is None
+    ):
+        logger.info("%s: skipping, no test_mask or timestamps for this split", bench.name)
         return
-
+    methods = [m for m in coord.methods if m != "knn" or bench.task_type == "classification"]
+    model_name, model_target = ("idw", "") if preset is None else (preset.name, preset.target)
     features = precomputed_features
     temporal_embedding_aggregation = (
         f"{bench.temporal_resolution}/mean" if precomputed_features is not None else ""
     )
 
-    for split_label, test_mask, fold_assign, cell_deg, temporal_grid_size in _evaluation_splits(
-        bench, coord, seed
-    ):
-        for task, labels in bench.tasks.items():
-            for method_label, kind in method_kinds:
-                key = tuple(
-                    str(x)
-                    for x in (
-                        bench.name,
-                        task,
-                        method_label,
-                        preset.name,
-                        split_label,
-                        temporal_embedding_aggregation,
-                        cell_deg,
-                        temporal_grid_size,
-                    )
-                )
-                if key in completed:
-                    continue
-                if features is None:
-                    features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
-                if kind == "knn":
-                    score, fold_scores = knn_probe_score(
-                        features,
-                        np.asarray(labels),
-                        folds=folds,
-                        seed=seed,
-                        k=knn_k,
-                        device=coord.knn_device,
-                        test_mask=test_mask,
-                        fold_assign=fold_assign,
-                    )
-                else:
-                    score, fold_scores, predictions = linear_probe_score(
-                        features,
-                        np.asarray(labels),
-                        bench.task_type,
-                        folds=folds,
-                        seed=seed,
-                        device=cfg.runtime.device,
-                        alphas=tuple(coord.ridge_alphas),
-                        test_mask=test_mask,
-                        fold_assign=fold_assign,
-                    )
-                    if save_predictions:
-                        padded_predictions = []
-                        j = 0
-                        for is_test in test_mask:
-                            if is_test:
-                                padded_predictions.append(predictions[j][0])
-                                j+= 1
-                            else:
-                                padded_predictions.append(0)
-                        results_dir = Path(output_path).parent
+    todo = {}
+    for task in bench.tasks:
+        variants = {
+            (outer, inner, unit): [
+                m
+                for m in methods
+                if (bench.name, task, m, model_name, coord.split_test_type, outer, inner,
+                    _split_params(coord, (outer, inner), unit), temporal_embedding_aggregation)
+                not in completed
+            ]
+            for outer, inner, unit in split_variants(coord)
+        }  # fmt: skip
+        if any(variants.values()):
+            todo[task] = variants
+    if not todo:
+        return
+    if features is None and encoder is not None:
+        features = encoder.encode(bench.lon, bench.lat, bench.posix_timestamp)
 
-                        df = pd.DataFrame({"labels": labels, "predictions": padded_predictions, "mask": test_mask,
-                                           "lat": bench.lat, "lon": bench.lon, "timestamp": bench.posix_timestamp})
-                        os.makedirs(f"{results_dir}/predictions/{preset.name}", exist_ok=True)
-                        df.to_parquet(f"{results_dir}/predictions/{preset.name}/{bench.name}_{task}.parquet")
-                std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
-                n_test = test_sample_count(labels, bench.task_type, test_mask)
-                yield CoordResult(
-                    dataset=bench.name,
-                    task=task,
-                    task_type=bench.task_type,
-                    method=method_label,
-                    split=split_label,
-                    metric_name=metric_name,
-                    metric_value=score,
-                    ci_lower=score - std,
-                    ci_upper=score + std,
-                    n_folds=1 if split_label == "official" else folds,
-                    cell_deg=cell_deg,
-                    temporal_grid_size=temporal_grid_size,
-                    feature_dim=int(features.shape[1]),
-                    n_samples=len(labels),
-                    n_test=n_test,
-                    seed=seed,
-                    model_name=preset.name,
-                    model_target=preset.target,
-                    temporal_embedding_aggregation=temporal_embedding_aggregation
-                ).to_row()
-        # An official test set is evaluated once, even when multiple CV splits were requested.
-        if bench.test_mask is not None:
-            break
+    # Tasks with the same valid rows share folds, so they are probed together.
+    groups: dict[bytes, tuple[np.ndarray, list[str]]] = {}
+    for task in todo:
+        valid = _valid_mask(features, np.asarray(bench.tasks[task]), bench.task_type)
+        groups.setdefault(valid.tobytes(), (np.flatnonzero(valid), []))[1].append(task)
+
+    for valid_rows, tasks in groups.values():
+        labels = np.column_stack([np.asarray(bench.tasks[task]) for task in tasks])
+        if bench.task_type == "regression":
+            labels, class_indices = labels.astype(np.float64), None
+        else:
+            class_indices = np.full(labels.shape, -1)
+            for i in range(len(tasks)):
+                class_indices[valid_rows, i] = np.unique(labels[valid_rows, i], return_inverse=True)[1]
+        data = ProbeData(
+            features, labels, bench.task_type, class_indices, bench.lat, bench.lon, bench.posix_timestamp
+        )
+
+        for variant in split_variants(coord):
+            outer_split, inner_split, unit = variant
+            folds = None
+            for method in methods:
+                cols = [i for i, task in enumerate(tasks) if method in todo[task][variant]]
+                if not cols:
+                    continue
+                if folds is None:
+                    folds = make_folds(coord, bench, valid_rows, seed, variant)
+                subset = replace(
+                    data,
+                    labels=data.labels[:, cols],
+                    class_indices=None if data.class_indices is None else data.class_indices[:, cols],
+                )
+                results = evaluate(*_predictor(method, subset, cfg), folds, subset)
+                for i, result in zip(cols, results, strict=True):
+                    task = tasks[i]
+                    if save_predictions:
+                        pred_dir = Path(output_path).parent / "predictions" / model_name
+                        pred_dir.mkdir(parents=True, exist_ok=True)
+                        unit_tag = "".join(map(str, unit or ()))
+                        pd.DataFrame(
+                            {"labels": labels[:, i], "predictions": result.predictions, "lat": bench.lat,
+                             "lon": bench.lon, "timestamp": bench.posix_timestamp}
+                        ).to_parquet(
+                            pred_dir / f"{bench.name}_{task}_{method}_{outer_split}_{inner_split}_{unit_tag}.parquet"
+                        )  # fmt: skip
+                    std = float(np.std(result.fold_scores))
+                    yield CoordResult(
+                        dataset=bench.name,
+                        task=task,
+                        task_type=bench.task_type,
+                        method=method,
+                        split_test_type=coord.split_test_type,
+                        split=outer_split,
+                        inner_split=inner_split,
+                        split_params=_split_params(coord, (outer_split, inner_split), unit),
+                        metric_name="r2" if bench.task_type == "regression" else "accuracy",
+                        metric_value=result.test_score,
+                        ci_lower=result.test_score - std,
+                        ci_upper=result.test_score + std,
+                        n_folds=len(folds),
+                        best_params=str(result.best_params),
+                        feature_dim=0 if features is None else int(features.shape[1]),
+                        n_samples=len(labels),
+                        n_test=sum(len(fold.test) for fold in folds),
+                        seed=seed,
+                        model_name=model_name,
+                        model_target=model_target,
+                        temporal_embedding_aggregation=temporal_embedding_aggregation,
+                    ).to_row()

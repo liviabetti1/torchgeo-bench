@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# ERA5 (daily, 2017): native timestamps only. Runs on CUDA; pass --device cuda:N --knn-device cuda:N (or cpu) to override.
+set -euo pipefail
+mkdir -p results/coordbench/temporal
+
+MODELS=(
+  "t_satclip/t_satclip_toy_y_300k_satcliploss"
+  "t_satclip/t_satclip_toy_y_300k_softloss"
+  "t_satclip/t_satclip_toy_y_100k"
+  "t_satclip/t_satclip_toy_y_150k"
+  "t_satclip/t_satclip_toy_y_200k"
+  "t_satclip/t_satclip_toy_y_250k"
+  "t_satclip/t_satclip_toy_y_300k"
+  "t_satclip/t_satclip_y_300k"
+  "t_satclip/t_satclip_toy_300k"
+  climplicit
+  gtloc
+)
+
+SPLITS=(--nested-splits random,random temporal_checkerboard,random --time-units month,1)
+out=results/coordbench/temporal/era5_ecmwf.csv
+
+for model in "${MODELS[@]}"; do
+  torchgeo-bench coord --model "$model" --dataset era5_ecmwf --methods linear "${SPLITS[@]}" --resume --output "$out" --device cuda --knn-device cuda "$@"
+done
+
+# IDW reads only coordinates, so it runs once without a model.
+torchgeo-bench coord --dataset era5_ecmwf --methods idw "${SPLITS[@]}" --resume --output "$out" --device cuda --knn-device cuda "$@"

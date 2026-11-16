@@ -47,19 +47,10 @@ from .models import (
 from .models import (
     TTELocationEncoder as TTELocationEncoder,
 )
-from .probe import (
-    knn_probe_score as knn_probe_score,
-)
-from .probe import (
-    linear_probe_score as linear_probe_score,
-)
+from .probe import ProbeData as ProbeData
+from .probe import evaluate as evaluate
 from .run import CoordResult as CoordResult
 from .run import run_coordbench as run_coordbench
-from .splits import (
-    spatial_fold_ids as spatial_fold_ids,
-)
-from .splits import (
-    temporal_fold_ids as temporal_fold_ids,
-)
+from .splits import make_folds as make_folds
 
 __all__: list[str]

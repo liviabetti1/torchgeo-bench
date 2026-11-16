@@ -14,10 +14,6 @@
 
 set -euo pipefail
 export OMP_NUM_THREADS=1
-
-REPO=/u/lbetti/projects/torchgeo-bench
-RESULTS=/projects/bgtj/t_satclip/results
-
 source "$REPO/.venv/bin/activate"
 
 MODELS=(
@@ -31,7 +27,7 @@ echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
 torchgeo-bench coord \
     --model "$MODEL" \
     --dataset usa_electric_load_daily \
-    --split both \
+    --nested-splits random,random spatial,random \
     --from-polygon \
     --spatial-aggregation-methods statistical median_and_iqr \
     --resume \

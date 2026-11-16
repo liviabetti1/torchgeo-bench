@@ -60,7 +60,9 @@ def _setup_parser() -> argparse.ArgumentParser:
     add_flops_arguments(flops)
 
     # Coordinate benchmarks
-    coord = subcommands.add_parser("coord", help="Run coordinate encoder benchmarks")
+    coord = subcommands.add_parser(
+        "coord", help="Run coordinate encoder benchmarks", allow_abbrev=False
+    )
     add_coord_arguments(coord)
     return parser
 

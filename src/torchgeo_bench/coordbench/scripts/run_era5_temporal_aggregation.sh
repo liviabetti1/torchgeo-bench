@@ -19,7 +19,7 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset era5_ecmwf \
-        --split all \
+        --nested-splits random,random spatial,random \
         --temporal-discretization-methods weekly biweekly 4_weeks 13_weeks \
         --resume \
         --output "$out" \
@@ -28,9 +28,8 @@ for model in "${MODELS[@]}"; do
     torchgeo-bench coord \
         --model "$model" \
         --dataset era5_ecmwf \
-        --split all \
+        --nested-splits random,random spatial,random \
         --temporal-discretization-methods weekly biweekly 4_weeks 13_weeks \
-        --exclude-antarctica \
         --resume \
         --output "$out" \
         "$@"

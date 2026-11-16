@@ -207,7 +207,7 @@ class GTLoc(nn.Module):
 def load_gtloc(ckpt_path: str, device: str = "cpu") -> GTLoc:
     """Load a GTLoc checkpoint (``.pt``), inferring the location/time encoder shapes from the weights."""
     checkpoint_home = os.environ["CKPT_HOME"]
-    state = torch.load(os.path.join(checkpoint_home, ckpt_path), map_location="cpu", weights_only=True)
+    state = torch.load(os.path.join(checkpoint_home, 'gtloc', ckpt_path), map_location="cpu", weights_only=True)
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
 

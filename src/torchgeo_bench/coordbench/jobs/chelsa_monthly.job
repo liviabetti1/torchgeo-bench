@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=cb-chelsa-monthly
-#SBATCH --array=0-2
+#SBATCH --array=0-15
 #SBATCH --mem=20g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -17,9 +17,6 @@
 set -euo pipefail
 export OMP_NUM_THREADS=1
 
-REPO=/u/lbetti/projects/torchgeo-bench
-RESULTS=/projects/bgtj/t_satclip/results
-
 source "$REPO/.venv/bin/activate"
 
 MODELS=(
@@ -33,8 +30,9 @@ echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
 torchgeo-bench coord \
     --model "$MODEL" \
     --dataset chelsa_monthly \
-    --split both \
-    --temporal-discretization-methods monthly seasonally yearly \
+    --nested-splits random,random spatial,random temporal_checkerboard,random \
+    --time-units week,1 week,2 month,1 quarter,1 \
+    --methods linear \
     --resume \
     --output "$RESULTS/coordbench_chelsa_monthly_temporal.csv" \
     --device cuda:0 \

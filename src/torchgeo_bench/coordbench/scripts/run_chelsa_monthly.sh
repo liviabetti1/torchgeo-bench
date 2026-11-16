@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# CHELSA monthly climate 2011-2018: raw monthly embeddings, no temporal aggregation.
-# Runs with and without Antarctica to compare impact on global climate models.
-# Requires access to the Temporal-Coordbench HuggingFace repo.
-# Pass --device cuda:0 as an extra arg when calling directly.
+# CHELSA monthly. Runs on CUDA; pass --device cuda:N --knn-device cuda:N (or cpu) to override.
 set -euo pipefail
 
-RESULTS=$RESULTS_HOME/year_patch # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
+RESULTS=$RESULTS_HOME # MAKE SURE TO EDIT THIS TO YOUR LOCAL RESULTS PATH
 mkdir -p "$RESULTS"
 
 MODELS=(
@@ -32,15 +29,12 @@ MODELS=(
 )
 
 out="$RESULTS/chelsa_monthly.csv"
-for model in "${MODELS[@]}"; do
-    torchgeo-bench coord \
-        --model "$model" \
-        --dataset chelsa_monthly \
-        --split all \
-        --exclude-antarctica \
-        --output "$out" \
-        --temporal-checkerboard \
-        "$@"
+SPLITS=(--nested-splits random,random temporal_checkerboard,random --time-units year,1 season,1)
 
-    rm -f "${out}.lock"
+# IDW reads only coordinates, so it runs once without a model.
+torchgeo-bench coord --dataset chelsa_monthly --methods idw "${SPLITS[@]}" --resume --output "$out" --device cuda --knn-device cuda "$@"
+
+for model in "${MODELS[@]}"; do
+  torchgeo-bench coord --model "$model" --dataset chelsa_monthly --methods linear "${SPLITS[@]}" --resume --output "$out" --device cuda --knn-device cuda "$@"
+  rm -f "${out}.lock"
 done
