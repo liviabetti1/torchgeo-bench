@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH --job-name=cb-viirs_night_lights
+#SBATCH --mem=16g
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus-per-node=1
+#SBATCH --gpu-bind=closest
+#SBATCH --account=bgtj-tgirails
+#SBATCH --time=6:00:00
+#SBATCH --output=slurm_logs/%x_%A_%a.out
+
+# Submit with submit_temporal_splits.sh viirs_night_lights (IDW as task 0, then one linear task per model).
+source "$SLURM_SUBMIT_DIR/_temporal_splits.sh"
+run_array_task viirs_night_lights "$@"

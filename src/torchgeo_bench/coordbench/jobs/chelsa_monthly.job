@@ -1,7 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=cb-chelsa-monthly
-#SBATCH --array=0-15
-#SBATCH --mem=20g
+#SBATCH --job-name=cb-chelsa_monthly
+#SBATCH --mem=16g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
@@ -9,31 +8,9 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu-bind=closest
 #SBATCH --account=bgtj-tgirails
-#SBATCH --time=4:00:00
+#SBATCH --time=8:00:00
 #SBATCH --output=slurm_logs/%x_%A_%a.out
 
-# Requires access to the Temporal-Coordbench HuggingFace repo.
-
-set -euo pipefail
-export OMP_NUM_THREADS=1
-
-source "$REPO/.venv/bin/activate"
-
-MODELS=(
-    climplicit
-    gtloc
-    "t_satclip/t_satclip_doy_1M"
-)
-MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
-echo "Task $SLURM_ARRAY_TASK_ID: model=$MODEL"
-
-torchgeo-bench coord \
-    --model "$MODEL" \
-    --dataset chelsa_monthly \
-    --nested-splits random,random spatial,random temporal_checkerboard,random \
-    --time-units week,1 week,2 month,1 quarter,1 \
-    --methods linear \
-    --resume \
-    --output "$RESULTS/coordbench_chelsa_monthly_temporal.csv" \
-    --device cuda:0 \
-    "$@"
+# Submit with submit_temporal_splits.sh chelsa_monthly (IDW as task 0, then one linear task per model).
+source "$SLURM_SUBMIT_DIR/_temporal_splits.sh"
+run_array_task chelsa_monthly "$@"
