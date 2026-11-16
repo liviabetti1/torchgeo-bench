@@ -34,8 +34,8 @@ coord:
   test_size: 1             # time units forecast per fold (temporal_forecast splits only)
   max_train_size: null     # time units in the training window; required for temporal_forecast_block
   knn_ks: [5]
-  idw_ks: [5]
-  idw_cs: [0.0]            # weight of squared time distance vs squared space distance (km)
+  idw_ks: [5, 10, 20]
+  idw_cs: [0.0, 1.0e-5, 1.0e-2, 0.1, 1.0, 10.0, 100.0, 1000.0]  # weight of squared time distance vs squared space distance (km)
   knn_device: cpu          # faiss device for KNN; cpu avoids needing GPU faiss (encoder+linear still use `device`)
   skip_no_timestamp: true # if true, skip benchmarks with no posix_timestamp (for time-conditioned encoders like gtloc)
   temporal_aggregation_methods: []  # replace each benchmark with one variant per applicable method (see

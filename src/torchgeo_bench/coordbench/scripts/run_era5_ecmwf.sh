@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ERA5 (daily, 2017): native timestamps only. Pass --device cuda:N --knn-device cuda:N as extra args.
+# ERA5 (daily, 2017): native timestamps only. Runs on CUDA; pass --device cuda:N --knn-device cuda:N (or cpu) to override.
 set -euo pipefail
 mkdir -p results/coordbench/temporal
 
@@ -21,8 +21,8 @@ SPLITS=(--nested-splits random,random temporal_checkerboard,random --time-units 
 out=results/coordbench/temporal/era5_ecmwf.csv
 
 for model in "${MODELS[@]}"; do
-  torchgeo-bench coord --model "$model" --dataset era5_ecmwf --methods linear "${SPLITS[@]}" --resume --output "$out" "$@"
+  torchgeo-bench coord --model "$model" --dataset era5_ecmwf --methods linear "${SPLITS[@]}" --resume --output "$out" --device cuda --knn-device cuda "$@"
 done
 
 # IDW reads only coordinates, so it runs once without a model.
-torchgeo-bench coord --dataset era5_ecmwf --methods idw "${SPLITS[@]}" --resume --output "$out" "$@"
+torchgeo-bench coord --dataset era5_ecmwf --methods idw "${SPLITS[@]}" --resume --output "$out" --device cuda --knn-device cuda "$@"

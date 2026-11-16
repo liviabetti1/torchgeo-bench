@@ -78,8 +78,8 @@ class CoordEvaluationConfig(StrictModel):
     test_size: StrictInt = Field(default=1, gt=0)  # time units forecast per temporal_forecast fold
     knn_ks: list[StrictInt] = Field(default=[5])
     knn_device: KnnDevice = "cuda"
-    idw_ks: list[StrictInt] = Field(default=[5])
-    idw_cs: list[StrictFloat] = Field(default=[0.0])
+    idw_ks: list[StrictInt] = Field(default=[5, 10, 20])
+    idw_cs: list[StrictFloat] = Field(default=[0.0, 1e-5, 1e-2, 0.1, 1.0, 10.0, 100.0, 1000.0])
     ridge_alphas: list[Annotated[StrictFloat, Field(gt=0)]] = Field(
         default_factory=lambda: list(RIDGE_ALPHAS), min_length=1
     )
